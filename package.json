@@ -1,0 +1,13 @@
+{
+  "name": "happy-local",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "bootstrap": "node ./scripts/install.mjs",
+    "build": "node ./scripts/build.mjs",
+    "start": "node ./scripts/run.mjs",
+    "dev": "node ./scripts/dev.mjs"
+  }
+}
+

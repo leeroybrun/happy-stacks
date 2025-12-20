@@ -1,0 +1,13 @@
+components/
+node_modules/
+.pnpm-store/
+
+# Logs / artifacts produced by build+run
+.happy/
+
+# Common tooling caches (if created in this repo)
+.DS_Store
+
+.env
+.env.*.local
+
