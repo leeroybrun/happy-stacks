@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -55,6 +55,23 @@ const __scriptsDir = dirname(fileURLToPath(import.meta.url));
 const __rootDir = dirname(__scriptsDir);
 await loadEnvFile(process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : join(__rootDir, '.env'));
 await loadEnvFile(join(__rootDir, 'env.local'));
+
+// Corepack strictness can prevent running Yarn in subfolders when the repo root is pinned to pnpm.
+// We intentionally keep component repos upstream-compatible (often Yarn), so relax strictness for child processes.
+process.env.COREPACK_ENABLE_STRICT = process.env.COREPACK_ENABLE_STRICT ?? '0';
+process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT = process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT ?? 'false';
+
+// LaunchAgents often run with a very minimal PATH which won't include NVM's bin dir, so child
+// processes like `yarn` / `pnpm` can look "missing" even though Node is running from NVM.
+// Ensure the directory containing this Node binary is on PATH.
+(() => {
+  const delimiter = process.platform === 'win32' ? ';' : ':';
+  const current = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
+  const nodeBinDir = dirname(process.execPath);
+  const want = [nodeBinDir, '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
+  const next = [...want.filter((p) => p && !current.includes(p)), ...current];
+  process.env.PATH = next.join(delimiter);
+})();
 
 /**
  * Shared helpers for happy-local scripts.
@@ -196,9 +213,9 @@ export async function killPortListeners(port, { label = 'port' } = {}) {
   return pids;
 }
 
-async function commandExists(cmd) {
+async function commandExists(cmd, options = {}) {
   try {
-    await runCapture(cmd, ['--version']);
+    await runCapture(cmd, ['--version'], options);
     return true;
   } catch {
     return false;
@@ -215,7 +232,9 @@ export async function requirePnpm() {
 async function getComponentPm(dir) {
   const yarnLock = join(dir, 'yarn.lock');
   if (await pathExists(yarnLock)) {
-    if (!(await commandExists('yarn'))) {
+    // IMPORTANT: when happy-local itself is pinned to pnpm via Corepack, running `yarn`
+    // from the happy-local cwd can be blocked. Always probe yarn with cwd=componentDir.
+    if (!(await commandExists('yarn', { cwd: dir }))) {
       throw new Error(`[local] yarn is required for component at ${dir} (yarn.lock present). Install it via Corepack: \`corepack enable\``);
     }
     return { name: 'yarn', cmd: 'yarn' };
@@ -281,21 +300,57 @@ export async function ensureDepsInstalled(dir, label) {
   const pm = await getComponentPm(dir);
 
   if (await pathExists(nodeModules)) {
+    const yarnLock = join(dir, 'yarn.lock');
+    const yarnIntegrity = join(nodeModules, '.yarn-integrity');
+    const pnpmLock = join(dir, 'pnpm-lock.yaml');
+
     // If this repo is Yarn-managed (yarn.lock present) but node_modules was created by pnpm,
     // reinstall with Yarn to restore upstream-locked dependency versions.
     if (pm.name === 'yarn' && (await pathExists(pnpmModulesMeta))) {
       console.log(`[local] converting ${label} dependencies back to yarn (reinstalling node_modules)...`);
       await rm(nodeModules, { recursive: true, force: true });
-      await run(pm.cmd, ['--cwd', dir, 'install']);
+      await run(pm.cmd, ['install'], { cwd: dir });
     }
+
+    // If dependencies changed since the last install, re-run install even if node_modules exists.
+    // This covers the common case where the user edits package.json / yarn.lock and expects bootstrap to pick it up.
+    const mtimeMs = async (p) => {
+      try {
+        const s = await stat(p);
+        return s.mtimeMs ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+
+    if (pm.name === 'yarn' && (await pathExists(yarnLock))) {
+      const lockM = await mtimeMs(yarnLock);
+      const pkgM = await mtimeMs(pkgJson);
+      const intM = await mtimeMs(yarnIntegrity);
+      // If integrity is missing or older than lock/package.json, treat install as stale.
+      if (!intM || lockM > intM || pkgM > intM) {
+        console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json changed)...`);
+        await run(pm.cmd, ['install'], { cwd: dir });
+      }
+    }
+
+    if (pm.name === 'pnpm' && (await pathExists(pnpmLock))) {
+      const lockM = await mtimeMs(pnpmLock);
+      const metaM = await mtimeMs(pnpmModulesMeta);
+      if (!metaM || lockM > metaM) {
+        console.log(`[local] refreshing ${label} dependencies (pnpm-lock changed)...`);
+        await run(pm.cmd, ['install'], { cwd: dir });
+      }
+    }
+
     return;
   }
 
   console.log(`[local] installing ${label} dependencies (first run)...`);
   if (pm.name === 'yarn') {
-    await run(pm.cmd, ['--cwd', dir, 'install']);
+    await run(pm.cmd, ['install'], { cwd: dir });
   } else {
-    await run(pm.cmd, ['-C', dir, 'install']);
+    await run(pm.cmd, ['install'], { cwd: dir });
   }
 }
 
@@ -307,9 +362,9 @@ export async function ensureCliBuilt(cliDir, { buildCli }) {
   console.log('[local] building happy-cli...');
   const pm = await getComponentPm(cliDir);
   if (pm.name === 'yarn') {
-    await run(pm.cmd, ['--cwd', cliDir, 'build']);
+    await run(pm.cmd, ['build'], { cwd: cliDir });
   } else {
-    await run(pm.cmd, ['-C', cliDir, 'build']);
+    await run(pm.cmd, ['build'], { cwd: cliDir });
   }
 }
 
@@ -454,18 +509,18 @@ export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {
 export async function pmSpawnScript({ label, dir, script, env, options = {} }) {
   const pm = await getComponentPm(dir);
   if (pm.name === 'yarn') {
-    return spawnProc(label, pm.cmd, ['-s', '--cwd', dir, script], env, options);
+    return spawnProc(label, pm.cmd, ['-s', script], env, { ...options, cwd: dir });
   }
-  return spawnProc(label, pm.cmd, ['-C', dir, '--silent', script], env, options);
+  return spawnProc(label, pm.cmd, ['--silent', script], env, { ...options, cwd: dir });
 }
 
 export async function pmExecBin({ dir, bin, args, env }) {
   const pm = await getComponentPm(dir);
   if (pm.name === 'yarn') {
-    await run(pm.cmd, ['--cwd', dir, bin, ...args], { env });
+    await run(pm.cmd, [bin, ...args], { env, cwd: dir });
     return;
   }
-  await run(pm.cmd, ['-C', dir, 'exec', bin, ...args], { env });
+  await run(pm.cmd, ['exec', bin, ...args], { env, cwd: dir });
 }
 
 export async function waitForServerReady(url) {
