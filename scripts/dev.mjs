@@ -6,42 +6,12 @@ import {
   killProcessTree,
   pmSpawnScript,
   requireDir,
-  spawnProc,
   waitForServerReady,
 } from './shared.mjs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-
-function cleanupStaleDaemonState(homeDir) {
-  const statePath = join(homeDir, 'daemon.state.json');
-  const lockPath = join(homeDir, 'daemon.state.json.lock');
-
-  if (!existsSync(lockPath)) {
-    return;
-  }
-
-  if (existsSync(statePath)) {
-    try {
-      const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-      const pid = typeof state?.pid === 'number' ? state.pid : null;
-      if (pid) {
-        try {
-          process.kill(pid, 0);
-          return;
-        } catch {
-          // stale pid
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  try { unlinkSync(lockPath); } catch { /* ignore */ }
-  try { unlinkSync(statePath); } catch { /* ignore */ }
-}
+import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 
 /**
  * Dev mode stack:
@@ -53,17 +23,18 @@ function cleanupStaleDaemonState(homeDir) {
 async function main() {
   const rootDir = getRootDir(import.meta.url);
 
-  const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT
-    ? parseInt(process.env.HAPPY_LOCAL_SERVER_PORT, 10)
-    : 3005;
+const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT
+  ? parseInt(process.env.HAPPY_LOCAL_SERVER_PORT, 10)
+  : 3005;
 
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
+  const defaultPublicUrl = `http://localhost:${serverPort}`;
   const publicServerUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim()
-    ? process.env.HAPPY_LOCAL_SERVER_URL.trim()
-    : internalServerUrl;
+  ? process.env.HAPPY_LOCAL_SERVER_URL.trim()
+    : defaultPublicUrl;
 
-  const startUi = (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
-  const startDaemon = (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
+const startUi = (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
+const startDaemon = (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
 
   const serverDir = getComponentDir(rootDir, 'happy-server-light');
   const uiDir = getComponentDir(rootDir, 'happy');
@@ -74,6 +45,9 @@ async function main() {
   await requireDir('happy-cli', cliDir);
 
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
+  const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
+    ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
+    : join(homedir(), '.happy', 'local', 'cli');
 
   const children = [];
   let shuttingDown = false;
@@ -103,20 +77,12 @@ async function main() {
 
   // Start daemon (detached daemon process managed by happy-cli)
   if (startDaemon) {
-    const daemonEnv = { ...baseEnv, HAPPY_SERVER_URL: internalServerUrl };
-    // Stop any existing daemon before starting a fresh one.
-    try {
-      await new Promise((resolve) => {
-        const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
-        proc.on('exit', () => resolve());
-      });
-    } catch {
-      // ignore
-    }
-    cleanupStaleDaemonState(join(homedir(), '.happy'));
-    await new Promise((resolve) => {
-      const proc = spawnProc('daemon', cliBin, ['daemon', 'start'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
-      proc.on('exit', () => resolve());
+    await startLocalDaemonWithAuth({
+      cliBin,
+      cliHomeDir,
+      internalServerUrl,
+      publicServerUrl,
+      isShuttingDown: () => shuttingDown,
     });
   }
 
@@ -139,14 +105,7 @@ async function main() {
     console.log('\n[local] shutting down...');
 
     if (startDaemon) {
-      try {
-        await new Promise((resolve) => {
-          const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], { ...process.env, HAPPY_SERVER_URL: internalServerUrl });
-          proc.on('exit', () => resolve());
-        });
-      } catch {
-        // ignore
-      }
+      await stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir });
     }
 
     for (const child of children) {

@@ -1,11 +1,8 @@
 import {
   ensureCliBuilt,
   ensureHappyCliLocalNpmLinked,
-  ensureMacAutostartDisabled,
-  ensureMacAutostartEnabled,
   ensureDepsInstalled,
   getComponentDir,
-  getDefaultAutostartPaths,
   getRootDir,
   parseArgs,
   pathExists,
@@ -13,6 +10,7 @@ import {
 } from './shared.mjs';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { installService, uninstallService } from './service.mjs';
 
 /**
  * Install/setup the local stack:
@@ -95,26 +93,9 @@ async function main() {
 
   // Optional autostart (macOS)
   if (disableAutostart) {
-    await ensureMacAutostartDisabled({});
+    await uninstallService();
   } else if (enableAutostart) {
-    const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT ?? '3005';
-    const env = {
-      HAPPY_LOCAL_SERVER_PORT: String(serverPort),
-      HAPPY_LOCAL_SERVER_URL: process.env.HAPPY_LOCAL_SERVER_URL ?? '',
-      HAPPY_LOCAL_DAEMON: process.env.HAPPY_LOCAL_DAEMON ?? '1',
-      HAPPY_LOCAL_SERVE_UI: process.env.HAPPY_LOCAL_SERVE_UI ?? '1',
-      HAPPY_LOCAL_UI_PREFIX: process.env.HAPPY_LOCAL_UI_PREFIX ?? '/',
-      HAPPY_LOCAL_UI_BUILD_DIR: process.env.HAPPY_LOCAL_UI_BUILD_DIR ?? join(getDefaultAutostartPaths().baseDir, 'ui'),
-      HAPPY_LOCAL_CLI_HOME_DIR: process.env.HAPPY_LOCAL_CLI_HOME_DIR ?? '',
-    };
-    // Drop empty env vars (LaunchAgent env dict is annoying with blanks)
-    for (const [k, v] of Object.entries(env)) {
-      if (!String(v).trim()) {
-        delete env[k];
-      }
-    }
-    await ensureMacAutostartEnabled({ rootDir, env });
-    console.log('[local] autostart enabled (macOS LaunchAgent)');
+    await installService();
   }
 
   console.log('[local] setup complete');
