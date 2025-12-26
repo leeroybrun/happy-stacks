@@ -6,7 +6,8 @@ import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
  * Build a lightweight static web UI bundle (no Expo dev server).
  *
  * Output directory default: ~/.happy/local/ui
- * Server will serve it under /ui when HAPPY_SERVER_LIGHT_UI_DIR is set.
+ * Server will serve it at / when HAPPY_SERVER_LIGHT_UI_DIR is set.
+ * (Legacy /ui paths are redirected to /.)
  */
 
 async function main() {
@@ -58,7 +59,8 @@ async function main() {
     return;
   }
 
-  const tauriDebug = (process.env.HAPPY_LOCAL_TAURI_DEBUG ?? '0') === '1';
+  // Default to debug builds for local development so devtools are available.
+  const tauriDebug = (process.env.HAPPY_LOCAL_TAURI_DEBUG ?? '1') === '1';
 
   const tauriDistDir = process.env.HAPPY_LOCAL_TAURI_UI_DIR?.trim()
     ? process.env.HAPPY_LOCAL_TAURI_UI_DIR.trim()
@@ -75,8 +77,8 @@ async function main() {
     EXPO_PUBLIC_DEBUG: '0',
     // In Tauri, window.location.origin is a tauri:// origin, so we must hardcode the API base.
     EXPO_PUBLIC_HAPPY_SERVER_URL: internalServerUrl,
-    // Ensure embedded server URL is used even if the user previously saved a different server.
-    EXPO_PUBLIC_FORCE_SERVER_URL: '1',
+    // Some parts of the app use EXPO_PUBLIC_SERVER_URL; keep them aligned.
+    EXPO_PUBLIC_SERVER_URL: internalServerUrl,
     // For the Tauri bundle we want root-relative assets (no /ui baseUrl), so do not set EXPO_PUBLIC_WEB_BASE_URL
   };
   delete tauriEnv.EXPO_PUBLIC_WEB_BASE_URL;
@@ -84,7 +86,9 @@ async function main() {
   await pmExecBin({
     dir: uiDir,
     bin: 'expo',
-    args: ['export', '--platform', 'web', '--output-dir', tauriDistDir],
+    // Important: clear bundler cache so EXPO_PUBLIC_* inlining doesn't reuse
+    // the previous (web) export's transform results.
+    args: ['export', '--platform', 'web', '--output-dir', tauriDistDir, '-c'],
     env: tauriEnv,
   });
 
@@ -134,6 +138,8 @@ async function main() {
     ...process.env,
     // Fixes builds after moving the repo by isolating cargo outputs from old absolute paths.
     CARGO_TARGET_DIR: cargoTargetDir,
+    // Newer Tauri CLI parses CI as a boolean; many environments set CI=1 which fails.
+    CI: 'false',
   };
 
   const tauriArgs = ['build', '--config', generatedConfigPath];
