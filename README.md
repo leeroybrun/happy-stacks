@@ -1,12 +1,22 @@
 # happy-local
 
-Run the Happy stack locally with a single launcher repo:
+Run the Happy stack locally with a single launcher.
 
-- `happy-server-light` (API + Socket.IO relay)
-- `happy` (UI)
-- `happy-cli` (daemon so machines appear + sessions can be spawned remotely)
+`happy-local` itself is just a set of Node scripts (`scripts/*.mjs`). The actual Happy repos are cloned into `./components/*`.
 
-`happy-local` itself is just a set of Node scripts (`scripts/*.mjs`). The actual products live under `./components/*`.
+## Why
+
+- **Automated setup**: `pnpm bootstrap` + `pnpm start` gets the whole stack up and running.
+- **No hosted dependency**: you can run the full stack on your own computer and not depend on any external server.
+- **Lower latency**: local loopback/LAN typically has lower latency than a remote hosted server.
+- **Custom forks**: you can easily use custom forks of the Happy UI + CLI (e.g. our `leeroybrun/*` forks).
+- **Optional autostart**: `happy-local` can be configured to automatically start on login (via a macOS LaunchAgent). 
+  - This makes your local Happy server always running (minimal footprint: just `happy-server-light` serving the built UI & API + `happy` CLI daemon).
+- **Tailscale integration**: `happy-local` can automatically configure Tailscale Serve for you. This gives you a public HTTPS URL for the local server, which you can use on mobile to connect to the local UI + API.
+- **Isolated CLI home**: the daemon/CLI use `HAPPY_HOME_DIR=~/.happy/local/cli` by default so you don’t overwrite/contaminate your normal Happy credentials.
+- **Local server wiring**: when `happy-local` starts the daemon, it sets:
+  - `HAPPY_SERVER_URL` → the internal loopback URL (e.g. `http://127.0.0.1:3005`)
+  - `HAPPY_WEBAPP_URL` / `PUBLIC_URL` → the “public” URL you might open on another device (often a Tailscale HTTPS URL)
 
 ## Overview (how it fits together)
 
@@ -15,24 +25,7 @@ Run the Happy stack locally with a single launcher repo:
 - **`happy-cli`**: provides the `happy` CLI and the happy background **daemon** used for machine presence + remote session spawning.
 - **`happy-cli-local` (wrapper)**: `happy-local` links a small wrapper into your PATH so `happy` CLI automatically points at the local server and uses an isolated home dir.
 
-### How “local” differs from upstream
-
-Upstream Happy components typically use the standard hosted Happy server (or optionally a self-hosted server).
-
-`happy-local` allows running the full Happy stack locally:
-
-- **Automated setup & startup**: `pnpm bootstrap` + `pnpm start` gets the whole stack up and running.
-- **Automated startup**: `happy-local` can be configured to automatically start on login (via a macOS LaunchAgent), so that your local Happy server is always running (minimal footprint: just `happy-server-light` serving the built UI & API + `happy`CLI daemon).
-- **No hosted dependency**: you can run the full stack on your own computer and not depend on any external server.
-- **Lower latency**: local loopback/LAN typically has lower latency than a remote hosted server.
-- **Custom forks**: you can easily use custom forks of the Happy UI + CLI (e.g. our `leeroybrun/*` forks).
-- **Tailscale integration**: `happy-local` can automatically configure Tailscale Serve for you. This gives you a public HTTPS URL for the local server, which you can use on mobile to connect to the local UI + API.
-- **Isolated CLI home**: the daemon/CLI use `HAPPY_HOME_DIR=~/.happy/local/cli` by default so you don’t overwrite/contaminate your normal Happy credentials.
-- **Local server wiring**: when `happy-local` starts the daemon, it sets:
-  - `HAPPY_SERVER_URL` → the internal loopback URL (e.g. `http://127.0.0.1:3005`)
-  - `HAPPY_WEBAPP_URL` / `PUBLIC_URL` → the “public” URL you might open on another device (often a Tailscale HTTPS URL)
-
-## Use (recommended / production-like)
+## How to use it
 
 Prereqs:
 
