@@ -3,6 +3,7 @@ import {
   getDefaultAutostartPaths,
   getRootDir,
   killPortListeners,
+  parseArgs,
   pathExists,
   runCapture,
 } from './shared.mjs';
@@ -35,16 +36,8 @@ async function fetchHealth(url) {
   }
 }
 
-function parseFlags(argv) {
-  const flags = new Set();
-  for (const a of argv) {
-    if (a.startsWith('--')) flags.add(a);
-  }
-  return flags;
-}
-
 async function main() {
-  const flags = parseFlags(process.argv.slice(2));
+  const { flags } = parseArgs(process.argv.slice(2));
   const fix = flags.has('--fix');
 
   const rootDir = getRootDir(import.meta.url);

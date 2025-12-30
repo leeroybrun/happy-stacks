@@ -1,6 +1,7 @@
-import { ensureDepsInstalled, getComponentDir, getDefaultAutostartPaths, getRootDir, pmExecBin, requireDir } from './shared.mjs';
+import { ensureDepsInstalled, getComponentDir, getDefaultAutostartPaths, getRootDir, parseArgs, pmExecBin, requireDir } from './shared.mjs';
 import { dirname, join } from 'node:path';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { tailscaleServeHttpsUrl } from './tailscale.mjs';
 
 /**
  * Build a lightweight static web UI bundle (no Expo dev server).
@@ -11,6 +12,7 @@ import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
  */
 
 async function main() {
+  const { flags } = parseArgs(process.argv.slice(2));
   const rootDir = getRootDir(import.meta.url);
   const uiDir = getComponentDir(rootDir, 'happy');
   await requireDir('happy', uiDir);
@@ -19,7 +21,7 @@ async function main() {
     ? parseInt(process.env.HAPPY_LOCAL_SERVER_PORT, 10)
     : 3005;
 
-  // For Tauri builds we always embed the internal URL (Tauri runs on the same machine as the server).
+  // For Tauri builds we embed an explicit API base URL (tauri:// origins cannot use window.location.origin).
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
 
   const outDir = process.env.HAPPY_LOCAL_UI_BUILD_DIR?.trim()
@@ -54,13 +56,32 @@ async function main() {
   //
   // Tauri build (optional)
   //
-  const buildTauri = (process.env.HAPPY_LOCAL_BUILD_TAURI ?? '1') !== '0';
+  // Default: do NOT build Tauri (it's slow and requires extra toolchain).
+  // Enable explicitly with:
+  // - `pnpm build -- --tauri`, or
+  // - `HAPPY_LOCAL_BUILD_TAURI=1`
+  const envBuildTauri = (process.env.HAPPY_LOCAL_BUILD_TAURI ?? '').trim();
+  const buildTauriFromEnv = envBuildTauri !== '' ? envBuildTauri !== '0' : false;
+  const buildTauri = !flags.has('--no-tauri') && (flags.has('--tauri') || buildTauriFromEnv);
   if (!buildTauri) {
     return;
   }
 
   // Default to debug builds for local development so devtools are available.
   const tauriDebug = (process.env.HAPPY_LOCAL_TAURI_DEBUG ?? '1') === '1';
+
+  // Choose the API endpoint the Tauri app should use.
+  //
+  // Priority:
+  // 1) HAPPY_LOCAL_TAURI_SERVER_URL (explicit override)
+  // 2) If available, a Tailscale Serve https://*.ts.net URL (portable across machines on the same tailnet)
+  // 3) Fallback to internal loopback (same-machine)
+  const tauriServerUrlOverride = process.env.HAPPY_LOCAL_TAURI_SERVER_URL?.trim()
+    ? process.env.HAPPY_LOCAL_TAURI_SERVER_URL.trim()
+    : '';
+  const preferTailscale = (process.env.HAPPY_LOCAL_TAURI_PREFER_TAILSCALE ?? '1') !== '0';
+  const tailscaleUrl = preferTailscale ? await tailscaleServeHttpsUrl() : null;
+  const tauriServerUrl = tauriServerUrlOverride || tailscaleUrl || internalServerUrl;
 
   const tauriDistDir = process.env.HAPPY_LOCAL_TAURI_UI_DIR?.trim()
     ? process.env.HAPPY_LOCAL_TAURI_UI_DIR.trim()
@@ -76,9 +97,9 @@ async function main() {
     NODE_ENV: 'production',
     EXPO_PUBLIC_DEBUG: '0',
     // In Tauri, window.location.origin is a tauri:// origin, so we must hardcode the API base.
-    EXPO_PUBLIC_HAPPY_SERVER_URL: internalServerUrl,
+    EXPO_PUBLIC_HAPPY_SERVER_URL: tauriServerUrl,
     // Some parts of the app use EXPO_PUBLIC_SERVER_URL; keep them aligned.
-    EXPO_PUBLIC_SERVER_URL: internalServerUrl,
+    EXPO_PUBLIC_SERVER_URL: tauriServerUrl,
     // For the Tauri bundle we want root-relative assets (no /ui baseUrl), so do not set EXPO_PUBLIC_WEB_BASE_URL
   };
   delete tauriEnv.EXPO_PUBLIC_WEB_BASE_URL;

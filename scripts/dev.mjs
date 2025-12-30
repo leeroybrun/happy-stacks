@@ -4,6 +4,7 @@ import {
   getRootDir,
   killPortListeners,
   killProcessTree,
+  parseArgs,
   pmSpawnScript,
   requireDir,
   waitForServerReady,
@@ -12,6 +13,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
 import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
+import { resolvePublicServerUrl } from './tailscale.mjs';
 
 /**
  * Dev mode stack:
@@ -21,20 +23,26 @@ import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
  */
 
 async function main() {
+  const { flags } = parseArgs(process.argv.slice(2));
   const rootDir = getRootDir(import.meta.url);
 
-const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT
-  ? parseInt(process.env.HAPPY_LOCAL_SERVER_PORT, 10)
-  : 3005;
+  const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT
+    ? parseInt(process.env.HAPPY_LOCAL_SERVER_PORT, 10)
+    : 3005;
 
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
   const defaultPublicUrl = `http://localhost:${serverPort}`;
-  const publicServerUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim()
-  ? process.env.HAPPY_LOCAL_SERVER_URL.trim()
-    : defaultPublicUrl;
+  const envPublicUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim() ? process.env.HAPPY_LOCAL_SERVER_URL.trim() : '';
+  const resolved = await resolvePublicServerUrl({
+    internalServerUrl,
+    defaultPublicUrl,
+    envPublicUrl,
+    allowEnable: true,
+  });
+  const publicServerUrl = resolved.publicServerUrl;
 
-const startUi = (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
-const startDaemon = (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
+  const startUi = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
+  const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
 
   const serverDir = getComponentDir(rootDir, 'happy-server-light');
   const uiDir = getComponentDir(rootDir, 'happy');
@@ -71,7 +79,7 @@ const startDaemon = (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
   console.log(
     `[local] tip: to run 'happy' from your terminal *against this local server* (and have sessions show up in the UI), use:\n` +
     `export HAPPY_SERVER_URL=\"${internalServerUrl}\"\n` +
-    `export HAPPY_HOME_DIR=\"${join(homedir(), '.happy', 'local', 'cli')}\"\n` +
+      `export HAPPY_HOME_DIR=\"${cliHomeDir}\"\n` +
     `export HAPPY_WEBAPP_URL=\"${publicServerUrl}\"\n`
   );
 

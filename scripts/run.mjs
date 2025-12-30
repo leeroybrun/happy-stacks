@@ -31,7 +31,7 @@ async function main() {
   const envPublicUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim() ? process.env.HAPPY_LOCAL_SERVER_URL.trim() : '';
   let publicServerUrl = envPublicUrl || defaultPublicUrl;
 
-  const startDaemon = (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
+  const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
   const serveUi = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
   const uiPrefix = process.env.HAPPY_LOCAL_UI_PREFIX?.trim() ? process.env.HAPPY_LOCAL_UI_PREFIX.trim() : '/';
   const uiBuildDir = process.env.HAPPY_LOCAL_UI_BUILD_DIR?.trim()

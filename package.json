@@ -9,6 +9,7 @@
     "build": "node ./scripts/build.mjs",
     "start": "node ./scripts/run.mjs",
     "dev": "node ./scripts/dev.mjs",
+    "cli:link": "node ./scripts/cli-link.mjs",
     "service:status": "node ./scripts/service.mjs status",
     "service:start": "node ./scripts/service.mjs start",
     "service:stop": "node ./scripts/service.mjs stop",

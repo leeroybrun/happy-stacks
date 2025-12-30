@@ -285,7 +285,7 @@ export async function requireDir(label, dir) {
   }
   throw new Error(
     `[local] missing ${label} at ${dir}\n` +
-      `Run: pnpm bootstrap -- --clone (if you configured repo URLs), or place the repo under components/`
+      `Run: pnpm bootstrap (auto-clones missing components), or place the repo under components/`
   );
 }
 
