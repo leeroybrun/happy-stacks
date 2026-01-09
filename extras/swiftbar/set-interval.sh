@@ -35,7 +35,7 @@ LEGACY_SOURCE="${PWD}/extras/swiftbar/happy-local.5s.sh"
 # If a happy-stacks or happy-local plugin already exists, rename it into place; otherwise copy from repo source.
 EXISTING="$(ls "$PLUGIN_DIR"/happy-stacks.*.sh 2>/dev/null | head -1 || true)"
 if [[ -z "$EXISTING" ]]; then
-  EXISTING="$(ls "$PLUGIN_DIR"/happy-local.*.sh 2>/dev/null | head -1 || true)"
+EXISTING="$(ls "$PLUGIN_DIR"/happy-local.*.sh 2>/dev/null | head -1 || true)"
 fi
 if [[ -n "$EXISTING" ]]; then
   if [[ "$EXISTING" != "$TARGET" ]]; then

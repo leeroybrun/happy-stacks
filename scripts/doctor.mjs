@@ -27,13 +27,13 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 async function fetchHealth(url) {
   const tryGet = async (path) => {
-    try {
+  try {
       const res = await fetch(`${url}${path}`, { method: 'GET' });
-      const body = await res.text();
-      return { ok: res.ok, status: res.status, body: body.trim() };
+    const body = await res.text();
+    return { ok: res.ok, status: res.status, body: body.trim() };
     } catch {
-      return { ok: false, status: null, body: null };
-    }
+    return { ok: false, status: null, body: null };
+  }
   };
 
   // Prefer /health when available, but fall back to / (matches waitForServerReady).
@@ -109,12 +109,12 @@ async function main() {
   };
   if (!json) {
     console.log('🩺 happy-stacks doctor\n');
-    console.log(`- internal: ${internalServerUrl}`);
-    console.log(`- public:   ${publicServerUrl}`);
+  console.log(`- internal: ${internalServerUrl}`);
+  console.log(`- public:   ${publicServerUrl}`);
     console.log(`- server:   ${serverComponentName}`);
-    console.log(`- uiBuild:  ${uiBuildDir}`);
-    console.log(`- cliHome:  ${cliHomeDir}`);
-    console.log('');
+  console.log(`- uiBuild:  ${uiBuildDir}`);
+  console.log(`- cliHome:  ${cliHomeDir}`);
+  console.log('');
   }
 
   if (!(await pathExists(serverDir))) {

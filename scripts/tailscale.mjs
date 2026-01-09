@@ -233,7 +233,7 @@ async function main() {
       if (json) {
         printResult({ json, data: { status, httpsUrl: extractHttpsUrl(status) } });
       } else {
-        process.stdout.write(status);
+      process.stdout.write(status);
       }
       return;
     }

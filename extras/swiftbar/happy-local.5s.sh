@@ -53,8 +53,8 @@ if [[ ! -f "$LIB_DIR/utils.sh" ]]; then
       HAPPY_LOCAL_DIR="$cand"
       LIB_DIR="$cand/extras/swiftbar/lib"
       break
-    fi
-  done
+        fi
+    done
 fi
 
 if [[ ! -f "$LIB_DIR/utils.sh" ]]; then
@@ -62,7 +62,7 @@ if [[ ! -f "$LIB_DIR/utils.sh" ]]; then
   echo "---"
   echo "SwiftBar libs missing at: $LIB_DIR"
   exit 0
-fi
+    fi
 
 # shellcheck source=/dev/null
 source "$LIB_DIR/utils.sh"
@@ -99,15 +99,15 @@ done
 # Menu bar icon
 MENU_STATUS_ICON_B64="$(status_icon_b64 "$MAIN_LEVEL" 18)"
 if [[ -n "$MENU_STATUS_ICON_B64" ]]; then
-  echo " | image=$MENU_STATUS_ICON_B64"
+    echo " | image=$MENU_STATUS_ICON_B64"
 else
   STATUS_COLOR="$(color_for_level "$MAIN_LEVEL")"
-  ICON_B64="$(get_menu_icon_b64)"
-  if [[ -n "$ICON_B64" ]]; then
-    echo "● | templateImage=$ICON_B64 color=$STATUS_COLOR"
-  else
-    echo "Happy"
-  fi
+    ICON_B64="$(get_menu_icon_b64)"
+    if [[ -n "$ICON_B64" ]]; then
+        echo "● | templateImage=$ICON_B64 color=$STATUS_COLOR"
+    else
+        echo "Happy"
+    fi
 fi
 
 echo "---"
@@ -137,28 +137,28 @@ fi
 
 STACKS_DIR="$HOME/.happy/stacks"
 if [[ ! -d "$STACKS_DIR" ]] && [[ -d "$HOME/.happy/local/stacks" ]]; then
-  STACKS_DIR="$HOME/.happy/local/stacks"
+STACKS_DIR="$HOME/.happy/local/stacks"
 fi
 if [[ -d "$STACKS_DIR" ]]; then
-  STACK_NAMES="$(ls -1 "$STACKS_DIR" 2>/dev/null || true)"
+    STACK_NAMES="$(ls -1 "$STACKS_DIR" 2>/dev/null || true)"
   if [[ -z "$STACK_NAMES" ]]; then
     echo "No stacks found | color=$GRAY"
   fi
-  for s in $STACK_NAMES; do
-    env_file="$STACKS_DIR/$s/env"
+        for s in $STACK_NAMES; do
+            env_file="$STACKS_DIR/$s/env"
     [[ -f "$env_file" ]] || continue
 
-    port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
+            port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
     [[ -n "$port" ]] || continue
 
-    server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
+            server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
     [[ -n "$server_component" ]] || server_component="happy-server-light"
 
-    cli_home_dir="$(dotenv_get "$env_file" "HAPPY_LOCAL_CLI_HOME_DIR")"
+            cli_home_dir="$(dotenv_get "$env_file" "HAPPY_LOCAL_CLI_HOME_DIR")"
     [[ -n "$cli_home_dir" ]] || cli_home_dir="$STACKS_DIR/$s/cli"
 
-    base_dir="$STACKS_DIR/$s"
-    label="com.happy.local.$s"
+            base_dir="$STACKS_DIR/$s"
+            label="com.happy.local.$s"
 
     COLLECT="$(collect_stack_status "$port" "$cli_home_dir" "$label" "$base_dir")"
     IFS=$'\t' read -r LEVEL SERVER_STATUS SERVER_PID SERVER_METRICS DAEMON_STATUS DAEMON_PID DAEMON_METRICS DAEMON_UPTIME LAST_HEARTBEAT LAUNCHAGENT_STATUS AUTOSTART_PID AUTOSTART_METRICS <<<"$COLLECT"
@@ -176,7 +176,7 @@ if [[ -d "$STACKS_DIR" ]]; then
     render_component_autostart "--" "$s" "$label" "$LAUNCHAGENT_STATUS" "$AUTOSTART_PID" "$AUTOSTART_METRICS" "$base_dir/logs"
     render_component_tailscale "--" "$s" ""
     render_components_menu "--" "stack" "$s" "$env_file"
-  done
+        done
 else
   echo "No stacks dir found at ~/.happy/stacks (legacy: ~/.happy/local/stacks) | color=$GRAY"
 fi
@@ -200,7 +200,7 @@ fi
 echo "---"
 echo "Setup / Tools"
 if [[ -z "$PNPM_BIN" ]]; then
-  echo "--⚠️ pnpm not found (install deps / set PATH)"
+    echo "--⚠️ pnpm not found (install deps / set PATH)"
 else
   echo "--Bootstrap (clone/install) | bash=$PNPM_BIN param1=bootstrap dir=$HAPPY_LOCAL_DIR terminal=true refresh=true"
   echo "--CLI link (install happy wrapper) | bash=$PNPM_BIN param1=cli:link dir=$HAPPY_LOCAL_DIR terminal=true refresh=true"

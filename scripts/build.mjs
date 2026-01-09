@@ -72,7 +72,7 @@ async function main() {
   if (json) {
     printResult({ json, data: { ok: true, outDir, tauriBuilt: false } });
   } else {
-    console.log('[local] UI build complete');
+  console.log('[local] UI build complete');
   }
 
   //
@@ -193,7 +193,7 @@ async function main() {
   if (json) {
     printResult({ json, data: { ok: true, outDir, tauriBuilt: true, tauriServerUrl } });
   } else {
-    console.log('[local] Tauri build complete');
+  console.log('[local] Tauri build complete');
   }
 }
 

@@ -265,9 +265,9 @@ async function main() {
 
   // Ensure components exist (embedded layout)
   if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
-    await ensureComponentPresent({
+  await ensureComponentPresent({
       dir: serverLightDir,
-      label: 'SERVER',
+    label: 'SERVER',
       repoUrl: repos.serverLight,
       allowClone,
     });
@@ -277,8 +277,8 @@ async function main() {
       dir: serverFullDir,
       label: 'SERVER_FULL',
       repoUrl: repos.serverFull,
-      allowClone,
-    });
+    allowClone,
+  });
   }
   await ensureComponentPresent({
     dir: cliDir,
