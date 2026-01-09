@@ -1,21 +1,35 @@
 # Happy Stacks
 
-Run the Happy stack locally with a single launcher, and access it remotely using Tailscale.
+Run the **Happy** stack locally (or many stacks in parallel) and access it remotely and securely (using Tailscale).
 
-`happy-stack` itself is a set of Node scripts (`scripts/*.mjs`). The Happy repos are cloned into `./components/*` by the `pnpm bootstrap` script.
+`happy-stacks` is a set of Node scripts (`scripts/*.mjs`) that orchestrate the real upstream repos cloned under `components/*`.
+
+## What is Happy?
+
+Happy is an UI/CLI stack (server + web UI + CLI + daemon) who let you monitor and interact with Claude Code, Codex and Gemini sessions from your mobile, a web UI and/or a desktop app.
+
+## What is Happy Stacks?
+
+happy-stacks is a “launcher + workflow toolkit” to:
+
+- run Happy fully on your own machine (no hosted dependency)
+- safely access it remotely (HTTPS secure context) via Tailscale
+- manage **worktrees** for clean upstream PRs while keeping a patched fork
+- run **multiple isolated stacks** (ports + dirs + component overrides)
+- optionally manage autostart (macOS LaunchAgent) and a SwiftBar menu bar control panel
 
 ## Quickstart
 
-### Step 1: Install
+### Step 1: Install / bootstrap
 
 ```bash
-git clone https://github.com/leeroybrun/happy-local.git
-cd happy-local
+git clone https://github.com/leeroybrun/happy-stacks.git
+cd happy-stacks
 
-pnpm bootstrap
+pnpm bootstrap -- --interactive
 ```
 
-### Step 2: Run the stack
+### Step 2: Run the main stack
 
 Starts the local server, CLI daemon, and serves the pre-built UI.
 
@@ -23,9 +37,7 @@ Starts the local server, CLI daemon, and serves the pre-built UI.
 pnpm start
 ```
 
-### Step 3: Enable Tailscale Serve
-
-Make sure Tailscale is [installed and running](https://tailscale.com/kb/1347/installation) on your computer, then:
+### Step 3: Enable Tailscale Serve (recommended for remote devices)
 
 ```bash
 pnpm tailscale:enable
@@ -34,406 +46,215 @@ pnpm tailscale:url
 
 ### Step 4: Mobile access
 
-Make sure Tailscale is [installed and running](https://tailscale.com/kb/1347/installation) on your phone, then either:
+Make sure Tailscale is [installed and running]
+([https://tailscale.com/kb/1347/installation](https://tailscale.com/kb/1347/installation)) on your 
+phone, then either:
 
-Open the URL from `pnpm tailscale:url` on your phone & add it to your home screen (prefered, always up-to-date).
+- Open the URL from `pnpm tailscale:url` on your phone and “Add to Home Screen”, or
+- [Download the Happy mobile app]
+([https://happy.engineering/](https://happy.engineering/)) and [configure it to use 
+your local server](docs/remote-access.md).
 
-or
-
-[Download the Happy mobile app](https://happy.engineering/) and [configure it to use your local server](#using-happy-local-from-your-phone).
-
-## Table of contents
-
-- [Why this exists](#why-this-exists)
-- [How it works](#how-it-works)
-- [Commands (cheat sheet)](#commands-cheat-sheet)
-- [Tailscale HTTPS (recommended for remote devices)](#tailscale-https-recommended-for-remote-devices)
-- [Using Happy Local from your phone](#using-happy-local-from-your-phone)
-- [Components + cloning (default behavior)](#components--cloning-default-behavior)
-- [Autostart (macOS)](#autostart-macos)
-- [Tauri desktop app](#tauri-desktop-app-optional)
-- [Configuration](#configuration)
-- [Troubleshooting](#troubleshooting)
+Details (secure context, phone instructions, automation knobs): `[docs/remote-access.md](docs/remote-access.md)`.
 
 ## Why this exists
 
 - **Automated setup**: `pnpm bootstrap` + `pnpm start` gets the whole stack up and running.
-- **No hosted dependency**: you can run the full stack on your own computer and not depend on any external server.
-- **Lower latency**: local loopback/LAN typically has lower latency than a remote hosted server.
-- **Custom forks**: you can easily use custom forks of the Happy UI + CLI (e.g. our `leeroybrun/*` forks).
-- **Optional autostart**: `happy-local` can be configured to automatically start on login (via a macOS LaunchAgent).
-  - This makes your local Happy server always running (minimal footprint: just `happy-server-light` serving the built UI & API + `happy` CLI daemon).
-- **Tailscale integration**: `happy-local` can automatically configure Tailscale Serve for you. This gives you a public HTTPS URL for the local server, which you can use on mobile to connect to the local UI + API.
-- **Isolated CLI home**: the daemon/CLI use `HAPPY_HOME_DIR=~/.happy/local/cli` by default so you don’t overwrite/contaminate your normal Happy credentials.
+- **No hosted dependency**: run the full stack on your own computer.
+- **Lower latency**: localhost/LAN is typically much faster than remote hosted servers.
+- **Custom forks**: easily use forks of the Happy UI + CLI (e.g. `leeroybrun/*`) while still contributing upstream to `slopus/*`.
+- **Worktrees**: clean upstream PR branches without mixing fork-only patches.
+- **Stacks**: run multiple isolated instances in parallel (ports + dirs + component overrides).
+- **Remote access**: `pnpm tailscale:*` helps you get an HTTPS URL for mobile/remote devices.
 
-## How it works
+## How Happy Stacks wires “local” URLs
 
-- **`happy-server-light`**: the local API + websocket relay. Can also **serve a prebuilt web UI** at `/`.
-- **`happy`**: the UI. Pre-built once and served by server-light. In “dev” mode, it runs as an Expo web dev server.
-- **`happy-cli`**: provides the `happy` CLI and the happy background **daemon** used for machine presence + remote session spawning.
-- **`happy-cli-local` (wrapper)**: `happy-local` links a small wrapper into your PATH so `happy` CLI automatically points at the local server and uses an isolated home dir.
+There are two “URLs” to understand:
 
-### Local wiring (how everything points at “local”)
+- **Internal URL**: used by local processes on this machine (server/daemon/CLI)
+  - typically `http://127.0.0.1:<port>`
+- **Public URL**: used by other devices (phone/laptop) and embedded links/QR codes
+  - recommended: `https://<machine>.<tailnet>.ts.net` via Tailscale Serve
 
-When `happy-local` starts the daemon, it sets:
+Diagram:
 
-- `HAPPY_SERVER_URL` → the internal loopback URL (e.g. `http://127.0.0.1:3005`)
-- `HAPPY_WEBAPP_URL` / `PUBLIC_URL` → the “public” URL you might open on another device (often a Tailscale HTTPS URL)
+```text
+             other device (phone/laptop)
+                   |
+                   |  HTTPS (secure context)
+                   v
+        https://<machine>.<tailnet>.ts.net
+                   |
+                   | (tailscale serve)
+                   v
+           local machine (this repo)
+     +--------------------------------+
+     | happy-server(-light)           |
+     |  - listens on :PORT            |
+     |  - serves UI (server-light)    |
+     +--------------------------------+
+                   ^
+                   | internal loopback
+                   |
+            http://127.0.0.1:<port>
+               (daemon / CLI)
+```
 
-## Commands (cheat sheet)
+More details + automation: `[docs/remote-access.md](docs/remote-access.md)`.
 
-- **Setup**
-  - `pnpm bootstrap`: clone missing components, install deps, link `happy` wrapper, build UI (optionally Tauri), optionally install LaunchAgent
-  - `pnpm bootstrap -- --upstream`: use `slopus/*` forks instead of `leeroybrun/*`
-  - `pnpm bootstrap -- --tauri`: build Tauri desktop app (plus the Tauri-specific UI export)
-  - `pnpm bootstrap -- --autostart`: install LaunchAgent to automatically start on login
-  - `pnpm bootstrap -- --no-build`: skip building the UI (useful if you just want to update deps)
-  - `pnpm bootstrap -- --no-link`: skip linking the `happy` wrapper into PATH
-- **Run**
-  - `pnpm start`: production-like (server + daemon + serve built UI)
-  - `pnpm dev`: dev mode (server + daemon + Expo web dev server)
-- **Mobile (native dev client)**
-  - `pnpm mobile`: start Metro for the native dev client (does *not* require changing upstream config)
-  - `pnpm mobile:prebuild`: regenerate native projects + run CocoaPods (use after native deps/config changes)
-  - `pnpm mobile:ios`: build/install the iOS dev client (prompts for signing if building to a real device)
-- **Build**
-  - `pnpm build`: build the static web UI bundle (no Tauri unless enabled)
-  - `pnpm build -- --tauri`: build the Tauri desktop app (plus the Tauri-specific UI export)
-- **CLI wrapper**
-  - `pnpm cli:link`: re-link `happy` wrapper into PATH
-- **Tailscale**
-  - `pnpm tailscale:enable` / `pnpm tailscale:disable` / `pnpm tailscale:status` / `pnpm tailscale:url`
-- **Autostart (macOS)**
-  - `pnpm service:install` / `pnpm service:uninstall`
-  - `pnpm service:start` / `pnpm service:stop` / `pnpm service:restart` / `pnpm service:status`
-  - `pnpm logs` / `pnpm logs:tail`
-- **Diagnostics**
-  - `pnpm stack:doctor`
-  - `pnpm stack:fix`
+## How it’s organized
 
-## Tailscale HTTPS (recommended for remote devices)
+- **Scripts**: `scripts/*.mjs` (bootstrap/dev/start/build/stacks/worktrees/service/tailscale/mobile)
+- **Components**: `components/*` (each is its own Git repo)
+- **Worktrees**: `components/.worktrees/<component>/<owner>/<branch...>`
 
-Browsers treat `http://localhost` as a secure context, but **not** `http://<tailscale-ip>:3005`. Some Happy features rely on WebCrypto, so remote access works ONLY over HTTPS.
+Components:
 
-[Tailscale Serve](https://tailscale.com/kb/1312/serve) provides a public HTTPS URL for your local server, only accessible from within your Tailscale network.
+- `happy` (UI)
+- `happy-cli` (CLI + daemon)
+- `happy-server-light` (light server, can serve built UI)
+- `happy-server` (full server)
 
-Make sure Tailscale is [installed and running](https://tailscale.com/kb/1347/installation) on your computer, then:
+## Quickstarts (feature-focused)
+
+### Remote access (Tailscale Serve)
 
 ```bash
 pnpm tailscale:enable
 pnpm tailscale:url
 ```
 
-Automation:
+Details: `[docs/remote-access.md](docs/remote-access.md)`.
 
-- If Serve is already configured, `pnpm start` will automatically prefer the `https://*.ts.net` URL for “public” links (unless you explicitly set `HAPPY_LOCAL_SERVER_URL`).
-- Set `HAPPY_LOCAL_TAILSCALE_SERVE=1` in `.env` to have `pnpm start` enable Serve automatically on boot (and optionally wait; see `HAPPY_LOCAL_TAILSCALE_WAIT_MS`).
+### Worktrees + forks (clean upstream PRs)
 
-## Using Happy Local from your phone
-
-You have two good options:
-
-### Option A: use the served web UI on mobile (no app updates required)
-
-This is the simplest way to use the latest UI changes from our fork without updating the native app:
-
-- Run `pnpm start` on your computer
-- Open the **public URL** on your phone (see Tailscale section above)
-  - You’ll get the UI served directly by `happy-server-light` at `/`
-  - Because it’s built from your `components/happy`, it includes our latest fork changes
-
-When you pull new UI changes and want your phone to see them:
+Create a clean upstream PR worktree:
 
 ```bash
-pnpm build
+pnpm wt new happy pr/my-feature --from=upstream --use
+pnpm wt push happy active --remote=upstream
 ```
 
-### Option B: point the upstream Happy mobile app at your local server
-
-The upstream Happy mobile app includes a hidden “API Endpoint” setting. Point it at the **same public URL** you’re using for the local stack (recommended: Tailscale HTTPS).
-
-Recommended setup:
-
-- Enable Tailscale Serve so the phone loads the UI/API over **HTTPS** (secure context)
-- Use the HTTPS `*.ts.net` URL as your “server URL” inside the app
-
-Where the setting lives (upstream `slopus/happy`):
-
-- Open **Settings**
-- Tap **Version** 10 times (enables Developer Mode)
-- Go to **Developer Tools**
-- In **Network**, tap **API Endpoint**
-- Paste your `https://<machine>.<tailnet>.ts.net` URL
-- Restart the app (the dev screen explicitly asks for a restart to apply)
-
-Notes:
-
-- A phone can’t use `http://localhost:3005` (that would refer to the phone itself).
-- `http://<tailscale-ip>:3005` is **not** a secure context; prefer HTTPS via Tailscale Serve.
-- `happy-local` tries to keep the “public URL” consistent so QR/login links generated by the server/daemon work on other devices.
-
-## Developing the mobile app (iOS)
-
-### Step 0: Prereqs (one-time)
-
-- Xcode installed
-- CocoaPods installed (`brew install cocoapods`)
-
-### Step 1: Generate iOS native project + Pods (run when needed)
-
-Run this after pulling changes that affect native deps/config, or if `ios/` was deleted:
+Test an upstream PR locally:
 
 ```bash
-pnpm mobile:prebuild
+pnpm wt pr happy https://github.com/slopus/happy/pull/123 --use
+pnpm wt pr happy 123 --update --stash
 ```
 
-### Step 2: Install the iOS dev build
+Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 
-- **iOS Simulator**:
+### Server flavor (server-light vs full server)
+
+- Use `happy-server-light` for a light local stack (no Redis, no Postgres, no Docker), and UI serving via server-light.
+- Use `happy-server` when you need some production-ready server (eg. to distribute and host multiple users) or develop server changes for upstream.
+
+Switch globally:
 
 ```bash
-pnpm mobile --run-ios --device="iPhone 16 Pro"
+pnpm srv -- status
+pnpm srv -- use --interactive
 ```
 
-- **Real iPhone** (requires code signing in Xcode once):
+Switch per-stack:
 
 ```bash
-pnpm mobile --run-ios --device="Your iPhone"
+pnpm stack srv exp1 -- use --interactive
 ```
 
-Tip: you can omit `--device` to auto-pick the first connected iPhone over USB:
+Details: `[docs/server-flavors.md](docs/server-flavors.md)`.
+
+### Stacks (multiple isolated instances)
 
 ```bash
-pnpm mobile --run-ios
+pnpm stack new exp1 --interactive
+pnpm stack dev exp1
 ```
 
-To see the exact device names/IDs you can pass:
+Point a stack at a PR worktree:
 
 ```bash
-pnpm mobile:devices
+pnpm wt pr happy 123 --use
+pnpm stack wt exp1 -- use happy slopus/pr/123-fix-thing
+pnpm stack dev exp1
 ```
 
-If you hit a bundle identifier error (e.g. `com.slopus.happy.dev` “not available”), set a unique local bundle id:
+Details: `[docs/stacks.md](docs/stacks.md)`.
+
+### Menu bar (SwiftBar)
 
 ```bash
-HAPPY_LOCAL_IOS_BUNDLE_ID="com.yourname.happy.local.dev" pnpm mobile --run-ios
+pnpm menubar:install
+pnpm menubar:open
 ```
 
-### Release build (runs without Metro)
+Details: `[docs/menubar.md](docs/menubar.md)`.
 
-Build + install a Release configuration (no Metro required at runtime):
+### Mobile iOS dev (optional)
 
 ```bash
-pnpm mobile:ios:release
+pnpm mobile -- --help
+pnpm mobile -- --json
 ```
 
-### Step 3: Start Metro (dev client)
+Details: `[docs/mobile-ios.md](docs/mobile-ios.md)`.
 
-- **iOS Simulator**:
-
-```bash
-pnpm mobile --host=localhost
-```
-
-- **Real iPhone** (same Wi‑Fi as your Mac):
-
-```bash
-pnpm mobile --host=lan
-```
-
-Open the dev build and tap Reload. Scanning the QR should open the dev build (not the App Store app).
-
-### Personal build on iPhone (EAS internal distribution)
-
-```bash
-cd components/happy
-eas build --profile development --platform ios
-```
-
-Then keep Metro running from `happy-local`:
-
-```bash
-pnpm mobile --host=lan
-```
-
-## What `pnpm bootstrap` does
-
-- Ensures `components/*` exists ([`happy-server-light`](https://github.com/leeroybrun/happy-server-light), [`happy`](https://github.com/leeroybrun/happy), [`happy-cli`](https://github.com/leeroybrun/happy-cli))
-  - Auto-clone from `leeroybrun/*` forks otherwise (use `pnpm bootstrap -- --upstream` to use `slopus/*` instead)
-- Installs dependencies inside each component (Yarn when `yarn.lock` exists)
-- Builds `components/happy-cli` and links `packages/happy-cli-local` into your PATH (so `happy` CLI uses local server)
-- Builds the static UI bundle (under `~/.happy/local/ui`), so `pnpm start` & `happy-server-light` can serve it
-- Optionally builds the Tauri desktop app (opt-in: `pnpm bootstrap -- --tauri`)
-- Optionally install auto-start service if `--autostart` is provided (macOS only)
-
-## Components + cloning (default behavior)
-
-The launcher expects component repos under:
-
-- `components/happy-server-light`
-- `components/happy`
-- `components/happy-cli`
-
-On a fresh checkout, `pnpm bootstrap` will **auto-clone any missing components**.
-
-- **Default clone source**: our forks (`leeroybrun/*`)
-- **Upstream clone source**: `slopus/*`
-
-Pick the source explicitly:
-
-```bash
-pnpm bootstrap -- --forks
-pnpm bootstrap -- --upstream
-```
-
-Disable cloning (and manage `components/*` yourself):
-
-```bash
-pnpm bootstrap -- --no-clone
-```
-
-Override any repo URL (works with either source):
-
-- `HAPPY_LOCAL_UI_REPO_URL`
-- `HAPPY_LOCAL_CLI_REPO_URL`
-- `HAPPY_LOCAL_SERVER_REPO_URL`
-
-Or set the default in `.env`:
-
-- `HAPPY_LOCAL_REPO_SOURCE=upstream` (or `forks`)
-
-## The `happy` CLI wrapper (important)
-
-`pnpm bootstrap` makes `happy` point at `packages/happy-cli-local`, which sets the right env vars for the local stack.
-
-If you ever need to re-link:
-
-```bash
-pnpm cli:link
-```
-
-## Autostart (macOS)
-
-Enable start-on-boot:
-
-```bash
-pnpm bootstrap -- --autostart
-```
-
-Manage the service:
-
-```bash
-pnpm service:status
-pnpm service:restart
-pnpm logs:tail
-```
-
-Disable:
-
-```bash
-pnpm bootstrap -- --no-autostart
-```
-
-## Tauri desktop app
-
-The Tauri app is a native desktop wrapper around the web UI. It’s useful when you want:
-
-- A native desktop window (instead of a browser tab)
-- Separate storage from the “regular” Happy desktop app (so it doesn’t reuse old server URLs/auth)
-
-Important behavior:
-
-- The Tauri app must embed an explicit API base URL
-- By default, `happy-local` will embed:
-  - a **Tailscale Serve** `https://*.ts.net` URL if it detects one on this machine (generate a portable app for all devices on the same tailnet), otherwise
-  - the local loopback URL `http://127.0.0.1:<HAPPY_LOCAL_SERVER_PORT>` (same-machine only).
-- If you change what URL you want embedded, rebuild the Tauri app.
-
-### Prereqs
-
-- Rust toolchain installed
-- Tauri build dependencies installed for your OS
-
-### Build it
-
-Build (one-off):
+### Tauri desktop app (optional)
 
 ```bash
 pnpm build -- --tauri
 ```
 
-Or during bootstrap:
+Details: `[docs/tauri.md](docs/tauri.md)`.
 
-```bash
-pnpm bootstrap -- --tauri
-```
+## Commands (high-signal)
 
-### Run it
+- **Setup**:
+  - `pnpm bootstrap`
+  - `pnpm bootstrap -- --interactive` (wizard)
+  - `pnpm bootstrap -- --forks|--upstream`
+  - `pnpm bootstrap -- --server=happy-server|happy-server-light|both`
+- **Run**:
+  - `pnpm start` (production-like; serves built UI via server-light)
+  - `pnpm dev` (dev; Expo web dev server for UI)
+- **Server flavor**:
+  - `pnpm srv -- status`
+  - `pnpm srv -- use --interactive`
+- **Worktrees**:
+  - `pnpm wt use --interactive`
+  - `pnpm wt pr <component> <pr-url|number> --use [--update] [--stash] [--force]`
+  - `pnpm wt sync-all`
+  - `pnpm wt update-all --dry-run` / `pnpm wt update-all --stash`
+- **Stacks**:
+  - `pnpm stack new --interactive`
+  - `pnpm stack dev <name>` / `pnpm stack start <name>`
+  - `pnpm stack edit <name> --interactive`
+  - `pnpm stack wt <name> -- use --interactive`
+  - `pnpm stack migrate`
+- **Menu bar (SwiftBar)**:
+  - `pnpm menubar:install`
 
-1) Start the local server (or install the service):
+## Docs (deep dives)
 
-```bash
-pnpm start
-```
-
-2) Launch the built app bundle (location is under `~/.happy/local/tauri-target/`).
-
-### “Portable” Tauri builds (send to another computer)
-
-If you build the Tauri app while Tailscale Serve is enabled on the server machine, the app will embed the `https://*.ts.net` URL and can be copied to another computer.
-
-Requirements:
-
-- The server machine is running `pnpm start` and Tailscale Serve is enabled
-- The other computer is on the same tailnet and can access the `https://*.ts.net` URL
-
-Notes:
-
-- By default we build Tauri in **debug** mode so devtools are enabled (controlled by `HAPPY_LOCAL_TAURI_DEBUG=1`).
-- The build script generates a temporary Tauri config at `~/.happy/local/tauri.conf.happy-local.json`.
-
-### Configuration (most useful)
-
-- `HAPPY_LOCAL_TAURI_IDENTIFIER` (default `com.happy.local`)
-- `HAPPY_LOCAL_TAURI_PRODUCT_NAME` (default `Happy Local`)
-- `HAPPY_LOCAL_TAURI_DEBUG=0` (build release-like without devtools)
-- `HAPPY_LOCAL_TAURI_SERVER_URL` (force the embedded API URL)
-- `HAPPY_LOCAL_TAURI_PREFER_TAILSCALE=0` (disable Tailscale detection; always embed `127.0.0.1`)
+- **Remote access (Tailscale + phone)**: `[docs/remote-access.md](docs/remote-access.md)`
+- **Server flavors (server-light vs server)**: `[docs/server-flavors.md](docs/server-flavors.md)`
+- **Worktrees + forks workflow**: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`
+- **Stacks (multiple instances)**: `[docs/stacks.md](docs/stacks.md)`
+- **Menu bar (SwiftBar)**: `[docs/menubar.md](docs/menubar.md)`
+- **Mobile iOS dev**: `[docs/mobile-ios.md](docs/mobile-ios.md)`
+- **Tauri desktop app**: `[docs/tauri.md](docs/tauri.md)`
 
 ## Configuration
 
-### `.env` / `env.local`
-
-All `happy-local` scripts auto-load configuration from:
-
-- `.env` (recommended for persistent local overrides; ignored by git)
-- `env.local` (optional)
-
-Quick tip:
+- Copy the template:
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
-### Environment variables (high-signal)
+Notes:
 
-- **Server**: `HAPPY_LOCAL_SERVER_PORT`, `HAPPY_LOCAL_SERVER_URL`
-- **What to run**: `HAPPY_LOCAL_UI=0`, `HAPPY_LOCAL_DAEMON=0`, `HAPPY_LOCAL_SERVE_UI=0`
-- **Paths**: `HAPPY_LOCAL_CLI_HOME_DIR`, `HAPPY_LOCAL_UI_BUILD_DIR`
-- **Cloning**: `HAPPY_LOCAL_REPO_SOURCE`, `HAPPY_LOCAL_*_REPO_URL`, `HAPPY_LOCAL_CLONE_MISSING=0`
-- **Tauri build** (optional): `pnpm bootstrap -- --tauri` / `pnpm build -- --tauri` (or set `HAPPY_LOCAL_BUILD_TAURI=1`; override with `--no-tauri`)
+- Canonical env prefix is `HAPPY_STACKS_*` (legacy `HAPPY_LOCAL_*` still works).
+- Canonical stack storage is `~/.happy/stacks` (legacy `~/.happy/local` is still supported).
 
-## Development
-
-Starts the local server, CLI daemon, and Expo web dev server for UI.
-
-```bash
-pnpm dev
-```
-
-## Troubleshooting
-
-- `pnpm stack:doctor`
-- `pnpm stack:fix`
-- `pnpm logs:tail` (if using the macOS service)
-
+For contributor/LLM workflow expectations: `[AGENTS.md](AGENTS.md)`.
