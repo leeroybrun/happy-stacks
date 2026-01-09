@@ -31,14 +31,24 @@ async function cmdUse({ rootDir, argv }) {
     throw new Error(`[server-flavor] unknown flavor: ${flavor}`);
   }
 
-  const envPath = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : join(rootDir, 'env.local');
-  await ensureEnvFileUpdated({ envPath, updates: [{ key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: flavor }] });
+  const envPath = process.env.HAPPY_STACKS_ENV_FILE?.trim()
+    ? process.env.HAPPY_STACKS_ENV_FILE.trim()
+    : process.env.HAPPY_LOCAL_ENV_FILE?.trim()
+      ? process.env.HAPPY_LOCAL_ENV_FILE.trim()
+      : join(rootDir, 'env.local');
+  await ensureEnvFileUpdated({
+    envPath,
+    updates: [
+      { key: 'HAPPY_STACKS_SERVER_COMPONENT', value: flavor },
+      { key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: flavor }, // legacy alias
+    ],
+  });
 
   const json = wantsJson(argv, { flags });
   printResult({
     json,
     data: { ok: true, flavor },
-    text: `[server-flavor] set HAPPY_LOCAL_SERVER_COMPONENT=${flavor} (saved to ${envPath})`,
+    text: `[server-flavor] set HAPPY_STACKS_SERVER_COMPONENT=${flavor} (saved to ${envPath})`,
   });
 }
 
@@ -48,12 +58,22 @@ async function cmdUseInteractive({ rootDir, argv }) {
 
   await withRl(async (rl) => {
     const flavor = await promptSelect(rl, { title: 'Select server flavor:', options: FLAVORS, defaultIndex: 0 });
-    const envPath = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : join(rootDir, 'env.local');
-    await ensureEnvFileUpdated({ envPath, updates: [{ key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: flavor }] });
+    const envPath = process.env.HAPPY_STACKS_ENV_FILE?.trim()
+      ? process.env.HAPPY_STACKS_ENV_FILE.trim()
+      : process.env.HAPPY_LOCAL_ENV_FILE?.trim()
+        ? process.env.HAPPY_LOCAL_ENV_FILE.trim()
+        : join(rootDir, 'env.local');
+    await ensureEnvFileUpdated({
+      envPath,
+      updates: [
+        { key: 'HAPPY_STACKS_SERVER_COMPONENT', value: flavor },
+        { key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: flavor }, // legacy alias
+      ],
+    });
     printResult({
       json,
       data: { ok: true, flavor },
-      text: `[server-flavor] set HAPPY_LOCAL_SERVER_COMPONENT=${flavor} (saved to ${envPath})`,
+      text: `[server-flavor] set HAPPY_STACKS_SERVER_COMPONENT=${flavor} (saved to ${envPath})`,
     });
   });
 }
@@ -61,7 +81,7 @@ async function cmdUseInteractive({ rootDir, argv }) {
 async function cmdStatus({ argv }) {
   const { flags } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
-  const flavor = process.env.HAPPY_LOCAL_SERVER_COMPONENT?.trim() || 'happy-server-light';
+  const flavor = process.env.HAPPY_STACKS_SERVER_COMPONENT?.trim() || process.env.HAPPY_LOCAL_SERVER_COMPONENT?.trim() || 'happy-server-light';
   printResult({ json, data: { flavor }, text: `[server-flavor] current: ${flavor}` });
 }
 

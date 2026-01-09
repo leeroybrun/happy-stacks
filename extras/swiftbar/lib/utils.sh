@@ -51,6 +51,18 @@ dotenv_get() {
 }
 
 resolve_happy_local_dir() {
+  # If a LaunchAgent is installed, prefer its WorkingDirectory so SwiftBar actions
+  # target the same repo the service is actually running from.
+  local plist="$HOME/Library/LaunchAgents/com.happy.local.plist"
+  if [[ -f "$plist" ]] && command -v plutil >/dev/null 2>&1; then
+    local wd
+    wd="$(plutil -extract WorkingDirectory raw -o - "$plist" 2>/dev/null || true)"
+    if [[ -n "$wd" ]] && [[ -f "$wd/scripts/run.mjs" ]]; then
+      echo "$wd"
+      return
+    fi
+  fi
+
   # If user provided a valid directory, keep it.
   if [[ -n "${HAPPY_LOCAL_DIR:-}" ]] && [[ -f "$HAPPY_LOCAL_DIR/scripts/run.mjs" ]]; then
     echo "$HAPPY_LOCAL_DIR"

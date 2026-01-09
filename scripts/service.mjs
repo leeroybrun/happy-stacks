@@ -33,55 +33,29 @@ function getInternalUrl() {
   return `http://127.0.0.1:${port}`;
 }
 
-function getAutostartEnv() {
-  // If an env file is provided, prefer persisting only its path.
-  // This allows changing stack config without reinstalling the LaunchAgent.
-  const envFile = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : '';
-  if (envFile) {
-    return { HAPPY_LOCAL_ENV_FILE: envFile };
-  }
+function getAutostartEnv({ rootDir }) {
+  // IMPORTANT:
+  // LaunchAgents should NOT bake the entire config into the plist, because that would require
+  // reinstalling the service for any config change (server flavor, worktrees, ports, etc).
+  //
+  // Instead, persist only the env file path; `scripts/utils/env.mjs` will load it on every start.
+  //
+  // Stack installs:
+  // - `pnpm stack service:install <name>` runs `scripts/service.mjs` under a stack env already
+  //   (HAPPY_LOCAL_ENV_FILE points at ~/.happy/stacks/<name>/env or legacy path), so we persist that.
+  //
+  // Main installs:
+  // - default to repo `env.local` so server flavor/worktree changes apply on restart without reinstall.
 
-  const { baseDir } = getDefaultAutostartPaths();
+  const stacksEnvFile = process.env.HAPPY_STACKS_ENV_FILE?.trim() ? process.env.HAPPY_STACKS_ENV_FILE.trim() : '';
+  const localEnvFile = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : '';
+  const envFile = stacksEnvFile || localEnvFile || join(rootDir, 'env.local');
 
-  const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? process.env.HAPPY_LOCAL_SERVER_PORT.trim() : '3005';
-  const uiBuildDir = process.env.HAPPY_LOCAL_UI_BUILD_DIR?.trim()
-    ? process.env.HAPPY_LOCAL_UI_BUILD_DIR.trim()
-    : join(baseDir, 'ui');
-
-  const env = {
-    HAPPY_LOCAL_SERVER_PORT: String(serverPort),
-    HAPPY_LOCAL_SERVER_URL: process.env.HAPPY_LOCAL_SERVER_URL ?? '',
-    // Select server implementation (happy-server-light vs happy-server)
-    HAPPY_LOCAL_SERVER_COMPONENT: process.env.HAPPY_LOCAL_SERVER_COMPONENT ?? '',
-    HAPPY_LOCAL_DAEMON: process.env.HAPPY_LOCAL_DAEMON ?? '1',
-    HAPPY_LOCAL_SERVE_UI: process.env.HAPPY_LOCAL_SERVE_UI ?? '1',
-    HAPPY_LOCAL_UI_PREFIX: process.env.HAPPY_LOCAL_UI_PREFIX ?? '/',
-    HAPPY_LOCAL_UI_BUILD_DIR: uiBuildDir,
-    HAPPY_LOCAL_CLI_HOME_DIR: process.env.HAPPY_LOCAL_CLI_HOME_DIR ?? '',
-    // Component dir overrides (worktrees / external checkouts).
-    HAPPY_LOCAL_COMPONENT_DIR_HAPPY: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY ?? '',
-    HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '',
-    HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT ?? '',
-    HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER ?? '',
-    // Optional: Tailscale Serve (secure context / remote access).
-    HAPPY_LOCAL_TAILSCALE_SERVE: process.env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '',
-    HAPPY_LOCAL_TAILSCALE_SERVE_PATH: process.env.HAPPY_LOCAL_TAILSCALE_SERVE_PATH ?? '',
-    HAPPY_LOCAL_TAILSCALE_UPSTREAM: process.env.HAPPY_LOCAL_TAILSCALE_UPSTREAM ?? '',
-    HAPPY_LOCAL_TAILSCALE_RESET_ON_EXIT: process.env.HAPPY_LOCAL_TAILSCALE_RESET_ON_EXIT ?? '',
-    HAPPY_LOCAL_TAILSCALE_PREFER_PUBLIC_URL: process.env.HAPPY_LOCAL_TAILSCALE_PREFER_PUBLIC_URL ?? '',
-    HAPPY_LOCAL_TAILSCALE_BIN: process.env.HAPPY_LOCAL_TAILSCALE_BIN ?? '',
-    // If you use a custom env file, persist it for the LaunchAgent too.
-    HAPPY_LOCAL_ENV_FILE: process.env.HAPPY_LOCAL_ENV_FILE ?? '',
+  // Persist both prefixes for backwards compatibility.
+  return {
+    HAPPY_STACKS_ENV_FILE: envFile,
+    HAPPY_LOCAL_ENV_FILE: envFile,
   };
-
-  // Drop empty env vars (LaunchAgent env dict is annoying with blanks)
-  for (const [k, v] of Object.entries(env)) {
-    if (!String(v).trim()) {
-      delete env[k];
-    }
-  }
-
-  return env;
 }
 
 export async function installService() {
@@ -90,7 +64,7 @@ export async function installService() {
   }
   const rootDir = getRootDir(import.meta.url);
   const { primaryLabel: label } = getDefaultAutostartPaths();
-  const env = getAutostartEnv();
+  const env = getAutostartEnv({ rootDir });
   await ensureMacAutostartEnabled({ rootDir, label, env });
   console.log('[local] service installed (macOS LaunchAgent)');
 }
@@ -299,7 +273,7 @@ async function main() {
           data: { label, plistPath, stdoutPath, stderrPath, internalUrl, launchctlLine, health },
         });
       } else {
-        await showStatus();
+      await showStatus();
       }
       return;
     case 'start':

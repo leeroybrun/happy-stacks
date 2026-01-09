@@ -286,11 +286,31 @@ export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.lo
     throw new Error('[local] autostart is currently only implemented for macOS (LaunchAgents).');
   }
 
-  const { logsDir, stdoutPath, stderrPath, plistPath } = getDefaultAutostartPaths();
+  const {
+    logsDir,
+    stdoutPath,
+    stderrPath,
+    plistPath,
+    primaryLabel,
+    legacyLabel,
+    primaryPlistPath,
+    legacyPlistPath,
+    primaryStdoutPath,
+    primaryStderrPath,
+    legacyStdoutPath,
+    legacyStderrPath,
+  } = getDefaultAutostartPaths();
   await mkdir(logsDir, { recursive: true });
 
   const nodePath = process.env.HAPPY_LOCAL_NODE?.trim() ? process.env.HAPPY_LOCAL_NODE.trim() : process.execPath;
   const runScript = join(rootDir, 'scripts', 'run.mjs');
+
+  // Ensure we write to the plist path that matches the label we're installing, instead of the
+  // "active" plist path (which might be legacy and cause filename/label mismatches).
+  const resolvedPlistPath =
+    label === primaryLabel ? primaryPlistPath : label === legacyLabel ? legacyPlistPath : join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+  const resolvedStdoutPath = label === primaryLabel ? primaryStdoutPath : label === legacyLabel ? legacyStdoutPath : stdoutPath;
+  const resolvedStderrPath = label === primaryLabel ? primaryStderrPath : label === legacyLabel ? legacyStderrPath : stderrPath;
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -310,9 +330,9 @@ export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.lo
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>${stdoutPath}</string>
+    <string>${resolvedStdoutPath}</string>
     <key>StandardErrorPath</key>
-    <string>${stderrPath}</string>
+    <string>${resolvedStderrPath}</string>
     <key>EnvironmentVariables</key>
     <dict>
 ${Object.entries(env)
@@ -323,27 +343,37 @@ ${Object.entries(env)
 </plist>
 `;
 
-  await mkdir(dirname(plistPath), { recursive: true });
-  await writeFile(plistPath, plist, 'utf-8');
+  await mkdir(dirname(resolvedPlistPath), { recursive: true });
+  await writeFile(resolvedPlistPath, plist, 'utf-8');
 
   // Best-effort (works on most macOS setups). If it fails, the plist still exists and can be loaded manually.
   try {
-    await run('launchctl', ['unload', '-w', plistPath]);
+    await run('launchctl', ['unload', '-w', resolvedPlistPath]);
   } catch {
     // ignore
   }
-  await run('launchctl', ['load', '-w', plistPath]);
+  await run('launchctl', ['load', '-w', resolvedPlistPath]);
 }
 
 export async function ensureMacAutostartDisabled({ label = 'com.happy.local' }) {
   if (process.platform !== 'darwin') {
     return;
   }
-  const { plistPath } = getDefaultAutostartPaths();
+  const { primaryLabel, legacyLabel, primaryPlistPath, legacyPlistPath } = getDefaultAutostartPaths();
+  const resolvedPlistPath =
+    label === primaryLabel ? primaryPlistPath : label === legacyLabel ? legacyPlistPath : join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
   try {
-    await run('launchctl', ['unload', '-w', plistPath]);
+    await run('launchctl', ['unload', '-w', resolvedPlistPath]);
   } catch {
-    // ignore
+    // Old-style unload can fail on newer macOS; fall back to modern bootout.
+    try {
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+      if (uid != null) {
+        await run('launchctl', ['bootout', `gui/${uid}/${label}`]);
+      }
+    } catch {
+      // ignore
+    }
   }
   // eslint-disable-next-line no-console
   console.log(`[local] autostart disabled (${label})`);

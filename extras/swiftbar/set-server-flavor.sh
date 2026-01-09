@@ -24,12 +24,12 @@ if [[ "$FLAVOR" != "happy-server" && "$FLAVOR" != "happy-server-light" ]]; then
   exit 2
 fi
 
-if [[ ! -f "package.json" ]]; then
-  echo "run from happy-local root (SwiftBar sets dir=HAPPY_LOCAL_DIR)" >&2
-  exit 2
-fi
+# Always run relative to this repo (avoid SwiftBar cwd surprises and repo rename confusion).
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+cd "$repo_root"
 
-PNPM_BIN="./extras/swiftbar/pnpm.sh"
+PNPM_BIN="$repo_root/extras/swiftbar/pnpm.sh"
 if [[ ! -x "$PNPM_BIN" ]]; then
   PNPM_BIN="$(command -v pnpm || true)"
   LOCAL_PNPM="./node_modules/.bin/pnpm"
@@ -42,28 +42,26 @@ if [[ -z "$PNPM_BIN" ]]; then
   exit 1
 fi
 
-restart_main_service_if_present() {
-  if [[ -f "$HOME/Library/LaunchAgents/com.happy.local.plist" ]]; then
-    "$PNPM_BIN" service:restart >/dev/null 2>&1 || true
-  fi
+restart_main_service_best_effort() {
+  "$PNPM_BIN" service:restart >/dev/null 2>&1 || true
+  # If the installed LaunchAgent is still legacy/baked, reinstall so it persists only env-file pointer.
+  "$PNPM_BIN" service:install >/dev/null 2>&1 || true
 }
 
-restart_stack_service_if_present() {
+restart_stack_service_best_effort() {
   local name="$1"
-  local label="com.happy.local.${name}"
-  if [[ -f "$HOME/Library/LaunchAgents/${label}.plist" ]]; then
-    "$PNPM_BIN" stack service:restart "$name" >/dev/null 2>&1 || true
-  fi
+  "$PNPM_BIN" stack service:restart "$name" >/dev/null 2>&1 || true
+  "$PNPM_BIN" stack service:install "$name" >/dev/null 2>&1 || true
 }
 
 if [[ "$STACK" == "main" ]]; then
   "$PNPM_BIN" srv -- use "$FLAVOR"
-  restart_main_service_if_present
+  restart_main_service_best_effort
   echo "ok: main -> $FLAVOR"
   exit 0
 fi
 
 "$PNPM_BIN" stack srv "$STACK" -- use "$FLAVOR"
-restart_stack_service_if_present "$STACK"
+restart_stack_service_best_effort "$STACK"
 echo "ok: $STACK -> $FLAVOR"
 
