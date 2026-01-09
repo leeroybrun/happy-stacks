@@ -1,8 +1,8 @@
-# Happy Local Stack
+# Happy Stacks
 
 Run the Happy stack locally with a single launcher, and access it remotely using Tailscale.
 
-`happy-local-stack` itself is just a set of Node scripts (`scripts/*.mjs`). The actual Happy repos are cloned into `./components/*` by the `pnpm bootstrap` script.
+`happy-stack` itself is a set of Node scripts (`scripts/*.mjs`). The Happy repos are cloned into `./components/*` by the `pnpm bootstrap` script.
 
 ## Quickstart
 
