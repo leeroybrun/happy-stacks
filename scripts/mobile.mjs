@@ -4,6 +4,7 @@ import { killPortListeners } from './utils/ports.mjs';
 import { run, runCapture, spawnProc } from './utils/proc.mjs';
 import { getComponentDir, getRootDir } from './utils/paths.mjs';
 import { ensureDepsInstalled, requireDir } from './utils/pm.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -21,7 +22,43 @@ import { ensureDepsInstalled, requireDir } from './utils/pm.mjs';
  */
 
 async function main() {
-  const { flags, kv } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+
+  if (wantsHelp(argv, { flags })) {
+    printResult({
+      json,
+      data: {
+        flags: [
+          '--host=lan|localhost|tunnel',
+          '--port=8081',
+          '--scheme=<url-scheme>',
+          '--ios-bundle-id=<bundle-id>',
+          '--ios-app-name=<name>',
+          '--app-env=development|production',
+          '--prebuild [--platform=ios|all] [--clean]',
+          '--run-ios [--device=<id-or-name>] [--configuration=Debug|Release]',
+          '--metro / --no-metro',
+          '--no-signing-fix',
+        ],
+        json: true,
+      },
+      text: [
+        '[mobile] usage:',
+        '  pnpm mobile [-- --host=lan|localhost|tunnel] [--port=8081] [--scheme=...] [--json]',
+        '  pnpm mobile -- --run-ios [--device=...] [--configuration=Debug|Release]',
+        '  pnpm mobile -- --prebuild [--platform=ios|all] [--clean]',
+        '  pnpm mobile -- --no-metro   # just build/install (if --run-ios) without starting Metro',
+        '',
+        'Notes:',
+        '- This script is designed to avoid editing upstream `components/happy` config in-place.',
+        '- It sets EXPO_PUBLIC_HAPPY_SERVER_URL from HAPPY_STACKS_SERVER_URL (legacy: HAPPY_LOCAL_SERVER_URL) if provided.',
+      ].join('\n'),
+    });
+    return;
+  }
+
   const rootDir = getRootDir(import.meta.url);
   const uiDir = getComponentDir(rootDir, 'happy');
   await requireDir('happy', uiDir);
@@ -89,6 +126,27 @@ async function main() {
     process.env.HAPPY_STACKS_SERVER_URL?.trim() || process.env.HAPPY_LOCAL_SERVER_URL?.trim() || '';
   if (stacksServerUrl && !env.EXPO_PUBLIC_HAPPY_SERVER_URL) {
     env.EXPO_PUBLIC_HAPPY_SERVER_URL = stacksServerUrl;
+  }
+
+  if (json) {
+    printResult({
+      json,
+      data: {
+        ok: true,
+        uiDir,
+        appEnv,
+        iosAppName,
+        iosBundleId,
+        scheme,
+        host,
+        port,
+        shouldPrebuild: flags.has('--prebuild'),
+        shouldRunIos: flags.has('--run-ios'),
+        shouldStartMetro,
+        expoPublicHappyServerUrl: env.EXPO_PUBLIC_HAPPY_SERVER_URL ?? '',
+      },
+    });
+    return;
   }
 
   const shouldPrebuild = flags.has('--prebuild');
@@ -195,7 +253,9 @@ async function main() {
         let next = raw.replaceAll(/^\s*DEVELOPMENT_TEAM = ".*";\s*$/gm, '');
         next = next.replaceAll(/PRODUCT_BUNDLE_IDENTIFIER = [^;]+;/g, `PRODUCT_BUNDLE_IDENTIFIER = ${iosBundleId};`);
         if (iosAppName && iosAppName.trim()) {
-          next = next.replaceAll(/PRODUCT_NAME = [^;]+;/g, `PRODUCT_NAME = ${iosAppName.trim()};`);
+          const name = iosAppName.trim();
+          const quoted = name.includes(' ') || name.includes('"') ? `"${name.replaceAll('"', '\\"')}"` : name;
+          next = next.replaceAll(/PRODUCT_NAME = [^;]+;/g, `PRODUCT_NAME = ${quoted};`);
         }
         if (next !== raw) {
           await fs.writeFile(pbxprojPath, next, 'utf-8');
