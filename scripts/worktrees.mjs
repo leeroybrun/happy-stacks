@@ -1,5 +1,5 @@
 import './utils/env.mjs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from './utils/args.mjs';
 import { pathExists } from './utils/fs.mjs';
@@ -117,6 +117,108 @@ async function gitOk(root, args) {
   } catch {
     return false;
   }
+}
+
+function parseDepsMode(raw) {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (!v) return 'none';
+  if (v === 'none') return 'none';
+  if (v === 'link' || v === 'symlink') return 'link';
+  if (v === 'install') return 'install';
+  if (v === 'link-or-install' || v === 'linkorinstall') return 'link-or-install';
+  throw new Error(`[wt] invalid --deps value: ${raw}. Expected one of: none | link | install | link-or-install`);
+}
+
+async function getWorktreeGitDir(worktreeDir) {
+  const gitDir = (await git(worktreeDir, ['rev-parse', '--git-dir'])).trim();
+  // rev-parse may return a relative path.
+  return isAbsolute(gitDir) ? gitDir : resolve(worktreeDir, gitDir);
+}
+
+async function ensureWorktreeExclude(worktreeDir, patterns) {
+  const gitDir = await getWorktreeGitDir(worktreeDir);
+  const excludePath = join(gitDir, 'info', 'exclude');
+  const existing = (await readFile(excludePath, 'utf-8').catch(() => '')).toString();
+  const existingLines = new Set(existing.split('\n').map((l) => l.trim()).filter(Boolean));
+  const want = patterns.map((p) => p.trim()).filter(Boolean).filter((p) => !existingLines.has(p));
+  if (!want.length) return;
+  const next = (existing ? existing.replace(/\s*$/, '') + '\n' : '') + want.join('\n') + '\n';
+  await writeFile(excludePath, next, 'utf-8');
+}
+
+async function detectPackageManager(dir) {
+  // Order matters: pnpm > yarn > npm.
+  if (await pathExists(join(dir, 'pnpm-lock.yaml'))) return { kind: 'pnpm', lockfile: 'pnpm-lock.yaml' };
+  if (await pathExists(join(dir, 'yarn.lock'))) return { kind: 'yarn', lockfile: 'yarn.lock' };
+  if (await pathExists(join(dir, 'package-lock.json'))) return { kind: 'npm', lockfile: 'package-lock.json' };
+  if (await pathExists(join(dir, 'npm-shrinkwrap.json'))) return { kind: 'npm', lockfile: 'npm-shrinkwrap.json' };
+  // Fallback: if package.json exists, assume npm.
+  if (await pathExists(join(dir, 'package.json'))) return { kind: 'npm', lockfile: null };
+  return { kind: null, lockfile: null };
+}
+
+async function linkNodeModules({ fromDir, toDir }) {
+  const src = join(fromDir, 'node_modules');
+  const dest = join(toDir, 'node_modules');
+
+  if (!(await pathExists(src))) {
+    return { linked: false, reason: `source node_modules missing: ${src}` };
+  }
+  if (await pathExists(dest)) {
+    return { linked: false, reason: `dest node_modules already exists: ${dest}` };
+  }
+
+  await symlink(src, dest);
+  // Worktrees sometimes treat node_modules symlinks oddly; ensure it's excluded even if .gitignore misses it.
+  await ensureWorktreeExclude(toDir, ['node_modules']);
+  return { linked: true, reason: null };
+}
+
+async function installDependencies({ dir }) {
+  const pm = await detectPackageManager(dir);
+  if (!pm.kind) {
+    return { installed: false, reason: 'no package manager detected (no package.json)' };
+  }
+
+  if (pm.kind === 'pnpm') {
+    await run('pnpm', ['install', '--frozen-lockfile'], { cwd: dir });
+    return { installed: true, reason: null };
+  }
+  if (pm.kind === 'yarn') {
+    // Works for yarn classic; yarn berry will ignore/translate flags as needed.
+    await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir });
+    return { installed: true, reason: null };
+  }
+  // npm
+  if (pm.lockfile && pm.lockfile !== 'package.json') {
+    await run('npm', ['ci'], { cwd: dir });
+  } else {
+    await run('npm', ['install'], { cwd: dir });
+  }
+  return { installed: true, reason: null };
+}
+
+async function maybeSetupDeps({ repoRoot, baseDir, worktreeDir, depsMode }) {
+  if (!depsMode || depsMode === 'none') {
+    return { mode: 'none', linked: false, installed: false, message: null };
+  }
+
+  // Prefer explicit baseDir if provided, otherwise link from the primary checkout (repoRoot).
+  const linkFrom = baseDir || repoRoot;
+
+  if (depsMode === 'link' || depsMode === 'link-or-install') {
+    const res = await linkNodeModules({ fromDir: linkFrom, toDir: worktreeDir });
+    if (res.linked) {
+      return { mode: depsMode, linked: true, installed: false, message: null };
+    }
+    if (depsMode === 'link') {
+      return { mode: depsMode, linked: false, installed: false, message: res.reason };
+    }
+    // fall through to install
+  }
+
+  const inst = await installDependencies({ dir: worktreeDir });
+  return { mode: depsMode, linked: false, installed: Boolean(inst.installed), message: inst.reason };
 }
 
 async function normalizeRemoteName(repoRoot, remoteName) {
@@ -463,7 +565,7 @@ async function cmdNew({ rootDir, argv }) {
   const slug = positionals[2];
   if (!component || !slug) {
     throw new Error(
-      '[wt] usage: pnpm wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--use]'
+      '[wt] usage: pnpm wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use]'
     );
   }
 
@@ -485,16 +587,17 @@ async function cmdNew({ rootDir, argv }) {
   const baseOverride = (kv.get('--base') ?? '').trim();
   const baseWorktreeSpec = (kv.get('--base-worktree') ?? kv.get('--from-worktree') ?? '').trim();
   let baseFromWorktree = '';
+  let baseWorktreeDir = '';
   if (!baseOverride && baseWorktreeSpec) {
-    const baseDir = resolveComponentWorktreeDir({ rootDir, component, spec: baseWorktreeSpec });
-    if (!(await pathExists(baseDir))) {
-      throw new Error(`[wt] --base-worktree does not exist: ${baseDir}`);
+    baseWorktreeDir = resolveComponentWorktreeDir({ rootDir, component, spec: baseWorktreeSpec });
+    if (!(await pathExists(baseWorktreeDir))) {
+      throw new Error(`[wt] --base-worktree does not exist: ${baseWorktreeDir}`);
     }
-    const branch = (await git(baseDir, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    const branch = (await git(baseWorktreeDir, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
     if (branch && branch !== 'HEAD') {
       baseFromWorktree = branch;
     } else {
-      baseFromWorktree = (await git(baseDir, ['rev-parse', 'HEAD'])).trim();
+      baseFromWorktree = (await git(baseWorktreeDir, ['rev-parse', 'HEAD'])).trim();
     }
   }
 
@@ -520,12 +623,15 @@ async function cmdNew({ rootDir, argv }) {
 
   await git(repoRoot, ['worktree', 'add', '-b', branchName, destPath, base]);
 
+  const depsMode = parseDepsMode(kv.get('--deps'));
+  const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: destPath, depsMode });
+
   const shouldUse = flags.has('--use');
   if (shouldUse) {
     const key = componentDirEnvKey(component);
     await ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: destPath }] });
   }
-  return { component, branch: branchName, path: destPath, base, used: shouldUse };
+  return { component, branch: branchName, path: destPath, base, used: shouldUse, deps };
 }
 
 async function cmdPr({ rootDir, argv }) {
@@ -536,7 +642,7 @@ async function cmdPr({ rootDir, argv }) {
   const prInput = positionals[2];
   if (!component || !prInput) {
     throw new Error(
-      '[wt] usage: pnpm wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--use] [--update] [--force] [--json]'
+      '[wt] usage: pnpm wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--force] [--json]'
     );
   }
 
@@ -638,6 +744,10 @@ async function cmdPr({ rootDir, argv }) {
     }
   }
 
+  // Optional deps handling (useful when PR branches add/change dependencies).
+  const depsMode = parseDepsMode(kv.get('--deps'));
+  const deps = await maybeSetupDeps({ repoRoot, baseDir: repoRoot, worktreeDir: destPath, depsMode });
+
   const shouldUse = flags.has('--use');
   if (shouldUse) {
     // Reuse cmdUse so it writes to env.local or stack env file depending on context.
@@ -655,6 +765,7 @@ async function cmdPr({ rootDir, argv }) {
     updated: exists,
     oldHead,
     newHead,
+    deps,
   };
   if (json) {
     return res;
@@ -1399,8 +1510,8 @@ async function main() {
         '  pnpm wt sync <component> [--remote=<name>] [--json]',
         '  pnpm wt sync-all [--remote=<name>] [--json]',
         '  pnpm wt list <component> [--json]',
-        '  pnpm wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--use] [--interactive|-i] [--json]',
-        '  pnpm wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
+        '  pnpm wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--interactive|-i] [--json]',
+        '  pnpm wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
         '  pnpm wt use <component> <owner/branch|path|default|main> [--interactive|-i] [--json]',
         '  pnpm wt status <component> [worktreeSpec|default|path] [--json]',
         '  pnpm wt update <component> [worktreeSpec|default|path] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
