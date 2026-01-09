@@ -1,16 +1,13 @@
-import {
-  ensureMacAutostartDisabled,
-  ensureMacAutostartEnabled,
-  getDefaultAutostartPaths,
-  getRootDir,
-  run,
-  runCapture,
-} from './shared.mjs';
+import './utils/env.mjs';
+import { run, runCapture } from './utils/proc.mjs';
+import { getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/pm.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Manage the macOS LaunchAgent installed by `pnpm bootstrap -- --autostart`.
@@ -23,8 +20,6 @@ import { fileURLToPath } from 'node:url';
  * - logs (print last N lines)
  * - tail (follow logs)
  */
-
-const LABEL = 'com.happy.local';
 
 function getUid() {
   // Prefer env var if present; otherwise fall back.
@@ -39,6 +34,13 @@ function getInternalUrl() {
 }
 
 function getAutostartEnv() {
+  // If an env file is provided, prefer persisting only its path.
+  // This allows changing stack config without reinstalling the LaunchAgent.
+  const envFile = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : '';
+  if (envFile) {
+    return { HAPPY_LOCAL_ENV_FILE: envFile };
+  }
+
   const { baseDir } = getDefaultAutostartPaths();
 
   const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? process.env.HAPPY_LOCAL_SERVER_PORT.trim() : '3005';
@@ -49,11 +51,18 @@ function getAutostartEnv() {
   const env = {
     HAPPY_LOCAL_SERVER_PORT: String(serverPort),
     HAPPY_LOCAL_SERVER_URL: process.env.HAPPY_LOCAL_SERVER_URL ?? '',
+    // Select server implementation (happy-server-light vs happy-server)
+    HAPPY_LOCAL_SERVER_COMPONENT: process.env.HAPPY_LOCAL_SERVER_COMPONENT ?? '',
     HAPPY_LOCAL_DAEMON: process.env.HAPPY_LOCAL_DAEMON ?? '1',
     HAPPY_LOCAL_SERVE_UI: process.env.HAPPY_LOCAL_SERVE_UI ?? '1',
     HAPPY_LOCAL_UI_PREFIX: process.env.HAPPY_LOCAL_UI_PREFIX ?? '/',
     HAPPY_LOCAL_UI_BUILD_DIR: uiBuildDir,
     HAPPY_LOCAL_CLI_HOME_DIR: process.env.HAPPY_LOCAL_CLI_HOME_DIR ?? '',
+    // Component dir overrides (worktrees / external checkouts).
+    HAPPY_LOCAL_COMPONENT_DIR_HAPPY: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY ?? '',
+    HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '',
+    HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT ?? '',
+    HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER: process.env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER ?? '',
     // Optional: Tailscale Serve (secure context / remote access).
     HAPPY_LOCAL_TAILSCALE_SERVE: process.env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '',
     HAPPY_LOCAL_TAILSCALE_SERVE_PATH: process.env.HAPPY_LOCAL_TAILSCALE_SERVE_PATH ?? '',
@@ -80,8 +89,9 @@ export async function installService() {
     throw new Error('[local] service install is only supported on macOS (LaunchAgents).');
   }
   const rootDir = getRootDir(import.meta.url);
+  const { primaryLabel: label } = getDefaultAutostartPaths();
   const env = getAutostartEnv();
-  await ensureMacAutostartEnabled({ rootDir, env });
+  await ensureMacAutostartEnabled({ rootDir, label, env });
   console.log('[local] service installed (macOS LaunchAgent)');
 }
 
@@ -89,14 +99,22 @@ export async function uninstallService() {
   if (process.platform !== 'darwin') {
     return;
   }
-  const { plistPath } = getDefaultAutostartPaths();
-  await ensureMacAutostartDisabled({});
+  const { primaryPlistPath, legacyPlistPath, primaryLabel, legacyLabel } = getDefaultAutostartPaths();
+
+  // Disable both labels (primary + legacy) best-effort.
+  await ensureMacAutostartDisabled({ label: primaryLabel });
+  await ensureMacAutostartDisabled({ label: legacyLabel });
   try {
-    await rm(plistPath, { force: true });
-    console.log('[local] service uninstalled (plist removed)');
+    await rm(primaryPlistPath, { force: true });
   } catch {
     // ignore
   }
+  try {
+    await rm(legacyPlistPath, { force: true });
+  } catch {
+    // ignore
+  }
+  console.log('[local] service uninstalled (plist removed)');
 }
 
 async function launchctlTry(args) {
@@ -113,6 +131,8 @@ async function startLaunchAgent({ persistent }) {
   if (!existsSync(plistPath)) {
     throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: pnpm service:install (or pnpm bootstrap -- --autostart)`);
   }
+
+  const { label } = getDefaultAutostartPaths();
 
   // Old-style (works on many systems)
   if (persistent) {
@@ -133,8 +153,8 @@ async function startLaunchAgent({ persistent }) {
 
   // bootstrap requires the plist
   await run('launchctl', ['bootstrap', `gui/${uid}`, plistPath]);
-  await launchctlTry(['enable', `gui/${uid}/${LABEL}`]);
-  await launchctlTry(['kickstart', '-k', `gui/${uid}/${LABEL}`]);
+  await launchctlTry(['enable', `gui/${uid}/${label}`]);
+  await launchctlTry(['kickstart', '-k', `gui/${uid}/${label}`]);
 }
 
 async function stopLaunchAgent({ persistent }) {
@@ -142,6 +162,8 @@ async function stopLaunchAgent({ persistent }) {
   if (!existsSync(plistPath)) {
     throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: pnpm service:install (or pnpm bootstrap -- --autostart)`);
   }
+
+  const { label } = getDefaultAutostartPaths();
 
   // Old-style
   if (persistent) {
@@ -159,14 +181,14 @@ async function stopLaunchAgent({ persistent }) {
   if (uid == null) {
     return;
   }
-  await launchctlTry(['bootout', `gui/${uid}/${LABEL}`]);
+  await launchctlTry(['bootout', `gui/${uid}/${label}`]);
 }
 
 async function showStatus() {
-  const { plistPath, stdoutPath, stderrPath } = getDefaultAutostartPaths();
+  const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
   const internalUrl = getInternalUrl();
 
-  console.log(`label: ${LABEL}`);
+  console.log(`label: ${label}`);
   console.log(`plist: ${plistPath} ${existsSync(plistPath) ? '(present)' : '(missing)'}`);
   console.log(`logs:`);
   console.log(`  stdout: ${stdoutPath}`);
@@ -177,7 +199,7 @@ async function showStatus() {
     const line = list
       .split('\n')
       .map((l) => l.trim())
-      .find((l) => l.endsWith(` ${LABEL}`) || l === LABEL || l.includes(`\t${LABEL}`));
+      .find((l) => l.endsWith(` ${label}`) || l === label || l.includes(`\t${label}`));
     console.log(`launchctl: ${line ? line : '(not listed)'}`);
   } catch {
     console.log('launchctl: (unable to query)');
@@ -219,31 +241,87 @@ async function main() {
   }
 
   const cmd = process.argv[2] || 'status';
+  const argv = process.argv.slice(2);
+  const json = wantsJson(argv);
+  if (wantsHelp(argv) || cmd === 'help') {
+    printResult({
+      json,
+      data: { commands: ['install', 'uninstall', 'status', 'start', 'stop', 'restart', 'enable', 'disable', 'logs', 'tail'] },
+      text: [
+        '[service] usage:',
+        '  pnpm service:install [--json]',
+        '  pnpm service:uninstall [--json]',
+        '  pnpm service:status [--json]',
+        '  pnpm service:start|stop|restart [--json]',
+        '  pnpm service:enable|disable [--json]',
+        '  pnpm logs [--json]',
+        '  pnpm logs:tail',
+      ].join('\n'),
+    });
+    return;
+  }
   switch (cmd) {
     case 'install':
       await installService();
+      if (json) printResult({ json, data: { ok: true, action: 'install' } });
       return;
     case 'uninstall':
       await uninstallService();
+      if (json) printResult({ json, data: { ok: true, action: 'uninstall' } });
       return;
     case 'status':
-      await showStatus();
+      if (json) {
+        const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
+        let launchctlLine = null;
+        try {
+          const list = await runCapture('launchctl', ['list']);
+          launchctlLine =
+            list
+              .split('\n')
+              .map((l) => l.trim())
+              .find((l) => l.endsWith(` ${label}`) || l === label || l.includes(`\t${label}`)) ?? null;
+        } catch {
+          launchctlLine = null;
+        }
+
+        const internalUrl = getInternalUrl();
+        let health = null;
+        try {
+          const res = await fetch(`${internalUrl}/health`, { method: 'GET' });
+          const body = await res.text();
+          health = { ok: res.ok, status: res.status, body: body.trim() };
+        } catch {
+          health = { ok: false, status: null, body: null };
+        }
+
+        printResult({
+          json,
+          data: { label, plistPath, stdoutPath, stderrPath, internalUrl, launchctlLine, health },
+        });
+      } else {
+        await showStatus();
+      }
       return;
     case 'start':
       await startLaunchAgent({ persistent: false });
+      if (json) printResult({ json, data: { ok: true, action: 'start' } });
       return;
     case 'stop':
       await stopLaunchAgent({ persistent: false });
+      if (json) printResult({ json, data: { ok: true, action: 'stop' } });
       return;
     case 'restart':
       await stopLaunchAgent({ persistent: false });
       await startLaunchAgent({ persistent: false });
+      if (json) printResult({ json, data: { ok: true, action: 'restart' } });
       return;
     case 'enable':
       await startLaunchAgent({ persistent: true });
+      if (json) printResult({ json, data: { ok: true, action: 'enable' } });
       return;
     case 'disable':
       await stopLaunchAgent({ persistent: true });
+      if (json) printResult({ json, data: { ok: true, action: 'disable' } });
       return;
     case 'logs':
       await showLogs();

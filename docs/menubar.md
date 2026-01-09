@@ -1,0 +1,156 @@
+# Menu bar (SwiftBar)
+
+`happy-stacks` ships a macOS menu bar plugin powered by [SwiftBar](https://swiftbar.app/).
+
+SwiftBar runs a script on an interval and renders its output as native macOS menu items.
+
+## Features
+
+- **Status at a glance** with dynamic icons (green/orange/red)
+  - Server health
+  - Daemon status (PID + optional control server probe)
+  - Autostart LaunchAgent status
+  - Tailscale Serve status / URL (if configured)
+- **Quick controls**
+  - Start / stop / restart the stack
+  - Install / enable / disable / uninstall autostart
+  - Enable / disable Tailscale Serve
+- **Details**
+  - PID, CPU %, RAM MB, uptime (where available)
+  - Useful URLs and file paths
+  - Open logs in Console.app
+- **Refresh control**
+  - Manual refresh
+  - In-menu refresh interval toggles (includes slower intervals like 10m/15m/30m/1h/6h/12h/1d)
+  - Uses a small helper script (`extras/swiftbar/set-interval.sh`) to avoid SwiftBar quoting issues
+- **Stacks + components layout**
+  - Main stack is shown directly (no extra nesting level)
+  - Each stack shows component rows (Server/Daemon/Autostart/Tailscale) with per-component submenus
+ - **Components (git/worktrees)**
+  - Available under a top-level **Components** submenu (to keep the main menu clean)
+  - Shows repo/worktree status for each component under `components/`
+  - Each component includes a **Worktrees** submenu listing all worktrees, with actions to switch/open
+  - Quick actions: `wt status/sync/update`, PR worktree prompt, open shells/editors (`wt shell/code/cursor`)
+  - Shows **origin** and **upstream** comparisons for the component repo’s main branch (based on your last `git fetch`)
+
+## Stacks (multiple instances)
+
+If you create additional stacks (see `docs/stacks.md`), the plugin shows:
+
+- **Main stack** (the default, stack name `main`)
+- **Stacks** section listing each stack found under `~/.happy/stacks/<name>/env` (legacy: `~/.happy/local/stacks/<name>/env`)
+
+Each stack row renders the same “mini control panel” (server/daemon/autostart/logs + a few actions) with stack-specific ports, dirs, and LaunchAgent label.
+
+The menu also includes:
+
+- `stack new --interactive` (create stacks)
+- `stack edit <name> --interactive` (edit stack port/server flavor/worktrees)
+- `stack wt <name> -- use --interactive` (switch component worktrees inside a stack)
+- “PR worktree into this stack (prompt)” (creates `wt pr ... --use` scoped to the stack env)
+
+## Worktrees (quick entry points)
+
+The menu also provides “jump off” actions for the worktree tooling:
+
+- `pnpm wt use --interactive`
+- `pnpm wt new --interactive`
+- `pnpm wt sync-all`
+- `pnpm wt update-all --dry-run` / `pnpm wt update-all`
+- `pnpm wt pr ...` (via an in-menu prompt)
+
+For stack-specific worktree selection (which components a stack uses), use:
+
+- `pnpm stack edit <name> --interactive`
+  - or `pnpm stack wt <name> -- use --interactive`
+
+## Implementation notes
+
+- **Entry script**: `extras/swiftbar/happy-stacks.5s.sh` (installed into SwiftBar as `happy-stacks.<interval>.sh`)
+- **Shared functions**: `extras/swiftbar/lib/*.sh` (sourced by the entry script)
+- **Helper scripts**:
+  - `extras/swiftbar/set-interval.sh`
+  - `extras/swiftbar/set-server-flavor.sh`
+
+## Install
+
+### 1) Install SwiftBar
+
+```bash
+brew install --cask swiftbar
+```
+
+### 2) Install the plugin
+
+From the `happy-stacks` repo:
+
+```bash
+pnpm menubar:install
+```
+
+If you want a different default refresh interval at install time:
+
+```bash
+HAPPY_STACKS_SWIFTBAR_INTERVAL=15m pnpm menubar:install
+# legacy: HAPPY_LOCAL_SWIFTBAR_INTERVAL=15m pnpm menubar:install
+```
+
+### 3) Open the active SwiftBar plugin folder
+
+SwiftBar can be configured to use a custom plugin directory. To open the *active* one:
+
+```bash
+pnpm menubar:open
+```
+
+## How refresh works (important)
+
+SwiftBar’s refresh interval is controlled by the **filename** suffix:
+
+- `happy-stacks.30s.sh` → every 30 seconds
+- `happy-stacks.5m.sh` → every 5 minutes
+- `happy-stacks.1h.sh` → every 1 hour
+
+The plugin defaults to a slower interval (recommended), and also sets:
+
+- `refreshOnOpen=false` (recommended) to avoid surprise refreshes while you’re navigating the menu.
+
+You can also change the interval directly from the menu via **Refresh interval** (it renames the plugin file and restarts SwiftBar).
+
+## Terminal preference for interactive actions
+
+Many menu actions open a terminal (interactive wizards, long-running dev servers, etc).
+The plugin uses helper scripts so these run in your preferred terminal, using the same env var as `wt shell`:
+
+- `HAPPY_STACKS_WT_TERMINAL=auto|ghostty|iterm|terminal|current` (legacy: `HAPPY_LOCAL_WT_TERMINAL`)
+
+Notes:
+- `auto` tries ghostty → iTerm → Terminal → current.
+- Ghostty is best-effort; if your Ghostty build can’t execute the command automatically, the command is copied to your clipboard and Ghostty is opened in the repo directory.
+
+## Start SwiftBar at login (optional)
+
+SwiftBar is independent from the Happy Stacks LaunchAgent.
+
+- In SwiftBar Preferences, enable **Launch at Login**, or
+- Add SwiftBar to macOS **Login Items**.
+
+## Troubleshooting
+
+### Plugin doesn’t show up
+
+- Ensure SwiftBar is running.
+- Check which plugin folder SwiftBar is using:
+  - SwiftBar → Preferences → Plugin Folder
+- Open the active folder:
+  - `pnpm menubar:open`
+
+### “Daemon stale” even though it’s running
+
+The plugin checks:
+
+- `daemon.state.json` **PID is alive**, and
+- (optionally) the daemon control server responds.
+
+If the daemon is running but the menu is stale, refresh and check the **PID** line under “Daemon”.
+

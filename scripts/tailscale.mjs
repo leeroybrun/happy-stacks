@@ -1,4 +1,7 @@
-import { parseArgs, run, runCapture } from './shared.mjs';
+import './utils/env.mjs';
+import { parseArgs } from './utils/args.mjs';
+import { run, runCapture } from './utils/proc.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Manage Tailscale Serve for exposing the local UI/API over HTTPS (secure context).
@@ -193,8 +196,28 @@ export async function resolvePublicServerUrl({
 }
 
 async function main() {
-  const { flags, kv } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { flags, kv } = parseArgs(argv);
   const cmd = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'status';
+  const json = wantsJson(argv, { flags });
+
+  if (wantsHelp(argv, { flags }) || cmd === 'help') {
+    printResult({
+      json,
+      data: { commands: ['status', 'enable', 'disable', 'reset', 'url'] },
+      text: [
+        '[tailscale] usage:',
+        '  pnpm tailscale:status [--json]',
+        '  pnpm tailscale:enable [--json]',
+        '  pnpm tailscale:disable [--json]',
+        '  pnpm tailscale:url [--json]',
+        '',
+        'advanced:',
+        '  node scripts/tailscale.mjs enable --upstream=<url> --path=/ [--json]',
+      ].join('\n'),
+    });
+    return;
+  }
 
   const internalServerUrl = getInternalServerUrl();
   if (flags.has('--upstream') || kv.get('--upstream')) {
@@ -207,7 +230,11 @@ async function main() {
   switch (cmd) {
     case 'status': {
       const status = await tailscaleServeStatus();
-      process.stdout.write(status);
+      if (json) {
+        printResult({ json, data: { status, httpsUrl: extractHttpsUrl(status) } });
+      } else {
+        process.stdout.write(status);
+      }
       return;
     }
     case 'url': {
@@ -216,22 +243,22 @@ async function main() {
       if (!url) {
         throw new Error('[local] no https:// URL found in `tailscale serve status` output');
       }
-      console.log(url);
+      printResult({ json, data: { url }, text: url });
       return;
     }
     case 'enable': {
       const res = await tailscaleServeEnable({ internalServerUrl });
-      if (res.httpsUrl) {
-        console.log(`[local] tailscale serve enabled: ${res.httpsUrl}`);
-      } else {
-        console.log('[local] tailscale serve enabled');
-      }
+      printResult({
+        json,
+        data: { ok: true, httpsUrl: res.httpsUrl ?? null },
+        text: res.httpsUrl ? `[local] tailscale serve enabled: ${res.httpsUrl}` : '[local] tailscale serve enabled',
+      });
       return;
     }
     case 'disable':
     case 'reset': {
       await tailscaleServeReset();
-      console.log('[local] tailscale serve reset');
+      printResult({ json, data: { ok: true }, text: '[local] tailscale serve reset' });
       return;
     }
     default:

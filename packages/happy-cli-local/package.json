@@ -1,11 +1,12 @@
 {
-  "name": "happy-cli-local",
+  "name": "happy-cli-stacks",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "bin": {
     "happy": "./bin/happy.mjs",
-    "happy-local": "./bin/happy.mjs"
+    "happy-local": "./bin/happy.mjs",
+    "happy-stacks": "./bin/happy.mjs"
   }
 }
 

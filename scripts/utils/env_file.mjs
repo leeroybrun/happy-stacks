@@ -1,0 +1,59 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { pathExists } from './fs.mjs';
+
+export async function ensureEnvFileUpdated({ envPath, updates }) {
+  if (!updates.length) {
+    return;
+  }
+  await writeFileIfChanged(envPath, applyEnvUpdates(await readText(envPath), updates), envPath);
+}
+
+async function readText(path) {
+  try {
+    return (await pathExists(path)) ? await readFile(path, 'utf-8') : '';
+  } catch {
+    return '';
+  }
+}
+
+function applyEnvUpdates(existing, updates) {
+  const lines = existing.split('\n');
+  const next = [...lines];
+
+  const upsert = (key, value) => {
+    const line = `${key}=${value}`;
+    const idx = next.findIndex((l) => l.trim().startsWith(`${key}=`));
+    if (idx >= 0) {
+      next[idx] = line;
+    } else {
+      if (next.length && next[next.length - 1].trim() !== '') {
+        next.push('');
+      }
+      next.push(line);
+    }
+  };
+
+  for (const { key, value } of updates) {
+    upsert(key, value);
+  }
+
+  return next.join('\n');
+}
+
+async function writeFileIfChanged(existingContent, nextContent, path) {
+  const normalizedNext = nextContent.endsWith('\n') ? nextContent : nextContent + '\n';
+  const normalizedExisting = existingContent.endsWith('\n') ? existingContent : existingContent + (existingContent ? '\n' : '');
+  if (normalizedExisting === normalizedNext) {
+    return;
+  }
+  try {
+    const dir = dirname(path);
+    // if dir doesn't exist, writeFile will throw; that's fine (we only target known files).
+    void dir;
+  } catch {
+    // ignore
+  }
+  await writeFile(path, normalizedNext, 'utf-8');
+}
+

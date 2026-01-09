@@ -1,11 +1,11 @@
-import { spawnProc, run, runCapture } from './shared.mjs';
+import { spawnProc, run, runCapture } from './utils/proc.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
 
 /**
- * Daemon lifecycle helpers for happy-local.
+ * Daemon lifecycle helpers for happy-stacks.
  *
  * Centralizes:
  * - stopping old daemons (legacy + local home dirs)

@@ -1,217 +1,10 @@
-import { spawn } from 'node:child_process';
-import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 
-// happy-local itself is typically run via pnpm, but we intentionally keep the embedded
-// component repos upstream-compatible (they use Yarn), so we run Yarn inside components.
-// (This avoids pnpm picking different dependency versions and breaking builds.)
-
-function parseDotenv(contents) {
-  const out = new Map();
-  for (const rawLine of contents.split('\n')) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) {
-      continue;
-    }
-    const idx = line.indexOf('=');
-    if (idx <= 0) {
-      continue;
-    }
-    const key = line.slice(0, idx).trim();
-    let value = line.slice(idx + 1).trim();
-    if (!key) {
-      continue;
-    }
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (value.startsWith('~/')) {
-      value = join(homedir(), value.slice(2));
-    }
-    out.set(key, value);
-  }
-  return out;
-}
-
-async function loadEnvFile(path) {
-  try {
-    const contents = await readFile(path, 'utf-8');
-    const parsed = parseDotenv(contents);
-    for (const [k, v] of parsed.entries()) {
-      if (process.env[k] == null || process.env[k] === '') {
-        process.env[k] = v;
-      }
-    }
-  } catch {
-    // ignore missing/invalid env file
-  }
-}
-
-// Load happy-local env (optional). This is intentionally lightweight and does not require extra deps.
-const __scriptsDir = dirname(fileURLToPath(import.meta.url));
-const __rootDir = dirname(__scriptsDir);
-await loadEnvFile(process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : join(__rootDir, '.env'));
-await loadEnvFile(join(__rootDir, 'env.local'));
-
-// Corepack strictness can prevent running Yarn in subfolders when the repo root is pinned to pnpm.
-// We intentionally keep component repos upstream-compatible (often Yarn), so relax strictness for child processes.
-process.env.COREPACK_ENABLE_STRICT = process.env.COREPACK_ENABLE_STRICT ?? '0';
-process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT = process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT ?? 'false';
-
-// LaunchAgents often run with a very minimal PATH which won't include NVM's bin dir, so child
-// processes like `yarn` / `pnpm` can look "missing" even though Node is running from NVM.
-// Ensure the directory containing this Node binary is on PATH.
-(() => {
-  const delimiter = process.platform === 'win32' ? ';' : ':';
-  const current = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
-  const nodeBinDir = dirname(process.execPath);
-  const want = [nodeBinDir, '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
-  const next = [...want.filter((p) => p && !current.includes(p)), ...current];
-  process.env.PATH = next.join(delimiter);
-})();
-
-/**
- * Shared helpers for happy-local scripts.
- *
- * Responsibilities:
- * - Resolve component directories (embedded components/ layout only)
- * - Run subprocesses with consistent logging
- * - Perform lightweight install/build/link steps
- * - Optionally configure macOS autostart via LaunchAgent
- */
-
-export function getRootDir(importMetaUrl) {
-  return dirname(dirname(fileURLToPath(importMetaUrl)));
-}
-
-export function spawnProc(label, cmd, args, env, options = {}) {
-  const child = spawn(cmd, args, {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
-    // Create a new process group so we can kill the whole tree reliably on shutdown.
-    detached: process.platform !== 'win32',
-    ...options,
-  });
-
-  child.stdout?.on('data', (d) => process.stdout.write(`[${label}] ${d.toString()}`));
-  child.stderr?.on('data', (d) => process.stderr.write(`[${label}] ${d.toString()}`));
-  child.on('exit', (code, sig) => {
-    if (code !== 0) {
-      process.stderr.write(`[${label}] exited (code=${code}, sig=${sig})\n`);
-    }
-  });
-
-  return child;
-}
-
-export function killProcessTree(child, signal) {
-  if (!child || child.exitCode != null || !child.pid) {
-    return;
-  }
-
-  try {
-    if (process.platform !== 'win32') {
-      // Kill the process group.
-      process.kill(-child.pid, signal);
-    } else {
-      child.kill(signal);
-    }
-  } catch {
-    // ignore
-  }
-}
-
-export async function run(cmd, args, options = {}) {
-  await new Promise((resolvePromise, rejectPromise) => {
-    const proc = spawn(cmd, args, { stdio: 'inherit', shell: false, ...options });
-    proc.on('error', rejectPromise);
-    proc.on('exit', (code) => (code === 0 ? resolvePromise() : rejectPromise(new Error(`${cmd} failed (code=${code})`))));
-  });
-}
-
-export async function runCapture(cmd, args, options = {}) {
-  return await new Promise((resolvePromise, rejectPromise) => {
-    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, ...options });
-    let out = '';
-    let err = '';
-    proc.stdout?.on('data', (d) => (out += d.toString()));
-    proc.stderr?.on('data', (d) => (err += d.toString()));
-    proc.on('error', rejectPromise);
-    proc.on('exit', (code) => {
-      if (code === 0) {
-        resolvePromise(out);
-      } else {
-        rejectPromise(new Error(`${cmd} ${args.join(' ')} failed (code=${code}): ${err.trim()}`));
-      }
-    });
-  });
-}
-
-/**
- * Best-effort: kill any processes LISTENing on a TCP port.
- * Used to avoid EADDRINUSE when a previous run left a server behind.
- */
-export async function killPortListeners(port, { label = 'port' } = {}) {
-  if (!Number.isFinite(port) || port <= 0) {
-    return [];
-  }
-  if (process.platform === 'win32') {
-    return [];
-  }
-
-  let raw = '';
-  try {
-    // `lsof` exits non-zero if no matches; normalize to empty output.
-    raw = await runCapture('sh', [
-      '-lc',
-      `command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null || true`,
-    ]);
-  } catch {
-    return [];
-  }
-
-  const pids = Array.from(
-    new Set(
-      raw
-        .split(/\s+/g)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => Number(s))
-        .filter((n) => Number.isInteger(n) && n > 1)
-    )
-  );
-
-  if (!pids.length) {
-    return [];
-  }
-
-  console.log(`[local] ${label}: freeing tcp:${port} (killing pids: ${pids.join(', ')})`);
-
-  for (const pid of pids) {
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      // ignore
-    }
-  }
-
-  await delay(500);
-
-  for (const pid of pids) {
-    try {
-      process.kill(pid, 0);
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // not running / no permission
-    }
-  }
-
-  return pids;
-}
+import { pathExists } from './fs.mjs';
+import { run, runCapture, spawnProc } from './proc.mjs';
+import { getDefaultAutostartPaths } from './paths.mjs';
 
 async function commandExists(cmd, options = {}) {
   try {
@@ -226,14 +19,14 @@ export async function requirePnpm() {
   if (await commandExists('pnpm')) {
     return;
   }
-  throw new Error('[local] pnpm is required to run happy-local. Install it via: `corepack enable && corepack prepare pnpm@latest --activate`');
+  throw new Error('[local] pnpm is required to run happy-stacks. Install it via: `corepack enable && corepack prepare pnpm@latest --activate`');
 }
 
 async function getComponentPm(dir) {
   const yarnLock = join(dir, 'yarn.lock');
   if (await pathExists(yarnLock)) {
-    // IMPORTANT: when happy-local itself is pinned to pnpm via Corepack, running `yarn`
-    // from the happy-local cwd can be blocked. Always probe yarn with cwd=componentDir.
+    // IMPORTANT: when happy-stacks itself is pinned to pnpm via Corepack, running `yarn`
+    // from the happy-stacks cwd can be blocked. Always probe yarn with cwd=componentDir.
     if (!(await commandExists('yarn', { cwd: dir }))) {
       throw new Error(`[local] yarn is required for component at ${dir} (yarn.lock present). Install it via Corepack: \`corepack enable\``);
     }
@@ -243,40 +36,6 @@ async function getComponentPm(dir) {
   // Default fallback if no yarn.lock: use pnpm.
   await requirePnpm();
   return { name: 'pnpm', cmd: 'pnpm' };
-}
-
-export async function pathExists(path) {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function parseArgs(argv) {
-  const flags = new Set();
-  const kv = new Map();
-  for (const raw of argv) {
-    if (!raw.startsWith('--')) {
-      continue;
-    }
-    const [k, v] = raw.split('=', 2);
-    if (v === undefined) {
-      flags.add(k);
-    } else {
-      kv.set(k, v);
-    }
-  }
-  return { flags, kv };
-}
-
-export function getComponentsDir(rootDir) {
-  return join(rootDir, 'components');
-}
-
-export function getComponentDir(rootDir, name) {
-  return join(getComponentsDir(rootDir), name);
 }
 
 export async function requireDir(label, dir) {
@@ -307,13 +66,13 @@ export async function ensureDepsInstalled(dir, label) {
     // If this repo is Yarn-managed (yarn.lock present) but node_modules was created by pnpm,
     // reinstall with Yarn to restore upstream-locked dependency versions.
     if (pm.name === 'yarn' && (await pathExists(pnpmModulesMeta))) {
+      // eslint-disable-next-line no-console
       console.log(`[local] converting ${label} dependencies back to yarn (reinstalling node_modules)...`);
       await rm(nodeModules, { recursive: true, force: true });
       await run(pm.cmd, ['install'], { cwd: dir });
     }
 
     // If dependencies changed since the last install, re-run install even if node_modules exists.
-    // This covers the common case where the user edits package.json / yarn.lock and expects bootstrap to pick it up.
     const mtimeMs = async (p) => {
       try {
         const s = await stat(p);
@@ -327,8 +86,8 @@ export async function ensureDepsInstalled(dir, label) {
       const lockM = await mtimeMs(yarnLock);
       const pkgM = await mtimeMs(pkgJson);
       const intM = await mtimeMs(yarnIntegrity);
-      // If integrity is missing or older than lock/package.json, treat install as stale.
       if (!intM || lockM > intM || pkgM > intM) {
+        // eslint-disable-next-line no-console
         console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json changed)...`);
         await run(pm.cmd, ['install'], { cwd: dir });
       }
@@ -338,6 +97,7 @@ export async function ensureDepsInstalled(dir, label) {
       const lockM = await mtimeMs(pnpmLock);
       const metaM = await mtimeMs(pnpmModulesMeta);
       if (!metaM || lockM > metaM) {
+        // eslint-disable-next-line no-console
         console.log(`[local] refreshing ${label} dependencies (pnpm-lock changed)...`);
         await run(pm.cmd, ['install'], { cwd: dir });
       }
@@ -346,12 +106,9 @@ export async function ensureDepsInstalled(dir, label) {
     return;
   }
 
+  // eslint-disable-next-line no-console
   console.log(`[local] installing ${label} dependencies (first run)...`);
-  if (pm.name === 'yarn') {
-    await run(pm.cmd, ['install'], { cwd: dir });
-  } else {
-    await run(pm.cmd, ['install'], { cwd: dir });
-  }
+  await run(pm.cmd, ['install'], { cwd: dir });
 }
 
 export async function ensureCliBuilt(cliDir, { buildCli }) {
@@ -359,13 +116,10 @@ export async function ensureCliBuilt(cliDir, { buildCli }) {
   if (!buildCli) {
     return;
   }
+  // eslint-disable-next-line no-console
   console.log('[local] building happy-cli...');
   const pm = await getComponentPm(cliDir);
-  if (pm.name === 'yarn') {
-    await run(pm.cmd, ['build'], { cwd: cliDir });
-  } else {
-    await run(pm.cmd, ['build'], { cwd: cliDir });
-  }
+  await run(pm.cmd, ['build'], { cwd: cliDir });
 }
 
 function getPathEntries() {
@@ -375,10 +129,7 @@ function getPathEntries() {
 }
 
 async function findHappyOnPath() {
-  const candidates = process.platform === 'win32'
-    ? ['happy.cmd', 'happy.exe', 'happy.bat', 'happy']
-    : ['happy'];
-
+  const candidates = process.platform === 'win32' ? ['happy.cmd', 'happy.exe', 'happy.bat', 'happy'] : ['happy'];
   for (const dir of getPathEntries()) {
     for (const name of candidates) {
       const p = join(dir, name);
@@ -430,6 +181,7 @@ export async function ensureCliNpmLinked(cliDir, { npmLinkCli }) {
     }
   }
 
+  // eslint-disable-next-line no-console
   console.log('[local] linking happy-cli into PATH (npm link)...');
   await run('npm', ['link'], { cwd: cliDir });
 
@@ -442,8 +194,11 @@ export async function ensureCliNpmLinked(cliDir, { npmLinkCli }) {
   try {
     const npmBin = (await runCapture('npm', ['bin', '-g'])).trim();
     if (npmBin) {
+      // eslint-disable-next-line no-console
       console.log(`[local] 'happy' was linked but is still not on your PATH.`);
+      // eslint-disable-next-line no-console
       console.log(`[local] Add this directory to PATH: ${npmBin}`);
+      // eslint-disable-next-line no-console
       console.log(`[local] Example (zsh): echo 'export PATH=\"${npmBin}:$PATH\"' >> ~/.zshrc && source ~/.zshrc`);
     }
   } catch {
@@ -473,6 +228,7 @@ export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {
     }
   }
 
+  // eslint-disable-next-line no-console
   console.log('[local] linking happy-cli-local into PATH (npm link)...');
   // `happy` often already exists from a previous global install (e.g. happy-coder).
   // We intentionally overwrite it so the wrapper becomes the default `happy`.
@@ -488,17 +244,19 @@ export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {
     } catch {
       // ignore
     }
-    // happy exists, but may still be the wrong one
+    // eslint-disable-next-line no-console
     console.log(`[local] warning: 'happy' is on PATH but does not point to happy-cli-local (${happyBinAfter})`);
     return;
   }
 
-  // If npm global bin isn't on PATH, users won't see the command.
   try {
     const npmBin = (await runCapture('npm', ['bin', '-g'])).trim();
     if (npmBin) {
+      // eslint-disable-next-line no-console
       console.log(`[local] 'happy' was linked but is still not on your PATH.`);
+      // eslint-disable-next-line no-console
       console.log(`[local] Add this directory to PATH: ${npmBin}`);
+      // eslint-disable-next-line no-console
       console.log(`[local] Example (zsh): echo 'export PATH=\"${npmBin}:$PATH\"' >> ~/.zshrc && source ~/.zshrc`);
     }
   } catch {
@@ -521,32 +279,6 @@ export async function pmExecBin({ dir, bin, args, env }) {
     return;
   }
   await run(pm.cmd, ['exec', bin, ...args], { env, cwd: dir });
-}
-
-export async function waitForServerReady(url) {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url, { method: 'GET' });
-      const text = await res.text();
-      if (res.ok && text.includes('Welcome to Happy Server!')) {
-        return;
-      }
-    } catch {
-      // ignore
-    }
-    await delay(300);
-  }
-  throw new Error(`Timed out waiting for server at ${url}`);
-}
-
-export function getDefaultAutostartPaths() {
-  const baseDir = join(homedir(), '.happy', 'local');
-  const logsDir = join(baseDir, 'logs');
-  const stdoutPath = join(logsDir, 'happy-local.out.log');
-  const stderrPath = join(logsDir, 'happy-local.err.log');
-  const plistPath = join(homedir(), 'Library', 'LaunchAgents', 'com.happy.local.plist');
-  return { baseDir, logsDir, stdoutPath, stderrPath, plistPath };
 }
 
 export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.local', env = {} }) {
@@ -613,8 +345,7 @@ export async function ensureMacAutostartDisabled({ label = 'com.happy.local' }) 
   } catch {
     // ignore
   }
-  // Don't delete the plist automatically; it can be useful for inspection.
+  // eslint-disable-next-line no-console
   console.log(`[local] autostart disabled (${label})`);
 }
-
 

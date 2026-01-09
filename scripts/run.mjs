@@ -1,9 +1,17 @@
-import { getComponentDir, getDefaultAutostartPaths, getRootDir, killPortListeners, killProcessTree, parseArgs, pathExists, pmSpawnScript, requireDir, runCapture, waitForServerReady } from './shared.mjs';
+import './utils/env.mjs';
+import { parseArgs } from './utils/args.mjs';
+import { pathExists } from './utils/fs.mjs';
+import { killProcessTree, runCapture } from './utils/proc.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { killPortListeners } from './utils/ports.mjs';
+import { getServerComponentName, waitForServerReady } from './utils/server.mjs';
+import { pmSpawnScript, requireDir } from './utils/pm.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { maybeResetTailscaleServe, resolvePublicServerUrl } from './tailscale.mjs';
 import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -15,7 +23,21 @@ import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
  */
 
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  if (wantsHelp(argv, { flags })) {
+    printResult({
+      json,
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon'], json: true },
+      text: [
+        '[start] usage:',
+        '  pnpm start [-- --server=happy-server|happy-server-light] [--json]',
+        '  note: --json prints the resolved config (dry-run) and exits.',
+      ].join('\n'),
+    });
+    return;
+  }
 
   const rootDir = getRootDir(import.meta.url);
 
@@ -31,8 +53,14 @@ async function main() {
   const envPublicUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim() ? process.env.HAPPY_LOCAL_SERVER_URL.trim() : '';
   let publicServerUrl = envPublicUrl || defaultPublicUrl;
 
+  const serverComponentName = getServerComponentName({ kv });
+  if (serverComponentName === 'both') {
+    throw new Error(`[local] --server=both is not supported for run (pick one: happy-server-light or happy-server)`);
+  }
+
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
-  const serveUi = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
+  const serveUiWanted = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
+  const serveUi = serveUiWanted && serverComponentName === 'happy-server-light';
   const uiPrefix = process.env.HAPPY_LOCAL_UI_PREFIX?.trim() ? process.env.HAPPY_LOCAL_UI_PREFIX.trim() : '/';
   const uiBuildDir = process.env.HAPPY_LOCAL_UI_BUILD_DIR?.trim()
     ? process.env.HAPPY_LOCAL_UI_BUILD_DIR.trim()
@@ -40,17 +68,42 @@ async function main() {
 
   const enableTailscaleServe = (process.env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0') === '1';
 
-  const serverDir = getComponentDir(rootDir, 'happy-server-light');
+  const serverDir = getComponentDir(rootDir, serverComponentName);
   const cliDir = getComponentDir(rootDir, 'happy-cli');
 
-  await requireDir('happy-server-light', serverDir);
+  await requireDir(serverComponentName, serverDir);
   await requireDir('happy-cli', cliDir);
 
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
 
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
-    : join(homedir(), '.happy', 'local', 'cli');
+    : join(getDefaultAutostartPaths().baseDir, 'cli');
+
+  if (json) {
+    printResult({
+      json,
+      data: {
+        mode: 'start',
+        serverComponentName,
+        serverDir,
+        cliDir,
+        serverPort,
+        internalServerUrl,
+        publicServerUrl,
+        startDaemon,
+        serveUi,
+        uiPrefix,
+        uiBuildDir,
+        cliHomeDir,
+      },
+    });
+    return;
+  }
+
+  if (serveUiWanted && !serveUi) {
+    console.log(`[local] ui serving disabled (requires happy-server-light; you are using ${serverComponentName})`);
+  }
 
   if (serveUi && !(await pathExists(uiBuildDir))) {
     throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: pnpm build`);

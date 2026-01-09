@@ -1,19 +1,16 @@
-import {
-  ensureDepsInstalled,
-  getComponentDir,
-  getRootDir,
-  killPortListeners,
-  killProcessTree,
-  parseArgs,
-  pmSpawnScript,
-  requireDir,
-  waitForServerReady,
-} from './shared.mjs';
+import './utils/env.mjs';
+import { parseArgs } from './utils/args.mjs';
+import { killProcessTree } from './utils/proc.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { killPortListeners } from './utils/ports.mjs';
+import { getServerComponentName, waitForServerReady } from './utils/server.mjs';
+import { ensureDepsInstalled, pmSpawnScript, requireDir } from './utils/pm.mjs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
 import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Dev mode stack:
@@ -23,7 +20,21 @@ import { resolvePublicServerUrl } from './tailscale.mjs';
  */
 
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  if (wantsHelp(argv, { flags })) {
+    printResult({
+      json,
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon'], json: true },
+      text: [
+        '[dev] usage:',
+        '  pnpm dev [-- --server=happy-server|happy-server-light] [--json]',
+        '  note: --json prints the resolved config (dry-run) and exits.',
+      ].join('\n'),
+    });
+    return;
+  }
   const rootDir = getRootDir(import.meta.url);
 
   const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT
@@ -41,27 +52,52 @@ async function main() {
   });
   const publicServerUrl = resolved.publicServerUrl;
 
+  const serverComponentName = getServerComponentName({ kv });
+  if (serverComponentName === 'both') {
+    throw new Error(`[local] --server=both is not supported for dev (pick one: happy-server-light or happy-server)`);
+  }
+
   const startUi = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
 
-  const serverDir = getComponentDir(rootDir, 'happy-server-light');
+  const serverDir = getComponentDir(rootDir, serverComponentName);
   const uiDir = getComponentDir(rootDir, 'happy');
   const cliDir = getComponentDir(rootDir, 'happy-cli');
 
-  await requireDir('happy-server-light', serverDir);
+  await requireDir(serverComponentName, serverDir);
   await requireDir('happy', uiDir);
   await requireDir('happy-cli', cliDir);
 
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
-    : join(homedir(), '.happy', 'local', 'cli');
+    : join(getDefaultAutostartPaths().baseDir, 'cli');
+
+  if (json) {
+    printResult({
+      json,
+      data: {
+        mode: 'dev',
+        serverComponentName,
+        serverDir,
+        uiDir,
+        cliDir,
+        serverPort,
+        internalServerUrl,
+        publicServerUrl,
+        startUi,
+        startDaemon,
+        cliHomeDir,
+      },
+    });
+    return;
+  }
 
   const children = [];
   let shuttingDown = false;
   const baseEnv = { ...process.env };
 
-  // Start server-light
+  // Start server
   await killPortListeners(serverPort, { label: 'server' });
   const serverEnv = {
     ...baseEnv,
@@ -70,7 +106,7 @@ async function main() {
     // Avoid noisy failures if a previous run left the metrics port busy.
     METRICS_ENABLED: baseEnv.METRICS_ENABLED ?? 'false',
   };
-  await ensureDepsInstalled(serverDir, 'happy-server-light');
+  await ensureDepsInstalled(serverDir, serverComponentName);
   const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'dev', env: serverEnv });
   children.push(server);
 

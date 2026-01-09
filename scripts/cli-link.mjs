@@ -1,4 +1,8 @@
-import { ensureCliBuilt, ensureHappyCliLocalNpmLinked, getComponentDir, getRootDir, parseArgs } from './shared.mjs';
+import './utils/env.mjs';
+import { parseArgs } from './utils/args.mjs';
+import { getComponentDir, getRootDir } from './utils/paths.mjs';
+import { ensureCliBuilt, ensureHappyCliLocalNpmLinked } from './utils/pm.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Link the local Happy CLI wrapper into your PATH.
@@ -7,7 +11,7 @@ import { ensureCliBuilt, ensureHappyCliLocalNpmLinked, getComponentDir, getRootD
  *
  * What it does:
  * - optionally builds `components/happy-cli` (controlled by env/flags)
- * - `npm link --force` the `packages/happy-cli-local` wrapper (so `happy` points at happy-local)
+ * - `npm link --force` the `packages/happy-cli-local` wrapper (so `happy` points at happy-stacks)
  *
  * Env:
  * - HAPPY_LOCAL_CLI_BUILD=0 to skip building happy-cli
@@ -19,7 +23,21 @@ import { ensureCliBuilt, ensureHappyCliLocalNpmLinked, getComponentDir, getRootD
  */
 
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { flags } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  if (wantsHelp(argv, { flags })) {
+    printResult({
+      json,
+      data: { flags: ['--no-build', '--no-link'], json: true },
+      text: [
+        '[cli-link] usage:',
+        '  pnpm cli:link [-- --no-build] [--json]',
+        '  node scripts/cli-link.mjs [--no-build] [--no-link] [--json]',
+      ].join('\n'),
+    });
+    return;
+  }
 
   const rootDir = getRootDir(import.meta.url);
   const cliDir = getComponentDir(rootDir, 'happy-cli');
@@ -30,7 +48,7 @@ async function main() {
   await ensureCliBuilt(cliDir, { buildCli });
   await ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli });
 
-  console.log('[local] cli link complete');
+  printResult({ json, data: { ok: true, buildCli, npmLinkCli }, text: '[local] cli link complete' });
 }
 
 main().catch((err) => {

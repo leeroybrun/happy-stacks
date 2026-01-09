@@ -1,16 +1,16 @@
-import {
-  ensureCliBuilt,
-  ensureHappyCliLocalNpmLinked,
-  ensureDepsInstalled,
-  getComponentDir,
-  getRootDir,
-  parseArgs,
-  pathExists,
-  run,
-} from './shared.mjs';
+import './utils/env.mjs';
+import { parseArgs } from './utils/args.mjs';
+import { pathExists } from './utils/fs.mjs';
+import { run } from './utils/proc.mjs';
+import { getComponentDir, getRootDir } from './utils/paths.mjs';
+import { getServerComponentName } from './utils/server.mjs';
+import { ensureCliBuilt, ensureDepsInstalled, ensureHappyCliLocalNpmLinked } from './utils/pm.mjs';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { installService, uninstallService } from './service.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
+import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
 
 /**
  * Install/setup the local stack:
@@ -22,17 +22,40 @@ import { installService, uninstallService } from './service.mjs';
  */
 
 const DEFAULT_FORK_REPOS = {
-  server: 'https://github.com/leeroybrun/happy-server-light.git',
+  serverLight: 'https://github.com/leeroybrun/happy-server-light.git',
+  // We don't currently maintain a separate fork for full happy-server; default to upstream.
+  serverFull: 'https://github.com/slopus/happy-server.git',
   cli: 'https://github.com/leeroybrun/happy-cli.git',
   ui: 'https://github.com/leeroybrun/happy.git',
 };
 
 const DEFAULT_UPSTREAM_REPOS = {
   // Upstream for server-light lives in the main happy-server repo.
-  server: 'https://github.com/slopus/happy-server.git',
+  serverLight: 'https://github.com/slopus/happy-server.git',
+  serverFull: 'https://github.com/slopus/happy-server.git',
   cli: 'https://github.com/slopus/happy-cli.git',
   ui: 'https://github.com/slopus/happy.git',
 };
+
+function repoUrlsFromOwners({ forkOwner, upstreamOwner }) {
+  const fork = (name) => `https://github.com/${forkOwner}/${name}.git`;
+  const up = (name) => `https://github.com/${upstreamOwner}/${name}.git`;
+  return {
+    forks: {
+      serverLight: fork('happy-server-light'),
+      serverFull: fork('happy-server') /* best-effort; user can override */,
+      cli: fork('happy-cli'),
+      ui: fork('happy'),
+    },
+    upstream: {
+      // server-light upstream lives in happy-server
+      serverLight: up('happy-server'),
+      serverFull: up('happy-server'),
+      cli: up('happy-cli'),
+      ui: up('happy'),
+    },
+  };
+}
 
 function resolveRepoSource({ flags }) {
   if (flags.has('--forks')) {
@@ -54,7 +77,9 @@ function resolveRepoSource({ flags }) {
 function getRepoUrls({ repoSource }) {
   const defaults = repoSource === 'upstream' ? DEFAULT_UPSTREAM_REPOS : DEFAULT_FORK_REPOS;
   return {
-    server: process.env.HAPPY_LOCAL_SERVER_REPO_URL?.trim() || defaults.server,
+    // Backwards compatible: HAPPY_LOCAL_SERVER_REPO_URL historically referred to the server-light component.
+    serverLight: process.env.HAPPY_LOCAL_SERVER_LIGHT_REPO_URL?.trim() || process.env.HAPPY_LOCAL_SERVER_REPO_URL?.trim() || defaults.serverLight,
+    serverFull: process.env.HAPPY_LOCAL_SERVER_FULL_REPO_URL?.trim() || defaults.serverFull,
     cli: process.env.HAPPY_LOCAL_CLI_REPO_URL?.trim() || defaults.cli,
     ui: process.env.HAPPY_LOCAL_UI_REPO_URL?.trim() || defaults.ui,
   };
@@ -78,30 +103,183 @@ async function ensureComponentPresent({ dir, label, repoUrl, allowClone }) {
   await run('git', ['clone', repoUrl, dir]);
 }
 
+async function ensureUpstreamRemote({ repoDir, upstreamUrl }) {
+  if (!(await pathExists(join(repoDir, '.git')))) {
+    return;
+  }
+  try {
+    await run('git', ['remote', 'get-url', 'upstream'], { cwd: repoDir });
+    // Upstream remote exists; best-effort update if different.
+    await run('git', ['remote', 'set-url', 'upstream', upstreamUrl], { cwd: repoDir }).catch(() => {});
+  } catch {
+    await run('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: repoDir });
+  }
+}
+
+async function interactiveWizard({ rootDir, defaults }) {
+  return await withRl(async (rl) => {
+    const repoSource = await promptSelect(rl, {
+      title: 'Select repo source:',
+      options: [
+        { label: `forks (default, recommended)`, value: 'forks' },
+        { label: `upstream (slopus/*)`, value: 'upstream' },
+      ],
+      defaultIndex: defaults.repoSource === 'upstream' ? 1 : 0,
+    });
+
+    const forkOwner = await prompt(rl, `GitHub fork owner (default: ${defaults.forkOwner}): `, { defaultValue: defaults.forkOwner });
+    const upstreamOwner = await prompt(rl, `GitHub upstream owner (default: ${defaults.upstreamOwner}): `, {
+      defaultValue: defaults.upstreamOwner,
+    });
+
+    const serverMode = await promptSelect(rl, {
+      title: 'Which server components should be set up?',
+      options: [
+        { label: 'happy-server-light only (default)', value: 'happy-server-light' },
+        { label: 'happy-server only (full server)', value: 'happy-server' },
+        { label: 'both (server-light + full server)', value: 'both' },
+      ],
+      defaultIndex: defaults.serverComponentName === 'both' ? 2 : defaults.serverComponentName === 'happy-server' ? 1 : 0,
+    });
+
+    const allowClone = await promptSelect(rl, {
+      title: 'Clone missing component repos?',
+      options: [
+        { label: 'yes (default)', value: true },
+        { label: 'no', value: false },
+      ],
+      defaultIndex: defaults.allowClone ? 0 : 1,
+    });
+
+    const enableAutostart = await promptSelect(rl, {
+      title: 'Enable macOS autostart (LaunchAgent)?',
+      options: [
+        { label: 'no (default)', value: false },
+        { label: 'yes', value: true },
+      ],
+      defaultIndex: defaults.enableAutostart ? 1 : 0,
+    });
+
+    const buildTauri = await promptSelect(rl, {
+      title: 'Build Tauri desktop app as part of setup?',
+      options: [
+        { label: 'no (default)', value: false },
+        { label: 'yes', value: true },
+      ],
+      defaultIndex: defaults.buildTauri ? 1 : 0,
+    });
+
+    const configureGit = await promptSelect(rl, {
+      title: 'Configure upstream Git remotes and create mirror branches (slopus/main)?',
+      options: [
+        { label: 'yes (default)', value: true },
+        { label: 'no', value: false },
+      ],
+      defaultIndex: 0,
+    });
+
+    return {
+      repoSource,
+      forkOwner: forkOwner.trim() || defaults.forkOwner,
+      upstreamOwner: upstreamOwner.trim() || defaults.upstreamOwner,
+      serverComponentName: serverMode,
+      allowClone,
+      enableAutostart,
+      buildTauri,
+      configureGit,
+    };
+  });
+}
+
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
-  const repoSource = resolveRepoSource({ flags });
+  const argv = process.argv.slice(2);
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  if (wantsHelp(argv, { flags })) {
+    printResult({
+      json,
+      data: { flags: ['--forks', '--upstream', '--clone', '--no-clone', '--autostart', '--no-autostart', '--server=...'], json: true },
+      text: [
+        '[bootstrap] usage:',
+        '  pnpm bootstrap [-- --forks|--upstream] [--server=happy-server|happy-server-light|both] [--json]',
+        '  pnpm bootstrap -- --interactive',
+        '  pnpm local:setup   # alias for interactive bootstrap',
+        '  pnpm bootstrap:wizard   # alias for interactive bootstrap',
+        '  pnpm bootstrap -- --no-clone',
+      ].join('\n'),
+    });
+    return;
+  }
+  const rootDir = getRootDir(import.meta.url);
+
+  const interactive = flags.has('--interactive') && isTty();
+
+  // Defaults for wizard.
+  const defaultRepoSource = resolveRepoSource({ flags });
+  const defaults = {
+    repoSource: defaultRepoSource,
+    forkOwner: 'leeroybrun',
+    upstreamOwner: 'slopus',
+    serverComponentName: getServerComponentName({ kv }),
+    allowClone: !flags.has('--no-clone') && ((process.env.HAPPY_LOCAL_CLONE_MISSING ?? '1') !== '0' || flags.has('--clone')),
+    enableAutostart: flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1',
+    buildTauri: flags.has('--tauri') && !flags.has('--no-tauri'),
+  };
+
+  const wizard = interactive ? await interactiveWizard({ rootDir, defaults }) : null;
+  const repoSource = wizard?.repoSource ?? defaultRepoSource;
+
+  // Persist chosen repo source + URLs into env.local (so future runs are consistent).
+  if (wizard) {
+    const owners = repoUrlsFromOwners({ forkOwner: wizard.forkOwner, upstreamOwner: wizard.upstreamOwner });
+    const chosen = repoSource === 'upstream' ? owners.upstream : owners.forks;
+    await ensureEnvLocalUpdated({
+      rootDir,
+      updates: [
+        { key: 'HAPPY_LOCAL_REPO_SOURCE', value: repoSource },
+        { key: 'HAPPY_LOCAL_UI_REPO_URL', value: chosen.ui },
+        { key: 'HAPPY_LOCAL_CLI_REPO_URL', value: chosen.cli },
+        // Backwards compatible: SERVER_REPO_URL historically meant server-light.
+        { key: 'HAPPY_LOCAL_SERVER_REPO_URL', value: chosen.serverLight },
+        { key: 'HAPPY_LOCAL_SERVER_LIGHT_REPO_URL', value: chosen.serverLight },
+        { key: 'HAPPY_LOCAL_SERVER_FULL_REPO_URL', value: chosen.serverFull },
+      ],
+    });
+  }
+
   const repos = getRepoUrls({ repoSource });
 
   // Default: clone missing components (fresh checkouts "just work").
   // Disable with --no-clone or HAPPY_LOCAL_CLONE_MISSING=0.
   const cloneMissingDefault = (process.env.HAPPY_LOCAL_CLONE_MISSING ?? '1') !== '0';
-  const allowClone = !flags.has('--no-clone') && (flags.has('--clone') || cloneMissingDefault);
-  const enableAutostart = flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1';
+  const allowClone =
+    wizard?.allowClone ?? (!flags.has('--no-clone') && (flags.has('--clone') || cloneMissingDefault));
+  const enableAutostart = wizard?.enableAutostart ?? (flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1');
   const disableAutostart = flags.has('--no-autostart');
 
-  const rootDir = getRootDir(import.meta.url);
-  const serverDir = getComponentDir(rootDir, 'happy-server-light');
+  const serverComponentName = (wizard?.serverComponentName ?? getServerComponentName({ kv })).trim();
+  const serverLightDir = getComponentDir(rootDir, 'happy-server-light');
+  const serverFullDir = getComponentDir(rootDir, 'happy-server');
   const cliDir = getComponentDir(rootDir, 'happy-cli');
   const uiDir = getComponentDir(rootDir, 'happy');
 
   // Ensure components exist (embedded layout)
-  await ensureComponentPresent({
-    dir: serverDir,
-    label: 'SERVER',
-    repoUrl: repos.server,
-    allowClone,
-  });
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
+    await ensureComponentPresent({
+      dir: serverLightDir,
+      label: 'SERVER',
+      repoUrl: repos.serverLight,
+      allowClone,
+    });
+  }
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
+    await ensureComponentPresent({
+      dir: serverFullDir,
+      label: 'SERVER_FULL',
+      repoUrl: repos.serverFull,
+      allowClone,
+    });
+  }
   await ensureComponentPresent({
     dir: cliDir,
     label: 'CLI',
@@ -115,12 +293,16 @@ async function main() {
     allowClone,
   });
 
-  const serverDirFinal = serverDir;
   const cliDirFinal = cliDir;
   const uiDirFinal = uiDir;
 
   // Install deps
-  await ensureDepsInstalled(serverDirFinal, 'happy-server-light');
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
+    await ensureDepsInstalled(serverLightDir, 'happy-server-light');
+  }
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
+    await ensureDepsInstalled(serverFullDir, 'happy-server');
+  }
   await ensureDepsInstalled(uiDirFinal, 'happy');
   await ensureDepsInstalled(cliDirFinal, 'happy-cli');
 
@@ -133,7 +315,8 @@ async function main() {
   // Build UI (so run works without expo dev server)
   const buildArgs = [join(rootDir, 'scripts', 'build.mjs')];
   // Tauri builds are opt-in (slow + requires additional toolchain).
-  if (flags.has('--tauri') && !flags.has('--no-tauri')) {
+  const buildTauri = wizard?.buildTauri ?? (flags.has('--tauri') && !flags.has('--no-tauri'));
+  if (buildTauri) {
     buildArgs.push('--tauri');
   } else if (flags.has('--no-tauri')) {
     buildArgs.push('--no-tauri');
@@ -147,7 +330,41 @@ async function main() {
     await installService();
   }
 
-  console.log('[local] setup complete');
+  // Optional git remote + mirror branch configuration
+  if (wizard?.configureGit) {
+    // Ensure upstream remotes exist so `pnpm wt sync-all` works consistently.
+    const upstreamRepos = getRepoUrls({ repoSource: 'upstream' });
+    await ensureUpstreamRemote({ repoDir: uiDir, upstreamUrl: upstreamRepos.ui });
+    await ensureUpstreamRemote({ repoDir: cliDir, upstreamUrl: upstreamRepos.cli });
+    // server-light and server-full both track upstream happy-server
+    if (await pathExists(serverLightDir)) {
+      await ensureUpstreamRemote({ repoDir: serverLightDir, upstreamUrl: upstreamRepos.serverLight });
+    }
+    if (await pathExists(serverFullDir)) {
+      await ensureUpstreamRemote({ repoDir: serverFullDir, upstreamUrl: upstreamRepos.serverFull });
+    }
+
+    // Create/update mirror branches like slopus/main for each repo (best-effort).
+    try {
+      await run('pnpm', ['-s', 'wt', 'sync-all', '--json'], { cwd: rootDir });
+    } catch {
+      // ignore (still useful even if one component fails)
+    }
+  }
+
+  printResult({
+    json,
+    data: {
+      ok: true,
+      repoSource,
+      serverComponentName,
+      dirs: { serverLightDir, serverFullDir, cliDir: cliDirFinal, uiDir: uiDirFinal },
+      cloned: allowClone,
+      autostart: enableAutostart ? 'enabled' : disableAutostart ? 'disabled' : 'unchanged',
+      interactive: Boolean(wizard),
+    },
+    text: '[local] setup complete',
+  });
 }
 
 main().catch((err) => {

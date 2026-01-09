@@ -1,18 +1,36 @@
-import { ensureDepsInstalled, getComponentDir, getDefaultAutostartPaths, getRootDir, parseArgs, pmExecBin, requireDir } from './shared.mjs';
+import './utils/env.mjs';
+import { parseArgs } from './utils/args.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/pm.mjs';
 import { dirname, join } from 'node:path';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tailscaleServeHttpsUrl } from './tailscale.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
  * Build a lightweight static web UI bundle (no Expo dev server).
  *
- * Output directory default: ~/.happy/local/ui
+ * Output directory default: ~/.happy/stacks/main/ui (legacy: ~/.happy/local/ui)
  * Server will serve it at / when HAPPY_SERVER_LIGHT_UI_DIR is set.
  * (Legacy /ui paths are redirected to /.)
  */
 
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { flags } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  if (wantsHelp(argv, { flags })) {
+    printResult({
+      json,
+      data: { flags: ['--tauri', '--no-tauri'], json: true },
+      text: [
+        '[build] usage:',
+        '  pnpm build [-- --tauri] [--json]',
+        '  node scripts/build.mjs [--tauri|--no-tauri] [--json]',
+      ].join('\n'),
+    });
+    return;
+  }
   const rootDir = getRootDir(import.meta.url);
   const uiDir = getComponentDir(rootDir, 'happy');
   await requireDir('happy', uiDir);
@@ -51,7 +69,11 @@ async function main() {
   // Expo CLI is available via node_modules/.bin once dependencies are installed.
   await pmExecBin({ dir: uiDir, bin: 'expo', args: ['export', '--platform', 'web', '--output-dir', outDir], env });
 
-  console.log('[local] UI build complete');
+  if (json) {
+    printResult({ json, data: { ok: true, outDir, tauriBuilt: false } });
+  } else {
+    console.log('[local] UI build complete');
+  }
 
   //
   // Tauri build (optional)
@@ -127,10 +149,10 @@ async function main() {
   // This avoids needing any changes in the Happy source code to override a previously saved server.
   tauriConfig.identifier = process.env.HAPPY_LOCAL_TAURI_IDENTIFIER?.trim()
     ? process.env.HAPPY_LOCAL_TAURI_IDENTIFIER.trim()
-    : 'com.happy.local';
+    : 'com.happy.stacks';
   tauriConfig.productName = process.env.HAPPY_LOCAL_TAURI_PRODUCT_NAME?.trim()
     ? process.env.HAPPY_LOCAL_TAURI_PRODUCT_NAME.trim()
-    : 'Happy Local';
+    : 'Happy Stacks';
   if (tauriConfig.app?.windows?.length) {
     tauriConfig.app.windows = tauriConfig.app.windows.map((w) => ({
       ...w,
@@ -147,7 +169,7 @@ async function main() {
     }
   }
 
-  const generatedConfigPath = join(getDefaultAutostartPaths().baseDir, 'tauri.conf.happy-local.json');
+  const generatedConfigPath = join(getDefaultAutostartPaths().baseDir, 'tauri.conf.happy-stacks.json');
   await mkdir(dirname(generatedConfigPath), { recursive: true });
   await writeFile(generatedConfigPath, JSON.stringify(tauriConfig, null, 2), 'utf-8');
 
@@ -168,7 +190,11 @@ async function main() {
     tauriArgs.push('--debug');
   }
   await pmExecBin({ dir: uiDir, bin: 'tauri', args: tauriArgs, env: tauriBuildEnv });
-  console.log('[local] Tauri build complete');
+  if (json) {
+    printResult({ json, data: { ok: true, outDir, tauriBuilt: true, tauriServerUrl } });
+  } else {
+    console.log('[local] Tauri build complete');
+  }
 }
 
 main().catch((err) => {
