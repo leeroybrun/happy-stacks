@@ -18,10 +18,14 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: 20
-                  cache: pnpm
+                  # NOTE: Don't enable setup-node's pnpm cache here, because it attempts to invoke
+                  # `pnpm` during this step. We install pnpm via Corepack in the next step.
 
             - name: Enable corepack (pnpm)
-              run: corepack enable
+              run: |
+                  corepack enable
+                  corepack prepare pnpm@10.18.3 --activate
+                  pnpm --version
 
             - name: Install dependencies
               run: pnpm install --frozen-lockfile
