@@ -5,11 +5,11 @@ set -euo pipefail
 #   ./set-server-flavor.sh main|<stackName> happy-server|happy-server-light
 #
 # For main:
-#   - updates env.local via `pnpm srv -- use ...`
+#   - updates env.local via `happys srv use ...`
 #   - restarts the LaunchAgent service if installed (best-effort)
 #
 # For stacks:
-#   - updates the stack env via `pnpm stack srv <name> -- use ...`
+#   - updates the stack env via `happys stack srv <name> -- use ...`
 #   - restarts the stack LaunchAgent service if installed (best-effort)
 
 STACK="${1:-}"
@@ -24,21 +24,12 @@ if [[ "$FLAVOR" != "happy-server" && "$FLAVOR" != "happy-server-light" ]]; then
   exit 2
 fi
 
-# Always run relative to this repo (avoid SwiftBar cwd surprises and repo rename confusion).
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
-cd "$repo_root"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-PNPM_BIN="$repo_root/extras/swiftbar/pnpm.sh"
+PNPM_BIN="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
 if [[ ! -x "$PNPM_BIN" ]]; then
-  PNPM_BIN="$(command -v pnpm || true)"
-  LOCAL_PNPM="./node_modules/.bin/pnpm"
-  if [[ -x "$LOCAL_PNPM" ]]; then
-    PNPM_BIN="$LOCAL_PNPM"
-  fi
-fi
-if [[ -z "$PNPM_BIN" ]]; then
-  echo "pnpm not found" >&2
+  echo "happys wrapper not found (run: happys menubar install)" >&2
   exit 1
 fi
 
@@ -64,4 +55,3 @@ fi
 "$PNPM_BIN" stack srv "$STACK" -- use "$FLAVOR"
 restart_stack_service_best_effort "$STACK"
 echo "ok: $STACK -> $FLAVOR"
-

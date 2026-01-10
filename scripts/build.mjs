@@ -25,7 +25,8 @@ async function main() {
       data: { flags: ['--tauri', '--no-tauri'], json: true },
       text: [
         '[build] usage:',
-        '  pnpm build [-- --tauri] [--json]',
+        '  happys build [--tauri] [--json]',
+        '  (legacy in a cloned repo): pnpm build [-- --tauri] [--json]',
         '  node scripts/build.mjs [--tauri|--no-tauri] [--json]',
       ].join('\n'),
     });
@@ -80,7 +81,7 @@ async function main() {
   //
   // Default: do NOT build Tauri (it's slow and requires extra toolchain).
   // Enable explicitly with:
-  // - `pnpm build -- --tauri`, or
+  // - `happys build -- --tauri`, or
   // - `HAPPY_LOCAL_BUILD_TAURI=1`
   const envBuildTauri = (process.env.HAPPY_LOCAL_BUILD_TAURI ?? '').trim();
   const buildTauriFromEnv = envBuildTauri !== '' ? envBuildTauri !== '0' : false;
@@ -201,5 +202,3 @@ main().catch((err) => {
   console.error('[local] build failed:', err);
   process.exit(1);
 });
-
-

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Create a PR worktree via pnpm (optionally scoped to a stack).
+# Create a PR worktree (optionally scoped to a stack).
 #
 # Usage:
 #   ./wt-pr.sh <component> [stackName]
@@ -17,14 +17,15 @@ set -euo pipefail
 COMPONENT="${1:-}"
 STACK_NAME="${2:-}"
 
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HOME/Documents/Development/happy-local}"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-PNPM_BIN="$HAPPY_LOCAL_DIR/node_modules/.bin/pnpm"
-if [[ ! -x "$PNPM_BIN" ]]; then
-  PNPM_BIN="$(command -v pnpm 2>/dev/null || true)"
+HAPPYS="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
+if [[ ! -x "$HAPPYS" ]]; then
+  HAPPYS="$(command -v happys 2>/dev/null || true)"
 fi
-if [[ -z "$PNPM_BIN" ]]; then
-  echo "pnpm not found" >&2
+if [[ -z "$HAPPYS" ]]; then
+  echo "happys not found (run: happys init)" >&2
   exit 1
 fi
 
@@ -86,10 +87,9 @@ if [[ -z "$REMOTE_CHOICE" ]]; then
 fi
 
 if [[ -n "$STACK_NAME" && "$STACK_NAME" != "main" ]]; then
-  "$PNPM_BIN" stack wt "$STACK_NAME" -- pr "$COMPONENT" "$PR_INPUT" --remote="$REMOTE_CHOICE" --use
+  "$HAPPYS" stack wt "$STACK_NAME" -- pr "$COMPONENT" "$PR_INPUT" --remote="$REMOTE_CHOICE" --use
 else
-  "$PNPM_BIN" wt pr "$COMPONENT" "$PR_INPUT" --remote="$REMOTE_CHOICE" --use
+  "$HAPPYS" wt pr "$COMPONENT" "$PR_INPUT" --remote="$REMOTE_CHOICE" --use
 fi
 
 echo "ok"
-

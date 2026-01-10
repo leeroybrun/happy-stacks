@@ -2,9 +2,9 @@ import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { getRootDir } from './utils/paths.mjs';
 import { ensureEnvFileUpdated } from './utils/env_file.mjs';
+import { resolveUserConfigEnvPath } from './utils/config.mjs';
 import { isTty, promptSelect, withRl } from './utils/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { join } from 'node:path';
 
 const FLAVORS = [
   { label: 'happy-server-light (recommended default, serves UI)', value: 'happy-server-light' },
@@ -25,17 +25,13 @@ async function cmdUse({ rootDir, argv }) {
   const flavorRaw = positionals[1] ?? '';
   const flavor = normalizeFlavor(flavorRaw);
   if (!flavor) {
-    throw new Error('[server-flavor] usage: pnpm srv use <happy-server-light|happy-server> [--json]');
+    throw new Error('[server-flavor] usage: happys srv use <happy-server-light|happy-server> [--json]');
   }
   if (!['happy-server-light', 'happy-server'].includes(flavor)) {
     throw new Error(`[server-flavor] unknown flavor: ${flavor}`);
   }
 
-  const envPath = process.env.HAPPY_STACKS_ENV_FILE?.trim()
-    ? process.env.HAPPY_STACKS_ENV_FILE.trim()
-    : process.env.HAPPY_LOCAL_ENV_FILE?.trim()
-      ? process.env.HAPPY_LOCAL_ENV_FILE.trim()
-      : join(rootDir, 'env.local');
+  const envPath = resolveUserConfigEnvPath({ cliRootDir: rootDir });
   await ensureEnvFileUpdated({
     envPath,
     updates: [
@@ -58,11 +54,7 @@ async function cmdUseInteractive({ rootDir, argv }) {
 
   await withRl(async (rl) => {
     const flavor = await promptSelect(rl, { title: 'Select server flavor:', options: FLAVORS, defaultIndex: 0 });
-    const envPath = process.env.HAPPY_STACKS_ENV_FILE?.trim()
-      ? process.env.HAPPY_STACKS_ENV_FILE.trim()
-      : process.env.HAPPY_LOCAL_ENV_FILE?.trim()
-        ? process.env.HAPPY_LOCAL_ENV_FILE.trim()
-        : join(rootDir, 'env.local');
+    const envPath = resolveUserConfigEnvPath({ cliRootDir: rootDir });
     await ensureEnvFileUpdated({
       envPath,
       updates: [
@@ -99,12 +91,12 @@ async function main() {
       data: { commands: ['status', 'use'] },
       text: [
         '[server-flavor] usage:',
-        '  pnpm srv -- status [--json]',
-        '  pnpm srv -- use <happy-server-light|happy-server> [--json]',
-        '  pnpm srv -- use --interactive [--json]',
+        '  happys srv status [--json]',
+        '  happys srv use <happy-server-light|happy-server> [--json]',
+        '  happys srv use --interactive [--json]',
         '',
         'notes:',
-        '  - Use `pnpm srv -- ...` (or `pnpm server-flavor -- ...`) to pass args through pnpm.',
+        '  - `pnpm srv -- ...` still works inside a cloned repo (legacy).',
       ].join('\n'),
     });
     return;
@@ -131,4 +123,3 @@ main().catch((err) => {
   console.error('[server-flavor] failed:', err);
   process.exit(1);
 });
-

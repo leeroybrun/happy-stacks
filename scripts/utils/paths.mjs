@@ -9,17 +9,42 @@ const PRIMARY_LABEL_BASE = 'com.happy.stacks';
 const LEGACY_LABEL_BASE = 'com.happy.local';
 const PRIMARY_STORAGE_ROOT = join(homedir(), '.happy', 'stacks');
 const LEGACY_STORAGE_ROOT = join(homedir(), '.happy', 'local');
+const PRIMARY_HOME_DIR = join(homedir(), '.happy-stacks');
 
 export function getRootDir(importMetaUrl) {
   return dirname(dirname(fileURLToPath(importMetaUrl)));
 }
 
+export function getHappyStacksHomeDir() {
+  const fromEnv = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim();
+  if (fromEnv) {
+    return fromEnv.replace(/^~(?=\/)/, homedir());
+  }
+  return PRIMARY_HOME_DIR;
+}
+
+export function getWorkspaceDir(cliRootDir = null) {
+  const fromEnv = (process.env.HAPPY_STACKS_WORKSPACE_DIR ?? '').trim();
+  if (fromEnv) {
+    return fromEnv.replace(/^~(?=\/)/, homedir());
+  }
+  const homeDir = getHappyStacksHomeDir();
+  const defaultWorkspace = join(homeDir, 'workspace');
+  // Prefer the default home workspace if present.
+  if (existsSync(defaultWorkspace)) {
+    return defaultWorkspace;
+  }
+  // Back-compat: for cloned-repo usage before init, keep components inside the repo.
+  return cliRootDir ? cliRootDir : defaultWorkspace;
+}
+
 export function getComponentsDir(rootDir) {
-  return join(rootDir, 'components');
+  const workspaceDir = getWorkspaceDir(rootDir);
+  return join(workspaceDir, 'components');
 }
 
 export function componentDirEnvKey(name) {
-  return `HAPPY_LOCAL_COMPONENT_DIR_${name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+  return `HAPPY_STACKS_COMPONENT_DIR_${name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
 }
 
 function normalizePathForEnv(rootDir, raw) {
@@ -28,13 +53,15 @@ function normalizePathForEnv(rootDir, raw) {
     return '';
   }
   const expanded = trimmed.replace(/^~(?=\/)/, homedir());
-  // If the path is relative, treat it as relative to the happy-stacks root.
-  return expanded.startsWith('/') ? expanded : resolve(rootDir, expanded);
+  // If the path is relative, treat it as relative to the workspace root (default: repo root).
+  const workspaceDir = getWorkspaceDir(rootDir);
+  return expanded.startsWith('/') ? expanded : resolve(workspaceDir, expanded);
 }
 
 export function getComponentDir(rootDir, name) {
-  const key = componentDirEnvKey(name);
-  const fromEnv = normalizePathForEnv(rootDir, process.env[key]);
+  const stacksKey = componentDirEnvKey(name);
+  const legacyKey = stacksKey.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+  const fromEnv = normalizePathForEnv(rootDir, process.env[stacksKey] ?? process.env[legacyKey]);
   if (fromEnv) {
     return fromEnv;
   }
@@ -78,7 +105,7 @@ export function resolveStackBaseDir(stackName = getStackName()) {
   // Prefer the new layout by default.
   //
   // For non-main stacks, keep legacy layout if the legacy env exists and the new env does not.
-  // This avoids breaking existing stacks until `pnpm stack migrate` is run.
+  // This avoids breaking existing stacks until `happys stack migrate` is run.
   if (stackName !== 'main') {
     const newEnv = join(preferredRoot, stackName, 'env');
     const legacyEnv = join(LEGACY_STORAGE_ROOT, 'stacks', stackName, 'env');
@@ -155,4 +182,3 @@ export function getDefaultAutostartPaths() {
     legacyStderrPath,
   };
 }
-

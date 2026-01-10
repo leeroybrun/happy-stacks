@@ -1,0 +1,276 @@
+import './utils/env.mjs';
+
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+import { parseArgs } from './utils/args.mjs';
+import { pathExists } from './utils/fs.mjs';
+import { run, runCapture } from './utils/proc.mjs';
+import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { getRuntimeDir } from './utils/runtime.mjs';
+
+function expandHome(p) {
+  return p.replace(/^~(?=\/)/, homedir());
+}
+
+function cachePaths() {
+  const home = getHappyStacksHomeDir();
+  return {
+    home,
+    cacheDir: join(home, 'cache'),
+    updateJson: join(home, 'cache', 'update.json'),
+  };
+}
+
+async function readJsonSafe(path) {
+  try {
+    const raw = await readFile(path, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeJsonSafe(path, obj) {
+  try {
+    await mkdir(join(path, '..'), { recursive: true });
+  } catch {
+    // ignore
+  }
+  try {
+    await writeFile(path, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
+  } catch {
+    // ignore
+  }
+}
+
+async function readPkgVersion(pkgJsonPath) {
+  try {
+    const raw = await readFile(pkgJsonPath, 'utf-8');
+    const pkg = JSON.parse(raw);
+    const v = String(pkg.version ?? '').trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getRuntimeInstalledVersion() {
+  const runtimeDir = getRuntimeDir();
+  const pkgJson = join(runtimeDir, 'node_modules', 'happy-stacks', 'package.json');
+  return await readPkgVersion(pkgJson);
+}
+
+async function getInvokerVersion({ rootDir }) {
+  return await readPkgVersion(join(rootDir, 'package.json'));
+}
+
+async function fetchLatestVersion() {
+  // Prefer npm (available on most systems with Node).
+  // Keep it simple: `npm view happy-stacks version` prints a single version.
+  const out = (await runCapture('npm', ['view', 'happy-stacks', 'version'])).trim();
+  return out || null;
+}
+
+function compareVersions(a, b) {
+  // Very small semver-ish compare (supports x.y.z); falls back to string compare.
+  const pa = String(a ?? '').trim().split('.').map((n) => Number(n));
+  const pb = String(b ?? '').trim().split('.').map((n) => Number(n));
+  if (pa.length >= 2 && pb.length >= 2 && pa.every((n) => Number.isFinite(n)) && pb.every((n) => Number.isFinite(n))) {
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const da = pa[i] ?? 0;
+      const db = pb[i] ?? 0;
+      if (da > db) return 1;
+      if (da < db) return -1;
+    }
+    return 0;
+  }
+  return String(a).localeCompare(String(b));
+}
+
+async function cmdStatus({ rootDir, argv }) {
+  const { flags } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  const doCheck = !flags.has('--no-check');
+
+  const { updateJson, cacheDir } = cachePaths();
+  const invokerVersion = await getInvokerVersion({ rootDir });
+  const runtimeDir = getRuntimeDir();
+  const runtimeVersion = await getRuntimeInstalledVersion();
+
+  const cached = await readJsonSafe(updateJson);
+
+  let latest = cached?.latest ?? null;
+  let checkedAt = cached?.checkedAt ?? null;
+  let updateAvailable = Boolean(cached?.updateAvailable);
+
+  if (doCheck) {
+    try {
+      latest = await fetchLatestVersion();
+      checkedAt = Date.now();
+      const current = runtimeVersion || invokerVersion;
+      updateAvailable = Boolean(current && latest && compareVersions(latest, current) > 0);
+      await mkdir(cacheDir, { recursive: true });
+      await writeJsonSafe(updateJson, {
+        checkedAt,
+        latest,
+        current: current || null,
+        runtimeVersion: runtimeVersion || null,
+        invokerVersion: invokerVersion || null,
+        updateAvailable,
+        notifiedAt: cached?.notifiedAt ?? null,
+      });
+    } catch {
+      // ignore network/npm failures; keep cached values
+    }
+  }
+
+  printResult({
+    json,
+    data: {
+      ok: true,
+      invoker: { version: invokerVersion, rootDir },
+      runtime: { dir: runtimeDir, installed: Boolean(runtimeVersion), version: runtimeVersion },
+      update: { cachedLatest: cached?.latest ?? null, latest, checkedAt, updateAvailable },
+    },
+    text: [
+      `[self] invoker: ${invokerVersion ?? 'unknown'} (${rootDir})`,
+      `[self] runtime: ${runtimeVersion ? runtimeVersion : 'not installed'} (${runtimeDir})`,
+      latest ? `[self] latest:  ${latest}${updateAvailable ? ' (update available)' : ''}` : `[self] latest:  unknown`,
+      checkedAt ? `[self] checked: ${new Date(checkedAt).toISOString()}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  });
+}
+
+async function cmdUpdate({ rootDir, argv }) {
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+
+  const runtimeDir = getRuntimeDir();
+  const to = (kv.get('--to') ?? '').trim();
+  const spec = to ? `happy-stacks@${to}` : 'happy-stacks@latest';
+
+  // Ensure runtime dir exists.
+  await mkdir(runtimeDir, { recursive: true });
+
+  // Install/update runtime package.
+  await run('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, spec], { cwd: rootDir });
+
+  // Refresh cache best-effort.
+  try {
+    const latest = await fetchLatestVersion();
+    const runtimeVersion = await getRuntimeInstalledVersion();
+    const invokerVersion = await getInvokerVersion({ rootDir });
+    const current = runtimeVersion || invokerVersion;
+    const updateAvailable = Boolean(current && latest && compareVersions(latest, current) > 0);
+    const { updateJson, cacheDir } = cachePaths();
+    await mkdir(cacheDir, { recursive: true });
+    await writeJsonSafe(updateJson, {
+      checkedAt: Date.now(),
+      latest,
+      current: current || null,
+      runtimeVersion: runtimeVersion || null,
+      invokerVersion: invokerVersion || null,
+      updateAvailable,
+      notifiedAt: null,
+    });
+  } catch {
+    // ignore
+  }
+
+  const runtimeVersionAfter = await getRuntimeInstalledVersion();
+  printResult({
+    json,
+    data: { ok: true, runtimeDir, version: runtimeVersionAfter ?? null, spec },
+    text: `[self] updated runtime in ${runtimeDir} (${runtimeVersionAfter ?? spec})`,
+  });
+}
+
+async function cmdCheck({ rootDir, argv }) {
+  const { flags } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  const quiet = flags.has('--quiet');
+
+  const { updateJson, cacheDir } = cachePaths();
+  const runtimeVersion = await getRuntimeInstalledVersion();
+  const invokerVersion = await getInvokerVersion({ rootDir });
+  const current = runtimeVersion || invokerVersion;
+
+  let latest = null;
+  try {
+    latest = await fetchLatestVersion();
+  } catch {
+    latest = null;
+  }
+
+  const updateAvailable = Boolean(current && latest && compareVersions(latest, current) > 0);
+  await mkdir(cacheDir, { recursive: true });
+  await writeJsonSafe(updateJson, {
+    checkedAt: Date.now(),
+    latest,
+    current: current || null,
+    runtimeVersion: runtimeVersion || null,
+    invokerVersion: invokerVersion || null,
+    updateAvailable,
+    notifiedAt: null,
+  });
+
+  if (quiet) {
+    return;
+  }
+  printResult({
+    json,
+    data: { ok: true, current: current || null, latest, updateAvailable },
+    text: latest ? (updateAvailable ? `[self] update available: ${current} -> ${latest}` : `[self] up to date (${current})`) : '[self] unable to check latest version',
+  });
+}
+
+async function main() {
+  const rootDir = getRootDir(import.meta.url);
+  const argv = process.argv.slice(2);
+
+  const { flags } = parseArgs(argv);
+  const cmd = argv.find((a) => !a.startsWith('--')) ?? 'status';
+
+  if (wantsHelp(argv, { flags }) || cmd === 'help') {
+    const json = wantsJson(argv, { flags });
+    printResult({
+      json,
+      data: { commands: ['status', 'update', 'check'], flags: ['--no-check', '--to=<version>', '--quiet'] },
+      text: [
+        '[self] usage:',
+        '  happys self status [--no-check] [--json]',
+        '  happys self update [--to=<version>] [--json]',
+        '  happys self check [--quiet] [--json]',
+      ].join('\n'),
+    });
+    return;
+  }
+
+  if (cmd === 'status') {
+    await cmdStatus({ rootDir, argv });
+    return;
+  }
+  if (cmd === 'update') {
+    await cmdUpdate({ rootDir, argv });
+    return;
+  }
+  if (cmd === 'check') {
+    await cmdCheck({ rootDir, argv });
+    return;
+  }
+
+  throw new Error(`[self] unknown command: ${cmd}`);
+}
+
+main().catch((err) => {
+  console.error('[self] failed:', err);
+  process.exit(1);
+});
+

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Open preferred terminal and run a pnpm command in the happy-local repo root.
+# Open preferred terminal and run a happys command.
 #
 # Preference order follows wt shell semantics:
 # - HAPPY_LOCAL_WT_TERMINAL=ghostty|iterm|terminal|current
@@ -11,20 +11,21 @@ set -euo pipefail
 # - iTerm / Terminal: we run the command automatically via AppleScript.
 # - Ghostty: best-effort; if we can't run the command, we open Ghostty in the dir and copy the command to clipboard.
 
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HOME/Documents/Development/happy-local}"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-if [[ ! -f "$HAPPY_LOCAL_DIR/package.json" ]]; then
-  echo "happy-local not found at: $HAPPY_LOCAL_DIR" >&2
-  exit 1
+WORKDIR="${HAPPY_STACKS_WORKSPACE_DIR:-$HAPPY_STACKS_HOME_DIR/workspace}"
+if [[ ! -d "$WORKDIR" ]]; then
+  WORKDIR="$HOME"
 fi
 
 PNPM_SH="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
 if [[ ! -x "$PNPM_SH" ]]; then
-  echo "missing pnpm wrapper: $PNPM_SH" >&2
+  echo "missing happys wrapper: $PNPM_SH" >&2
   exit 1
 fi
 
-pref_raw="$(echo "${HAPPY_LOCAL_WT_TERMINAL:-auto}" | tr '[:upper:]' '[:lower:]')"
+pref_raw="$(echo "${HAPPY_STACKS_WT_TERMINAL:-${HAPPY_LOCAL_WT_TERMINAL:-auto}}" | tr '[:upper:]' '[:lower:]')"
 pref="$pref_raw"
 if [[ "$pref" == "" ]]; then pref="auto"; fi
 
@@ -40,10 +41,10 @@ escape_for_osascript_string() {
 }
 
 shell_cmd() {
-  # Build a zsh command that cds and runs pnpm, leaving the shell open.
+  # Build a zsh command that cds and runs happys (via wrapper), leaving the shell open.
   local joined=""
   local q
-  joined="cd \"${HAPPY_LOCAL_DIR//\"/\\\"}\"; "
+  joined="cd \"${WORKDIR//\"/\\\"}\"; "
   for q in "${cmd[@]}"; do
     # Basic shell quoting
     if [[ "$q" =~ [[:space:]\\"\'\$\`\!\&\|\;\<\>\(\)\[\]\{\}] ]]; then
@@ -52,7 +53,7 @@ shell_cmd() {
       joined+="$q "
     fi
   done
-  joined+="; echo; echo \"[happy-local] done\"; exec /bin/zsh -i"
+  joined+="; echo; echo \"[happy-stacks] done\"; exec /bin/zsh -i"
   echo "$joined"
 }
 
@@ -91,13 +92,13 @@ run_ghostty() {
   # fall back to opening the dir and copying the command.
   local s
   s="$(shell_cmd)"
-  if ghostty --working-directory "$HAPPY_LOCAL_DIR" -e /bin/zsh -lc "$s" >/dev/null 2>&1; then
+  if ghostty --working-directory "$WORKDIR" -e /bin/zsh -lc "$s" >/dev/null 2>&1; then
     return 0
   fi
 
   # Fallback: open in dir and copy command for manual paste.
   echo -n "$s" | pbcopy 2>/dev/null || true
-  ghostty --working-directory "$HAPPY_LOCAL_DIR" >/dev/null 2>&1 || true
+  ghostty --working-directory "$WORKDIR" >/dev/null 2>&1 || true
   return 0
 }
 
@@ -107,7 +108,7 @@ try_one() {
     ghostty) run_ghostty ;;
     iterm) run_iterm ;;
     terminal) run_terminal_app ;;
-    current) ( cd "$HAPPY_LOCAL_DIR"; exec "${cmd[@]}" ) ;;
+    current) ( cd "$WORKDIR"; exec "${cmd[@]}" ) ;;
     *) return 1 ;;
   esac
 }
@@ -122,4 +123,3 @@ if [[ "$pref" == "auto" ]]; then
 fi
 
 try_one "$pref"
-

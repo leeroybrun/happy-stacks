@@ -207,10 +207,13 @@ async function main() {
       data: { commands: ['status', 'enable', 'disable', 'reset', 'url'] },
       text: [
         '[tailscale] usage:',
+        '  happys tailscale status [--json]',
+        '  happys tailscale enable [--json]',
+        '  happys tailscale disable [--json]',
+        '  happys tailscale url [--json]',
+        '',
+        'legacy (cloned repo):',
         '  pnpm tailscale:status [--json]',
-        '  pnpm tailscale:enable [--json]',
-        '  pnpm tailscale:disable [--json]',
-        '  pnpm tailscale:url [--json]',
         '',
         'advanced:',
         '  node scripts/tailscale.mjs enable --upstream=<url> --path=/ [--json]',
@@ -272,4 +275,3 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   });
 }
-

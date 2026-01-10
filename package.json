@@ -1,14 +1,25 @@
 {
-  "name": "happy-local",
-  "private": true,
+  "name": "happy-stacks",
   "type": "module",
   "version": "0.0.0",
   "packageManager": "pnpm@10.18.3",
+  "bin": {
+    "happys": "./bin/happys.mjs",
+    "happy-stacks": "./bin/happys.mjs"
+  },
+  "files": [
+    "bin/",
+    "docs/",
+    "extras/",
+    "scripts/"
+  ],
   "scripts": {
+    "init": "node ./scripts/init.mjs",
     "bootstrap": "node ./scripts/install.mjs",
     "build": "node ./scripts/build.mjs",
     "start": "node ./scripts/run.mjs",
     "dev": "node ./scripts/dev.mjs",
+    "happy": "node ./scripts/happy.mjs",
     "wt": "node ./scripts/worktrees.mjs",
     "srv": "node ./scripts/server_flavor.mjs",
     "server-flavor": "node ./scripts/server_flavor.mjs",
@@ -20,6 +31,7 @@
     "mobile:install": "node ./scripts/mobile.mjs --run-ios --no-metro --configuration=Release",
     "mobile:devices": "xcrun xcdevice list",
     "cli:link": "node ./scripts/cli-link.mjs",
+    "auth": "node ./scripts/auth.mjs",
     "service:status": "node ./scripts/service.mjs status",
     "service:start": "node ./scripts/service.mjs start",
     "service:stop": "node ./scripts/service.mjs stop",
@@ -36,8 +48,7 @@
     "stack:fix": "node ./scripts/doctor.mjs --fix",
     "logs": "node ./scripts/service.mjs logs",
     "logs:tail": "node ./scripts/service.mjs tail",
-    "menubar:install": "./extras/swiftbar/install.sh",
+    "menubar:install": "node ./scripts/menubar.mjs install",
     "menubar:open": "bash -lc 'DIR=\"$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)\"; if [[ -z \"$DIR\" ]]; then DIR=\"$HOME/Library/Application Support/SwiftBar/Plugins\"; fi; open \"$DIR\"'"
   }
 }
-

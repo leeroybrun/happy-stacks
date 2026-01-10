@@ -7,7 +7,7 @@ This repo is designed to run the Happy stack locally, while still making it easy
 
 ## Key idea: keep “active components” stable, put worktrees elsewhere
 
-`happy-stacks` runs components from these default paths:
+`happy-stacks` runs components from these default paths (in your workspace):
 
 - `components/happy`
 - `components/happy-cli`
@@ -53,11 +53,11 @@ Where:
 The easiest way to set these is with:
 
 ```bash
-pnpm wt use happy slopus/pr/session-rename-upstream
-pnpm wt use happy-cli slopus/pr/resume-session-from-ui-upstream
+happys wt use happy slopus/pr/session-rename-upstream
+happys wt use happy-cli slopus/pr/resume-session-from-ui-upstream
 ```
 
-Now `pnpm dev`, `pnpm start`, and `pnpm build` will use those active checkouts.
+Now `happys dev`, `happys start`, and `happys build` will use those active checkouts.
 
 ## Switching server flavor (server-light vs full server)
 
@@ -66,19 +66,19 @@ You can persistently switch which server implementation is used by setting `HAPP
 Use the convenience CLI (recommended):
 
 ```bash
-pnpm srv -- status
-pnpm srv -- use happy-server-light
-pnpm srv -- use happy-server
-pnpm srv -- use --interactive
+happys srv status
+happys srv use happy-server-light
+happys srv use happy-server
+happys srv use --interactive
 ```
 
-Note: we use `pnpm srv` (not `pnpm server`) because pnpm has a built-in `server` command.
+Note: in a cloned repo, the legacy equivalent is `pnpm srv -- ...`.
 
 Reset back to default:
 
 ```bash
-pnpm wt use happy default
-pnpm wt use happy-cli default
+happys wt use happy default
+happys wt use happy-cli default
 ```
 
 ## Creating worktrees
@@ -86,7 +86,7 @@ pnpm wt use happy-cli default
 Create a new worktree branch based on **upstream** (for upstream PRs):
 
 ```bash
-pnpm wt new happy pr/my-feature --from=upstream --use
+happys wt new happy pr/my-feature --from=upstream --use
 ```
 
 ## Testing a GitHub PR locally (`wt pr`)
@@ -94,10 +94,10 @@ pnpm wt new happy pr/my-feature --from=upstream --use
 If you have a GitHub PR URL (or just the PR number), you can create a worktree at the PR head ref:
 
 ```bash
-pnpm wt pr happy https://github.com/slopus/happy/pull/123 --use
+happys wt pr happy https://github.com/slopus/happy/pull/123 --use
 
 # same, but specify the remote explicitly
-pnpm wt pr happy 123 --remote=upstream --use
+happys wt pr happy 123 --remote=upstream --use
 ```
 
 Notes:
@@ -105,13 +105,13 @@ Notes:
 - To refresh the worktree when new commits are pushed to the PR, re-run with `--update`:
 
 ```bash
-pnpm wt pr happy 123 --update
+happys wt pr happy 123 --update
 ```
 
 - If you have uncommitted changes in the PR worktree, you can use `--stash` / `--stash-keep`:
 
 ```bash
-pnpm wt pr happy 123 --update --stash
+happys wt pr happy 123 --update --stash
 ```
 
 - If the PR was force-pushed and the update is not a fast-forward, `--update` will abort and tell you to re-run with `--update --force`.
@@ -122,20 +122,20 @@ pnpm wt pr happy 123 --update --stash
 Create a dedicated stack, then apply the PR into that stack env:
 
 ```bash
-pnpm stack new pr123
-pnpm stack wt pr123 -- pr happy https://github.com/slopus/happy/pull/123 --use
-pnpm stack dev pr123
+happys stack new pr123
+happys stack wt pr123 -- pr happy https://github.com/slopus/happy/pull/123 --use
+happys stack dev pr123
 ```
 
 Create a new worktree branch based on **your fork** (for fork-only patches):
 
 ```bash
-pnpm wt new happy local/my-patch --from=origin --use
+happys wt new happy local/my-patch --from=origin --use
 ```
 
 ### Remote + base behavior (automatic)
 
-If you do **not** pass `--remote`, `pnpm wt new` defaults to using the Git remote named `upstream`.
+If you do **not** pass `--remote`, `happys wt new` defaults to using the Git remote named `upstream`.
 
 It will also keep a local **mirror branch** named after the remote owner **and that remote’s default branch**:
 
@@ -146,7 +146,7 @@ New PR worktrees created without `--base` will default to using that mirror bran
 
 ### Syncing a remote to a local mirror branch
 
-`pnpm wt sync <component>` keeps a local mirror branch up to date inside that component repo:
+`happys wt sync <component>` keeps a local mirror branch up to date inside that component repo:
 
 - It fetches the remote’s **default branch** (for that remote + component)
 - Then it updates a local branch named `<owner>/<default-branch>` to track it
@@ -155,16 +155,16 @@ Examples:
 
 ```bash
 # Sync upstream (usually slopus/main)
-pnpm wt sync happy --remote=upstream
+happys wt sync happy --remote=upstream
 
 # Sync your fork remote (origin/fork). For happy-server-light this is typically leeroybrun/happy-server-light.
-pnpm wt sync happy-server-light --remote=origin
+happys wt sync happy-server-light --remote=origin
 ```
 
 After syncing, you can explicitly base a new worktree on the mirror branch if you want:
 
 ```bash
-pnpm wt new happy pr/my-feature --remote=upstream --base=slopus/main --use
+happys wt new happy pr/my-feature --remote=upstream --base=slopus/main --use
 ```
 
 ### Interactive mode
@@ -172,8 +172,8 @@ pnpm wt new happy pr/my-feature --remote=upstream --base=slopus/main --use
 If you prefer prompts:
 
 ```bash
-pnpm wt new --interactive
-pnpm wt use --interactive
+happys wt new --interactive
+happys wt use --interactive
 ```
 
 ### JSON mode
@@ -181,12 +181,12 @@ pnpm wt use --interactive
 For programmatic usage:
 
 ```bash
-pnpm wt list happy --json
-pnpm wt sync happy --json
-pnpm wt new happy pr/my-feature --use --json
-pnpm wt status happy --json
-pnpm wt update happy default --dry-run --json
-pnpm wt push happy default --dry-run --json
+happys wt list happy --json
+happys wt sync happy --json
+happys wt new happy pr/my-feature --use --json
+happys wt status happy --json
+happys wt update happy default --dry-run --json
+happys wt push happy default --dry-run --json
 ```
 
 ## Migrating old worktree layout (one-time)
@@ -200,13 +200,13 @@ These are convenience commands to keep PR branches updated and to automate the �
 Shows branch / upstream / ahead/behind / clean state:
 
 ```bash
-pnpm wt status happy
-pnpm wt status happy --json
+happys wt status happy
+happys wt status happy --json
 ```
 
 ## Worktree selector semantics (`default` / `main` / `active`)
 
-Many `pnpm wt` commands accept an optional “selector” argument to choose *which checkout* you mean.
+Many `happys wt` commands accept an optional “selector” argument to choose *which checkout* you mean.
 
 - **(omitted)** or **`active`**: the currently active checkout for that component (env override if set; otherwise `components/<component>`)
 - **`default`** or **`main`**: the default embedded checkout at `components/<component>`
@@ -224,22 +224,22 @@ Update a worktree branch from its upstream base.
 
 ```bash
 # Check if update would conflict (no changes applied)
-pnpm wt update happy default --dry-run
+happys wt update happy default --dry-run
 
 # Apply rebase if clean; if conflicts, abort and print conflicting files
-pnpm wt update happy default
+happys wt update happy default
 
 # If you have uncommitted changes, auto-stash, update, then pop the stash back (only if the update was clean)
-pnpm wt update happy default --stash
+happys wt update happy default --stash
 
 # Same, but keep the stash (do not pop) so you can apply it later
-pnpm wt update happy default --stash-keep
+happys wt update happy default --stash-keep
 
 # Keep conflict state in place for manual resolution
-pnpm wt update happy default --force
+happys wt update happy default --force
 
 # Use merge instead of rebase (optional)
-pnpm wt update happy default --merge
+happys wt update happy default --merge
 ```
 
 ## Open a “real” shell in a worktree (`wt shell`)
@@ -247,16 +247,16 @@ pnpm wt update happy default --merge
 This starts a new interactive shell **with cwd set to the worktree**, which is the closest thing to a “real cd” a CLI can do:
 
 ```bash
-pnpm wt shell happy slopus/pr/123
+happys wt shell happy slopus/pr/123
 
 # choose a shell explicitly
-pnpm wt shell happy slopus/pr/123 --shell=/bin/zsh
+happys wt shell happy slopus/pr/123 --shell=/bin/zsh
 ```
 
 You can also ask it to open a new terminal window/tab (best-effort):
 
 ```bash
-pnpm wt shell happy slopus/pr/123 --new-window
+happys wt shell happy slopus/pr/123 --new-window
 ```
 
 On macOS, auto-detection tries: Ghostty → iTerm → Terminal. You can override via:
@@ -267,14 +267,14 @@ On macOS, auto-detection tries: Ghostty → iTerm → Terminal. You can override
 Works with stacks too:
 
 ```bash
-pnpm stack wt pr123 -- shell happy active
+happys stack wt pr123 -- shell happy active
 ```
 
 ## Open in editors (`wt code` / `wt cursor`)
 
 ```bash
-pnpm wt code happy slopus/pr/123
-pnpm wt cursor happy slopus/pr/123
+happys wt code happy slopus/pr/123
+happys wt cursor happy slopus/pr/123
 ```
 
 Notes:
@@ -286,9 +286,9 @@ Notes:
 Push current HEAD branch to a remote:
 
 ```bash
-pnpm wt push happy default
-pnpm wt push happy default --remote=origin
-pnpm wt push happy default --dry-run
+happys wt push happy default
+happys wt push happy default --remote=origin
+happys wt push happy default --dry-run
 ```
 
 ### Create worktrees from an existing worktree/branch
@@ -296,7 +296,7 @@ pnpm wt push happy default --dry-run
 If you want to base a new worktree off another worktree’s current branch/HEAD:
 
 ```bash
-pnpm wt new happy pr/next-step --base-worktree=slopus/pr/my-existing-thing
+happys wt new happy pr/next-step --base-worktree=slopus/pr/my-existing-thing
 ```
 
 ## Run git inside a worktree (`wt git`)
@@ -304,32 +304,32 @@ pnpm wt new happy pr/next-step --base-worktree=slopus/pr/my-existing-thing
 This is a convenience wrapper that runs `git` in a selected checkout:
 
 ```bash
-pnpm wt git happy main -- status
-pnpm wt git happy active -- log -n 5 --oneline
-pnpm wt git happy slopus/pr/session-rename-upstream -- diff
+happys wt git happy main -- status
+happys wt git happy active -- log -n 5 --oneline
+happys wt git happy slopus/pr/session-rename-upstream -- diff
 ```
 
 For programmatic usage:
 
 ```bash
-pnpm wt git happy main -- status --porcelain -b --json
+happys wt git happy main -- status --porcelain -b --json
 ```
 
 ## Sync/update everything
 
 ```bash
-pnpm wt sync-all
-pnpm wt sync-all --json
+happys wt sync-all
+happys wt sync-all --json
 
 # Dry-run updates across all worktrees for a component (or all components if omitted)
-pnpm wt update-all happy --dry-run
-pnpm wt update-all --dry-run --json
+happys wt update-all happy --dry-run
+happys wt update-all --dry-run --json
 ```
 
 If you previously had worktrees under `components/happy-worktrees/*`, run:
 
 ```bash
-pnpm wt migrate
+happys wt migrate
 ```
 
 This will:
@@ -344,14 +344,14 @@ By default, `happy-stacks` uses `happy-server-light`.
 To run the full upstream server instead:
 
 ```bash
-pnpm bootstrap -- --server=happy-server
-pnpm dev -- --server=happy-server
+happys bootstrap --server=happy-server
+happys dev --server=happy-server
 ```
 
 Notes:
 
-- `pnpm start` (production-like) serves the built UI via `happy-server-light`; UI serving is **disabled** automatically when using `happy-server`.
-- `pnpm dev` works with either server (it runs the UI separately via Expo).
+- `happys start` (production-like) serves the built UI via `happy-server-light`; UI serving is **disabled** automatically when using `happy-server`.
+- `happys dev` works with either server (it runs the UI separately via Expo).
 
 ### Selecting server via env (including LaunchAgent service)
 
@@ -360,19 +360,19 @@ You can set a default server implementation via:
 - `HAPPY_STACKS_SERVER_COMPONENT=happy-server-light` (default) (legacy: `HAPPY_LOCAL_SERVER_COMPONENT`)
 - `HAPPY_STACKS_SERVER_COMPONENT=happy-server` (legacy: `HAPPY_LOCAL_SERVER_COMPONENT`)
 
-If you use the macOS LaunchAgent (`pnpm service:install`), this env var is persisted into the plist at install time.
+If you use the macOS LaunchAgent (`happys service:install`), this env var is persisted into the plist at install time.
 
 ## Env precedence (important)
 
 When `happy-stacks` starts, it loads env in this order:
 
-1) `happy-stacks/.env` (defaults)
-2) `happy-stacks/env.local` (local overrides)
+1) `~/.happy-stacks/.env` (defaults)
+2) `~/.happy-stacks/env.local` (local overrides)
 3) `HAPPY_STACKS_ENV_FILE` (stack env / explicit overlay; highest precedence for `HAPPY_STACKS_*` / `HAPPY_LOCAL_*`)
 
 Notes:
 
-- `HAPPY_STACKS_ENV_FILE` (legacy: `HAPPY_LOCAL_ENV_FILE`) is the mechanism used by `pnpm stack ...` to apply stack-specific settings.
+- `HAPPY_STACKS_ENV_FILE` (legacy: `HAPPY_LOCAL_ENV_FILE`) is the mechanism used by `happys stack ...` to apply stack-specific settings.
 - For stack runs, the stack wrapper clears any already-exported `HAPPY_STACKS_*` / legacy `HAPPY_LOCAL_*` variables so the stack env file stays authoritative.
 
 ## Repo URLs
@@ -385,4 +385,3 @@ You can override clone sources in `env.local`:
 - `HAPPY_STACKS_SERVER_REPO_URL` (legacy: `HAPPY_LOCAL_SERVER_REPO_URL`) (server-light, backwards compatible)
 - `HAPPY_STACKS_SERVER_LIGHT_REPO_URL` (legacy: `HAPPY_LOCAL_SERVER_LIGHT_REPO_URL`)
 - `HAPPY_STACKS_SERVER_FULL_REPO_URL` (legacy: `HAPPY_LOCAL_SERVER_FULL_REPO_URL`)
-

@@ -258,7 +258,7 @@ async function cmdNew({ rootDir, argv }) {
   stackName = config.stackName?.trim() ? config.stackName.trim() : '';
   if (!stackName) {
     throw new Error(
-      '[stack] usage: pnpm stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
+      '[stack] usage: happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
         '[--happy=default|<owner/...>|<path>] [--happy-cli=...] [--happy-server=...] [--happy-server-light=...] [--interactive]'
     );
   }
@@ -359,7 +359,7 @@ async function cmdEdit({ rootDir, argv }) {
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const stackName = stackNameFromArg(positionals, 1);
   if (!stackName) {
-    throw new Error('[stack] usage: pnpm stack edit <name> [--interactive]');
+    throw new Error('[stack] usage: happys stack edit <name> [--interactive]');
   }
 
   const envPath = getStackEnvPath(stackName);
@@ -478,13 +478,25 @@ async function cmdSrv({ rootDir, stackName, args }) {
 
 async function cmdWt({ rootDir, stackName, args }) {
   // Forward to scripts/worktrees.mjs under the stack env.
-  // This makes `pnpm stack wt <name> -- ...` behave exactly like `pnpm wt ...`,
+  // This makes `happys stack wt <name> -- ...` behave exactly like `happys wt ...`,
   // but read/write the stack env file (HAPPY_STACKS_ENV_FILE / legacy: HAPPY_LOCAL_ENV_FILE) instead of repo env.local.
   const forwarded = args[0] === '--' ? args.slice(1) : args;
   await withStackEnv({
     stackName,
     fn: async ({ env }) => {
       await run(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), ...forwarded], { cwd: rootDir, env });
+    },
+  });
+}
+
+async function cmdAuth({ rootDir, stackName, args }) {
+  // Forward to scripts/auth.mjs under the stack env.
+  // This makes `happys stack auth <name> ...` resolve CLI home/urls for that stack.
+  const forwarded = args[0] === '--' ? args.slice(1) : args;
+  await withStackEnv({
+    stackName,
+    fn: async ({ env }) => {
+      await run(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), ...forwarded], { cwd: rootDir, env });
     },
   });
 }
@@ -552,7 +564,7 @@ async function cmdMigrate({ argv }) {
       '',
       `Next steps:`,
       `- Re-run stacks normally (they'll prefer ${newRoot})`,
-      `- If you use autostart: re-install to get the new label/paths: pnpm service:install`,
+      `- If you use autostart: re-install to get the new label/paths: happys service install`,
     ]
       .filter(Boolean)
       .join('\n'),
@@ -595,7 +607,11 @@ async function cmdListStacks() {
 
 async function main() {
   const rootDir = getRootDir(import.meta.url);
-  const argv = process.argv.slice(2);
+  // pnpm (legacy) passes an extra leading `--` when forwarding args into scripts. Normalize it away so
+  // positional slicing behaves consistently.
+  const rawArgv = process.argv.slice(2);
+  const argv = rawArgv[0] === '--' ? rawArgv.slice(1) : rawArgv;
+
   const { flags } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const cmd = positionals[0] || 'help';
@@ -604,22 +620,23 @@ async function main() {
   if (wantsHelp(argv, { flags }) || cmd === 'help') {
     printResult({
       json,
-      data: { commands: ['new', 'edit', 'list', 'migrate', 'dev', 'start', 'build', 'doctor', 'mobile', 'srv', 'wt', 'tailscale:*', 'service:*'] },
+      data: { commands: ['new', 'edit', 'list', 'migrate', 'auth', 'dev', 'start', 'build', 'doctor', 'mobile', 'srv', 'wt', 'tailscale:*', 'service:*'] },
       text: [
         '[stack] usage:',
-        '  pnpm stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--json]',
-        '  pnpm stack edit <name> --interactive [--json]',
-        '  pnpm stack list [--json]',
-        '  pnpm stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',
-        '  pnpm stack dev <name> [-- ...]',
-        '  pnpm stack start <name> [-- ...]',
-        '  pnpm stack build <name> [-- ...]',
-        '  pnpm stack doctor <name> [-- ...]',
-        '  pnpm stack mobile <name> [-- ...]',
-        '  pnpm stack srv <name> -- status|use ...',
-        '  pnpm stack wt <name> -- <wt args...>',
-        '  pnpm stack tailscale:status|enable|disable|url <name> [-- ...]',
-        '  pnpm stack service:* <name>',
+        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--json]',
+        '  happys stack edit <name> --interactive [--json]',
+        '  happys stack list [--json]',
+        '  happys stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',
+        '  happys stack auth <name> status|login [--json]',
+        '  happys stack dev <name> [-- ...]',
+        '  happys stack start <name> [-- ...]',
+        '  happys stack build <name> [-- ...]',
+        '  happys stack doctor <name> [-- ...]',
+        '  happys stack mobile <name> [-- ...]',
+        '  happys stack srv <name> -- status|use ...',
+        '  happys stack wt <name> -- <wt args...>',
+        '  happys stack tailscale:status|enable|disable|url <name> [-- ...]',
+        '  happys stack service:* <name>',
       ].join('\n'),
     });
     return;
@@ -709,6 +726,10 @@ async function main() {
     await cmdWt({ rootDir, stackName, args: passthrough });
     return;
   }
+  if (cmd === 'auth') {
+    await cmdAuth({ rootDir, stackName, args: passthrough });
+    return;
+  }
 
   if (cmd.startsWith('service:')) {
     const svcCmd = cmd.slice('service:'.length);
@@ -732,4 +753,3 @@ main().catch((err) => {
   console.error('[stack] failed:', err);
   process.exit(1);
 });
-

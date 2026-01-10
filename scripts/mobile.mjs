@@ -14,11 +14,11 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
  * - Ensure the QR/deeplink opens the *dev build* even if the App Store app is installed.
  *
  * Usage:
- *   pnpm mobile
- *   pnpm mobile --host=lan
- *   pnpm mobile --scheme=com.slopus.happy.dev
-  *   pnpm mobile --no-metro
- *   pnpm mobile --run-ios --device="Your iPhone"
+ *   happys mobile
+ *   happys mobile --host=lan
+ *   happys mobile --scheme=com.slopus.happy.dev
+  *   happys mobile --no-metro
+ *   happys mobile --run-ios --device="Your iPhone"
  */
 
 async function main() {
@@ -46,10 +46,10 @@ async function main() {
       },
       text: [
         '[mobile] usage:',
-        '  pnpm mobile [-- --host=lan|localhost|tunnel] [--port=8081] [--scheme=...] [--json]',
-        '  pnpm mobile -- --run-ios [--device=...] [--configuration=Debug|Release]',
-        '  pnpm mobile -- --prebuild [--platform=ios|all] [--clean]',
-        '  pnpm mobile -- --no-metro   # just build/install (if --run-ios) without starting Metro',
+        '  happys mobile [--host=lan|localhost|tunnel] [--port=8081] [--scheme=...] [--json]',
+        '  happys mobile --run-ios [--device=...] [--configuration=Debug|Release]',
+        '  happys mobile --prebuild [--platform=ios|all] [--clean]',
+        '  happys mobile --no-metro   # just build/install (if --run-ios) without starting Metro',
         '',
         'Notes:',
         '- This script is designed to avoid editing upstream `components/happy` config in-place.',
@@ -109,8 +109,8 @@ async function main() {
   const host = kv.get('--host') ?? process.env.HAPPY_STACKS_MOBILE_HOST ?? process.env.HAPPY_LOCAL_MOBILE_HOST ?? 'lan';
   const port = kv.get('--port') ?? process.env.HAPPY_STACKS_MOBILE_PORT ?? process.env.HAPPY_LOCAL_MOBILE_PORT ?? '8081';
   // Default behavior:
-  // - `pnpm mobile` starts Metro and keeps running.
-  // - `pnpm mobile --run-ios` / `pnpm mobile:ios` just builds/installs and exits (unless --metro is provided).
+  // - `happys mobile` starts Metro and keeps running.
+  // - `happys mobile --run-ios` / `happys mobile:ios` just builds/installs and exits (unless --metro is provided).
   const shouldStartMetro =
     flags.has('--metro') ||
     (!flags.has('--no-metro') && !flags.has('--run-ios') && !flags.has('--prebuild'));
@@ -303,4 +303,3 @@ main().catch((err) => {
   console.error('[mobile] failed:', err);
   process.exit(1);
 });
-

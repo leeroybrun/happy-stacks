@@ -8,15 +8,19 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_SOURCE="$SCRIPT_DIR/happy-stacks.5s.sh"
-# Backwards compatible fallback.
-if [[ ! -f "$PLUGIN_SOURCE" ]]; then
-  PLUGIN_SOURCE="$SCRIPT_DIR/happy-local.5s.sh"
-fi
+# No legacy fallback: always install the primary happy-stacks plugin.
 # Default refresh: 5 minutes (good baseline; still refreshes instantly on open).
 # You can override:
 #   HAPPY_LOCAL_SWIFTBAR_INTERVAL=30s ./install.sh
 PLUGIN_INTERVAL="${HAPPY_STACKS_SWIFTBAR_INTERVAL:-${HAPPY_LOCAL_SWIFTBAR_INTERVAL:-5m}}"
 PLUGIN_FILE="happy-stacks.${PLUGIN_INTERVAL}.sh"
+
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+  esac
+done
 
 # Colors
 RED='\033[0;31m'
@@ -124,17 +128,26 @@ echo -e "${YELLOW}Step 3: Installing Happy Stacks plugin...${NC}"
 
 PLUGIN_DEST="$PLUGINS_DIR/$PLUGIN_FILE"
 
+# Remove any legacy happy-local plugins to avoid duplicates.
+rm -f "$PLUGINS_DIR"/happy-local.*.sh 2>/dev/null || true
+
 if [[ -f "$PLUGIN_DEST" ]]; then
     echo "Plugin already exists at $PLUGIN_DEST"
-    echo "Would you like to overwrite it? (y/n)"
-    read -r OVERWRITE_CHOICE
-    
-    if [[ "$OVERWRITE_CHOICE" != "y" ]] && [[ "$OVERWRITE_CHOICE" != "Y" ]]; then
-        echo "Skipping plugin installation."
-    else
+    if [[ "$FORCE" == "1" ]] || [[ ! -t 0 ]]; then
         cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"
         chmod +x "$PLUGIN_DEST"
         echo -e "${GREEN}✓ Plugin updated${NC}"
+    else
+        echo "Would you like to overwrite it? (y/n)"
+        read -r OVERWRITE_CHOICE
+        
+        if [[ "$OVERWRITE_CHOICE" != "y" ]] && [[ "$OVERWRITE_CHOICE" != "Y" ]]; then
+            echo "Skipping plugin installation."
+        else
+            cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"
+            chmod +x "$PLUGIN_DEST"
+            echo -e "${GREEN}✓ Plugin updated${NC}"
+        fi
     fi
 else
     cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"

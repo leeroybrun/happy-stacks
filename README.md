@@ -2,7 +2,8 @@
 
 Run the **Happy** stack locally (or many stacks in parallel) and access it remotely and securely (using Tailscale).
 
-`happy-stacks` is a set of Node scripts (`scripts/*.mjs`) that orchestrate the real upstream repos cloned under `components/*`.
+`happy-stacks` is a CLI (`happys`) that orchestrate the real upstream repos
+cloned under your configured workspace (default: `~/.happy-stacks/workspace/components/*`).
 
 ## What is Happy?
 
@@ -22,26 +23,85 @@ happy-stacks is a “launcher + workflow toolkit” to:
 
 ### Step 1: Install / bootstrap
 
+Recommended:
+
+```bash
+npx happy-stacks init
+export PATH="$HOME/.happy-stacks/bin:$PATH"
+```
+
+Tip: to have `init` add PATH automatically (optional):
+
+```bash
+npx happy-stacks init --install-path
+```
+
+Alternative (global install):
+
+```bash
+npm install -g happy-stacks
+happys init
+export PATH="$HOME/.happy-stacks/bin:$PATH"
+```
+
+(`init` will run `bootstrap` automatically. Use `--no-bootstrap` if you only want to write config and shims.)
+
+Developer mode (clone this repo):
+
 ```bash
 git clone https://github.com/leeroybrun/happy-stacks.git
 cd happy-stacks
 
-pnpm bootstrap -- --interactive
+node ./bin/happys.mjs bootstrap --interactive
+# legacy:
+# pnpm bootstrap -- --interactive
 ```
+
+Notes:
+
+- In a cloned repo, `pnpm <script>` still works, but `happys <command>` is now the recommended UX (same underlying scripts).
 
 ### Step 2: Run the main stack
 
 Starts the local server, CLI daemon, and serves the pre-built UI.
 
 ```bash
-pnpm start
+happys start
+```
+
+### Step 2b (first run only): authenticate the daemon
+
+On a **fresh machine** (or any new stack), the daemon needs to authenticate once before it can register a “machine”.
+
+```bash
+happys auth login
+```
+
+#### Troubleshooting: “no machine” on first run (daemon auth)
+
+If `.../new` shows “no machine” check whether this is **auth** vs a **daemon/runtime** issue:
+
+```bash
+happys auth status
+```
+
+If it says **auth is required**, run:
+
+```bash
+happys auth login
+```
+
+If auth is OK but the daemon isn’t running, run:
+
+```bash
+happys doctor
 ```
 
 ### Step 3: Enable Tailscale Serve (recommended for remote devices)
 
 ```bash
-pnpm tailscale:enable
-pnpm tailscale:url
+happys tailscale enable
+happys tailscale url
 ```
 
 ### Step 4: Mobile access
@@ -50,7 +110,7 @@ Make sure Tailscale is [installed and running]
 ([https://tailscale.com/kb/1347/installation](https://tailscale.com/kb/1347/installation)) on your 
 phone, then either:
 
-- Open the URL from `pnpm tailscale:url` on your phone and “Add to Home Screen”, or
+- Open the URL from `happys tailscale url` on your phone and “Add to Home Screen”, or
 - [Download the Happy mobile app]
 ([https://happy.engineering/](https://happy.engineering/)) and [configure it to use 
 your local server](docs/remote-access.md).
@@ -59,13 +119,13 @@ Details (secure context, phone instructions, automation knobs): `[docs/remote-ac
 
 ## Why this exists
 
-- **Automated setup**: `pnpm bootstrap` + `pnpm start` gets the whole stack up and running.
+- **Automated setup**: `happys init` + `happys start` gets the whole stack up and running.
 - **No hosted dependency**: run the full stack on your own computer.
 - **Lower latency**: localhost/LAN is typically much faster than remote hosted servers.
 - **Custom forks**: easily use forks of the Happy UI + CLI (e.g. `leeroybrun/*`) while still contributing upstream to `slopus/*`.
 - **Worktrees**: clean upstream PR branches without mixing fork-only patches.
 - **Stacks**: run multiple isolated instances in parallel (ports + dirs + component overrides).
-- **Remote access**: `pnpm tailscale:*` helps you get an HTTPS URL for mobile/remote devices.
+- **Remote access**: `happys tailscale ...` helps you get an HTTPS URL for mobile/remote devices.
 
 ## How Happy Stacks wires “local” URLs
 
@@ -120,8 +180,8 @@ Components:
 ### Remote access (Tailscale Serve)
 
 ```bash
-pnpm tailscale:enable
-pnpm tailscale:url
+happys tailscale enable
+happys tailscale url
 ```
 
 Details: `[docs/remote-access.md](docs/remote-access.md)`.
@@ -131,15 +191,15 @@ Details: `[docs/remote-access.md](docs/remote-access.md)`.
 Create a clean upstream PR worktree:
 
 ```bash
-pnpm wt new happy pr/my-feature --from=upstream --use
-pnpm wt push happy active --remote=upstream
+happys wt new happy pr/my-feature --from=upstream --use
+happys wt push happy active --remote=upstream
 ```
 
 Test an upstream PR locally:
 
 ```bash
-pnpm wt pr happy https://github.com/slopus/happy/pull/123 --use
-pnpm wt pr happy 123 --update --stash
+happys wt pr happy https://github.com/slopus/happy/pull/123 --use
+happys wt pr happy 123 --update --stash
 ```
 
 Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
@@ -152,14 +212,14 @@ Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 Switch globally:
 
 ```bash
-pnpm srv -- status
-pnpm srv -- use --interactive
+happys srv status
+happys srv use --interactive
 ```
 
 Switch per-stack:
 
 ```bash
-pnpm stack srv exp1 -- use --interactive
+happys stack srv exp1 -- use --interactive
 ```
 
 Details: `[docs/server-flavors.md](docs/server-flavors.md)`.
@@ -167,16 +227,16 @@ Details: `[docs/server-flavors.md](docs/server-flavors.md)`.
 ### Stacks (multiple isolated instances)
 
 ```bash
-pnpm stack new exp1 --interactive
-pnpm stack dev exp1
+happys stack new exp1 --interactive
+happys stack dev exp1
 ```
 
 Point a stack at a PR worktree:
 
 ```bash
-pnpm wt pr happy 123 --use
-pnpm stack wt exp1 -- use happy slopus/pr/123-fix-thing
-pnpm stack dev exp1
+happys wt pr happy 123 --use
+happys stack wt exp1 -- use happy slopus/pr/123-fix-thing
+happys stack dev exp1
 ```
 
 Details: `[docs/stacks.md](docs/stacks.md)`.
@@ -184,8 +244,8 @@ Details: `[docs/stacks.md](docs/stacks.md)`.
 ### Menu bar (SwiftBar)
 
 ```bash
-pnpm menubar:install
-pnpm menubar:open
+happys menubar install
+happys menubar open
 ```
 
 Details: `[docs/menubar.md](docs/menubar.md)`.
@@ -193,8 +253,8 @@ Details: `[docs/menubar.md](docs/menubar.md)`.
 ### Mobile iOS dev (optional)
 
 ```bash
-pnpm mobile -- --help
-pnpm mobile -- --json
+happys mobile --help
+happys mobile --json
 ```
 
 Details: `[docs/mobile-ios.md](docs/mobile-ios.md)`.
@@ -202,7 +262,7 @@ Details: `[docs/mobile-ios.md](docs/mobile-ios.md)`.
 ### Tauri desktop app (optional)
 
 ```bash
-pnpm build -- --tauri
+happys build --tauri
 ```
 
 Details: `[docs/tauri.md](docs/tauri.md)`.
@@ -210,29 +270,29 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
 ## Commands (high-signal)
 
 - **Setup**:
-  - `pnpm bootstrap`
-  - `pnpm bootstrap -- --interactive` (wizard)
-  - `pnpm bootstrap -- --forks|--upstream`
-  - `pnpm bootstrap -- --server=happy-server|happy-server-light|both`
+  - `happys init`
+  - `happys bootstrap --interactive` (wizard)
+  - `happys bootstrap --forks|--upstream`
+  - `happys bootstrap --server=happy-server|happy-server-light|both`
 - **Run**:
-  - `pnpm start` (production-like; serves built UI via server-light)
-  - `pnpm dev` (dev; Expo web dev server for UI)
+  - `happys start` (production-like; serves built UI via server-light)
+  - `happys dev` (dev; Expo web dev server for UI)
 - **Server flavor**:
-  - `pnpm srv -- status`
-  - `pnpm srv -- use --interactive`
+  - `happys srv status`
+  - `happys srv use --interactive`
 - **Worktrees**:
-  - `pnpm wt use --interactive`
-  - `pnpm wt pr <component> <pr-url|number> --use [--update] [--stash] [--force]`
-  - `pnpm wt sync-all`
-  - `pnpm wt update-all --dry-run` / `pnpm wt update-all --stash`
+  - `happys wt use --interactive`
+  - `happys wt pr <component> <pr-url|number> --use [--update] [--stash] [--force]`
+  - `happys wt sync-all`
+  - `happys wt update-all --dry-run` / `happys wt update-all --stash`
 - **Stacks**:
-  - `pnpm stack new --interactive`
-  - `pnpm stack dev <name>` / `pnpm stack start <name>`
-  - `pnpm stack edit <name> --interactive`
-  - `pnpm stack wt <name> -- use --interactive`
-  - `pnpm stack migrate`
+  - `happys stack new --interactive`
+  - `happys stack dev <name>` / `happys stack start <name>`
+  - `happys stack edit <name> --interactive`
+  - `happys stack wt <name> -- use --interactive`
+  - `happys stack migrate`
 - **Menu bar (SwiftBar)**:
-  - `pnpm menubar:install`
+  - `happys menubar install`
 
 ## Docs (deep dives)
 
@@ -246,11 +306,11 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
 
 ## Configuration
 
-- Copy the template:
+Where config lives by default:
 
-```bash
-cp env.example .env
-```
+- `~/.happy-stacks/.env`: stable “pointer” file (home/workspace/runtime)
+- `~/.happy-stacks/env.local`: optional global overrides
+- `~/.happy/stacks/main/env`: main stack config (port, server flavor, component overrides)
 
 Notes:
 

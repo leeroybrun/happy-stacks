@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { pathExists } from './fs.mjs';
 
@@ -6,6 +6,7 @@ export async function ensureEnvFileUpdated({ envPath, updates }) {
   if (!updates.length) {
     return;
   }
+  await mkdir(dirname(envPath), { recursive: true });
   await writeFileIfChanged(envPath, applyEnvUpdates(await readText(envPath), updates), envPath);
 }
 
@@ -56,4 +57,3 @@ async function writeFileIfChanged(existingContent, nextContent, path) {
   }
   await writeFile(path, normalizedNext, 'utf-8');
 }
-

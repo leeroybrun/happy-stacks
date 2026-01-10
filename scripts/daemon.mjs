@@ -1,5 +1,6 @@
 import { spawnProc, run, runCapture } from './utils/proc.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
@@ -20,6 +21,22 @@ export function cleanupStaleDaemonState(homeDir) {
 
   if (!existsSync(lockPath)) {
     return;
+  }
+
+  // If lock PID exists and is running, keep lock/state.
+  try {
+    const raw = readFileSync(lockPath, 'utf-8').trim();
+    const pid = Number(raw);
+    if (Number.isFinite(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+        return;
+      } catch {
+        // stale pid
+      }
+    }
+  } catch {
+    // ignore
   }
 
   // If state PID exists and is running, keep lock/state.
@@ -73,6 +90,109 @@ function excerptIndicatesMissingAuth(excerpt) {
   );
 }
 
+function authLoginHint() {
+  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+  return stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
+}
+
+async function seedCredentialsIfMissing({ cliHomeDir }) {
+  const sources = [
+    // Legacy happy-local storage root (most common for existing users).
+    join(homedir(), '.happy', 'local', 'cli'),
+    // Older global location.
+    join(homedir(), '.happy'),
+  ];
+
+  const copyIfMissing = async ({ relPath, mode, label }) => {
+    const target = join(cliHomeDir, relPath);
+    if (existsSync(target)) {
+      return { copied: false, source: null, target };
+    }
+    const sourceDir = sources.find((d) => existsSync(join(d, relPath)));
+    if (!sourceDir) {
+      return { copied: false, source: null, target };
+    }
+    const source = join(sourceDir, relPath);
+    await mkdir(cliHomeDir, { recursive: true });
+    await copyFile(source, target);
+    await chmod(target, mode).catch(() => {});
+    console.log(`[local] migrated ${label}: ${source} -> ${target}`);
+    return { copied: true, source, target };
+  };
+
+  // access.key holds the auth token + encryption material (keep tight permissions)
+  const access = await copyIfMissing({ relPath: 'access.key', mode: 0o600, label: 'CLI credentials (access.key)' })
+    .catch((err) => {
+      console.warn(`[local] failed to migrate CLI credentials into ${cliHomeDir}:`, err);
+      return { copied: false, source: null, target: join(cliHomeDir, 'access.key') };
+    });
+
+  // settings.json holds machineId and other client state; migrate to keep your machine identity stable.
+  const settings = await copyIfMissing({ relPath: 'settings.json', mode: 0o600, label: 'CLI settings (settings.json)' })
+    .catch((err) => {
+      console.warn(`[local] failed to migrate CLI settings into ${cliHomeDir}:`, err);
+      return { copied: false, source: null, target: join(cliHomeDir, 'settings.json') };
+    });
+
+  return { ok: true, copied: access.copied || settings.copied, access, settings };
+}
+
+async function killDaemonFromLockFile({ cliHomeDir }) {
+  const lockPath = join(cliHomeDir, 'daemon.state.json.lock');
+  if (!existsSync(lockPath)) {
+    return false;
+  }
+
+  let pid = null;
+  try {
+    const raw = readFileSync(lockPath, 'utf-8').trim();
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      pid = n;
+    }
+  } catch {
+    // ignore
+  }
+  if (!pid) {
+    return false;
+  }
+
+  // If pid is alive, confirm it looks like a happy daemon and terminate it.
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+
+  let cmd = '';
+  try {
+    cmd = await runCapture('ps', ['-p', String(pid), '-o', 'command=']);
+  } catch {
+    cmd = '';
+  }
+  const looksLikeDaemon = cmd.includes(' daemon ') || cmd.includes('daemon start') || cmd.includes('daemon start-sync');
+  if (!looksLikeDaemon) {
+    console.warn(`[local] refusing to kill pid ${pid} from lock file (doesn't look like daemon): ${cmd.trim()}`);
+    return false;
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return false;
+  }
+  await delay(500);
+  try {
+    process.kill(pid, 0);
+    // Still alive: hard kill.
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // exited
+  }
+  console.log(`[local] killed stuck daemon pid ${pid} (from ${lockPath})`);
+  return true;
+}
+
 async function waitForCredentialsFile({ path, timeoutMs, isShuttingDown }) {
   const deadline = Date.now() + timeoutMs;
   while (!isShuttingDown() && Date.now() < deadline) {
@@ -115,6 +235,10 @@ export async function stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir })
   } catch {
     // ignore
   }
+
+  // If the daemon never wrote daemon.state.json (e.g. it got stuck in auth in a non-interactive context),
+  // stopLocalDaemon() can't find it. Fall back to the lock file PID.
+  await killDaemonFromLockFile({ cliHomeDir });
 }
 
 export async function startLocalDaemonWithAuth({
@@ -126,6 +250,10 @@ export async function startLocalDaemonWithAuth({
 }) {
   const baseEnv = { ...process.env };
   const daemonEnv = getDaemonEnv({ baseEnv, cliHomeDir, internalServerUrl, publicServerUrl });
+
+  // If this is a migrated/new stack home dir, seed credentials from the user's existing login (best-effort)
+  // to avoid requiring an interactive auth flow under launchd.
+  await seedCredentialsIfMissing({ cliHomeDir });
 
   // Stop any existing daemon (best-effort) in both legacy and local home dirs.
   const legacyEnv = { ...daemonEnv, HAPPY_HOME_DIR: join(homedir(), '.happy') };
@@ -145,6 +273,10 @@ export async function startLocalDaemonWithAuth({
   } catch {
     // ignore
   }
+
+  // If state is missing and stop couldn't find it, force-stop the lock PID (otherwise repeated restarts accumulate daemons).
+  await killDaemonFromLockFile({ cliHomeDir: join(homedir(), '.happy') });
+  await killDaemonFromLockFile({ cliHomeDir });
 
   // Clean up stale lock/state files that can block daemon start.
   cleanupStaleDaemonState(join(homedir(), '.happy'));
@@ -180,7 +312,7 @@ export async function startLocalDaemonWithAuth({
         `[local] daemon is not authenticated yet (expected on first run).\n` +
         `[local] Keeping the server running so you can login.\n` +
         `[local] In another terminal, run:\n` +
-        `HAPPY_HOME_DIR=\"${cliHomeDir}\" HAPPY_SERVER_URL=\"${internalServerUrl}\" HAPPY_WEBAPP_URL=\"${publicServerUrl}\" node \"${cliBin}\" auth login --force\n` +
+        `${authLoginHint()}\n` +
         `[local] Waiting for credentials at ${credentialsPath}...`
       );
 
@@ -198,9 +330,7 @@ export async function startLocalDaemonWithAuth({
         throw new Error('Failed to start daemon (after credentials were created)');
       }
     } else {
-      console.error(`[local] To re-auth against the local server, run:\n` +
-        `HAPPY_HOME_DIR=\"${cliHomeDir}\" HAPPY_SERVER_URL=\"${internalServerUrl}\" HAPPY_WEBAPP_URL=\"${publicServerUrl}\" ` +
-        `node \"${cliBin}\" auth login --force`);
+      console.error(`[local] To authenticate against this local server, run:\n${authLoginHint()}`);
       throw new Error('Failed to start daemon');
     }
   }
@@ -217,4 +347,3 @@ export async function daemonStatusSummary({ cliBin, cliHomeDir, internalServerUr
   const env = getDaemonEnv({ baseEnv: process.env, cliHomeDir, internalServerUrl, publicServerUrl });
   return await runCapture('node', [cliBin, 'daemon', 'status'], { env });
 }
-

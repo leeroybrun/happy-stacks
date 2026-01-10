@@ -53,16 +53,16 @@ The menu also includes:
 
 The menu also provides “jump off” actions for the worktree tooling:
 
-- `pnpm wt use --interactive`
-- `pnpm wt new --interactive`
-- `pnpm wt sync-all`
-- `pnpm wt update-all --dry-run` / `pnpm wt update-all`
-- `pnpm wt pr ...` (via an in-menu prompt)
+- `happys wt use --interactive`
+- `happys wt new --interactive`
+- `happys wt sync-all`
+- `happys wt update-all --dry-run` / `happys wt update-all`
+- `happys wt pr ...` (via an in-menu prompt)
 
 For stack-specific worktree selection (which components a stack uses), use:
 
-- `pnpm stack edit <name> --interactive`
-  - or `pnpm stack wt <name> -- use --interactive`
+- `happys stack edit <name> --interactive`
+  - or `happys stack wt <name> -- use --interactive`
 
 ## Implementation notes
 
@@ -85,14 +85,14 @@ brew install --cask swiftbar
 From the `happy-stacks` repo:
 
 ```bash
-pnpm menubar:install
+happys menubar install
 ```
 
 If you want a different default refresh interval at install time:
 
 ```bash
-HAPPY_STACKS_SWIFTBAR_INTERVAL=15m pnpm menubar:install
-# legacy: HAPPY_LOCAL_SWIFTBAR_INTERVAL=15m pnpm menubar:install
+HAPPY_STACKS_SWIFTBAR_INTERVAL=15m happys menubar install
+# legacy: HAPPY_LOCAL_SWIFTBAR_INTERVAL=15m happys menubar install
 ```
 
 ### 3) Open the active SwiftBar plugin folder
@@ -100,7 +100,7 @@ HAPPY_STACKS_SWIFTBAR_INTERVAL=15m pnpm menubar:install
 SwiftBar can be configured to use a custom plugin directory. To open the *active* one:
 
 ```bash
-pnpm menubar:open
+happys menubar open
 ```
 
 ## How refresh works (important)
@@ -143,7 +143,30 @@ SwiftBar is independent from the Happy Stacks LaunchAgent.
 - Check which plugin folder SwiftBar is using:
   - SwiftBar → Preferences → Plugin Folder
 - Open the active folder:
-  - `pnpm menubar:open`
+  - `happys menubar open`
+
+### Daemon shows “auth required” / “no machine”
+
+This happens on a **fresh machine** (or any new stack) when the daemon does not yet have credentials in the
+stack-specific CLI home directory.
+
+**What’s going on**
+
+- The daemon stores credentials in `access.key` under the CLI home directory.
+- For stacks (including main), that’s typically:
+  - `~/.happy/stacks/<name>/cli/access.key`
+- When `access.key` is missing, `happy-cli daemon start` enters an interactive auth flow and won’t become a “machine” until it completes.
+  - Under `launchd` (autostart), this shows up as **no machine** and the daemon may appear “stopped”.
+
+**If it still needs auth**
+
+- In SwiftBar, open the **Daemon** section:
+  - If it shows `auth_required`, click **Auth login (opens browser)**
+- Or run manually:
+
+```bash
+happys auth login
+```
 
 ### “Daemon stale” even though it’s running
 
@@ -153,4 +176,3 @@ The plugin checks:
 - (optionally) the daemon control server responds.
 
 If the daemon is running but the menu is stale, refresh and check the **PID** line under “Daemon”.
-

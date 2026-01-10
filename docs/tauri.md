@@ -23,13 +23,13 @@ The Tauri app is a native desktop wrapper around the web UI. It’s useful when 
 Build (one-off):
 
 ```bash
-pnpm build -- --tauri
+happys build --tauri
 ```
 
 Or during bootstrap:
 
 ```bash
-pnpm bootstrap -- --tauri
+happys bootstrap --tauri
 ```
 
 ## Run it
@@ -37,7 +37,7 @@ pnpm bootstrap -- --tauri
 1) Start the local server (or install the service):
 
 ```bash
-pnpm start
+happys start
 ```
 
 2) Launch the built app bundle (location is under `~/.happy/local/tauri-target/`).
@@ -50,7 +50,7 @@ If you build the Tauri app while Tailscale Serve is enabled on the server machin
 
 Requirements:
 
-- The server machine is running `pnpm start` and Tailscale Serve is enabled
+- The server machine is running `happys start` and Tailscale Serve is enabled
 - The other computer is on the same tailnet and can access the `https://*.ts.net` URL
 
 ## Configuration (high-signal)
@@ -60,4 +60,3 @@ Requirements:
 - `HAPPY_STACKS_TAURI_DEBUG=0` (legacy: `HAPPY_LOCAL_TAURI_DEBUG=0`) (build release-like without devtools)
 - `HAPPY_STACKS_TAURI_SERVER_URL` (legacy: `HAPPY_LOCAL_TAURI_SERVER_URL`) (force the embedded API URL)
 - `HAPPY_STACKS_TAURI_PREFER_TAILSCALE=0` (legacy: `HAPPY_LOCAL_TAURI_PREFER_TAILSCALE=0`) (disable Tailscale detection; always embed `127.0.0.1`)
-

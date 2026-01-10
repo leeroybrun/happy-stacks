@@ -23,7 +23,7 @@ Legacy path (still supported during migration):
 To migrate existing stacks:
 
 ```bash
-pnpm stack migrate
+happys stack migrate
 ```
 
 ## Create a stack
@@ -31,19 +31,19 @@ pnpm stack migrate
 Non-interactive:
 
 ```bash
-pnpm stack new exp1 --port=3010 --server=happy-server-light
+happys stack new exp1 --port=3010 --server=happy-server-light
 ```
 
 Auto-pick a port:
 
 ```bash
-pnpm stack new exp2
+happys stack new exp2
 ```
 
 Interactive wizard (TTY only):
 
 ```bash
-pnpm stack new --interactive
+happys stack new --interactive
 ```
 
 The wizard lets you:
@@ -57,25 +57,25 @@ The wizard lets you:
 Dev mode:
 
 ```bash
-pnpm stack dev exp1
+happys stack dev exp1
 ```
 
 Production-like mode:
 
 ```bash
-pnpm stack start exp1
+happys stack start exp1
 ```
 
 Build UI for a stack (server-light serving):
 
 ```bash
-pnpm stack build exp1
+happys stack build exp1
 ```
 
 Doctor:
 
 ```bash
-pnpm stack doctor exp1
+happys stack doctor exp1
 ```
 
 ## Edit a stack (interactive)
@@ -83,7 +83,7 @@ pnpm stack doctor exp1
 To change server flavor, port, or component worktrees for an existing stack:
 
 ```bash
-pnpm stack edit exp1 --interactive
+happys stack edit exp1 --interactive
 ```
 
 ## Switch server flavor for a stack
@@ -91,20 +91,20 @@ pnpm stack edit exp1 --interactive
 You can change `happy-server-light` vs `happy-server` for an existing stack without re-running the full edit wizard:
 
 ```bash
-pnpm stack srv exp1 -- status
-pnpm stack srv exp1 -- use happy-server-light
-pnpm stack srv exp1 -- use happy-server
-pnpm stack srv exp1 -- use --interactive
+happys stack srv exp1 -- status
+happys stack srv exp1 -- use happy-server-light
+happys stack srv exp1 -- use happy-server
+happys stack srv exp1 -- use --interactive
 ```
 
 ## Switch component worktrees for a stack (`stack wt`)
 
-If you want the **exact** same UX as `pnpm wt`, but scoped to a stack env file:
+If you want the **exact** same UX as `happys wt`, but scoped to a stack env file:
 
 ```bash
-pnpm stack wt exp1 -- status happy
-pnpm stack wt exp1 -- use happy slopus/pr/my-ui-pr
-pnpm stack wt exp1 -- use happy-cli default
+happys stack wt exp1 -- status happy
+happys stack wt exp1 -- use happy slopus/pr/my-ui-pr
+happys stack wt exp1 -- use happy-cli default
 ```
 
 This updates the stack env file (`~/.happy/stacks/<name>/env`), not repo `env.local` (legacy path still supported).
@@ -113,30 +113,30 @@ This updates the stack env file (`~/.happy/stacks/<name>/env`), not repo `env.lo
 
 These commands run with the stack env file applied:
 
-- `pnpm stack dev <name>`
-- `pnpm stack start <name>`
-- `pnpm stack build <name>`
-- `pnpm stack doctor <name>`
-- `pnpm stack mobile <name>`
-- `pnpm stack srv <name> -- status|use ...`
-- `pnpm stack wt <name> -- <wt args...>`
-- `pnpm stack tailscale:status|enable|disable|url <name>`
-- `pnpm stack service:* <name>`
+- `happys stack dev <name>`
+- `happys stack start <name>`
+- `happys stack build <name>`
+- `happys stack doctor <name>`
+- `happys stack mobile <name>`
+- `happys stack srv <name> -- status|use ...`
+- `happys stack wt <name> -- <wt args...>`
+- `happys stack tailscale:status|enable|disable|url <name>`
+- `happys stack service:* <name>`
 
 Global/non-stack commands:
 
-- `pnpm bootstrap` (sets up shared component repos)
-- `pnpm cli:link` (global PATH wrapper install)
+- `happys bootstrap` (sets up shared component repos)
+- `happys cli:link` (installs `happy` shim under `~/.happy-stacks/bin/`)
 
 ## Services (macOS LaunchAgents)
 
 Each stack can have its own LaunchAgent (so multiple stacks can start at login).
 
 ```bash
-pnpm stack service:install exp1
-pnpm stack service:status exp1
-pnpm stack service:restart exp1
-pnpm stack service:logs exp1
+happys stack service:install exp1
+happys stack service:status exp1
+happys stack service:restart exp1
+happys stack service:logs exp1
 ```
 
 Implementation notes:
@@ -151,7 +151,7 @@ Implementation notes:
 When creating a stack you can point components at worktrees:
 
 ```bash
-pnpm stack new exp3 \\
+happys stack new exp3 \\
   --happy=slopus/pr/my-ui-pr \\
   --happy-cli=slopus/pr/my-cli-pr \\
   --server=happy-server
@@ -175,19 +175,38 @@ You can also pass an absolute path.
 
 On startup, `happy-stacks` loads env in this order:
 
-1. `happy-stacks/.env` (defaults)
-2. `happy-stacks/env.local` (local overrides)
+1. `~/.happy-stacks/.env` (defaults)
+2. `~/.happy-stacks/env.local` (local overrides)
 3. `HAPPY_STACKS_ENV_FILE` (stack env; highest precedence for `HAPPY_STACKS_*` / `HAPPY_LOCAL_*`)
 
-`pnpm stack ...` sets `HAPPY_STACKS_ENV_FILE=~/.happy/stacks/<name>/env` (and also sets legacy `HAPPY_LOCAL_ENV_FILE`) and clears any already-exported `HAPPY_STACKS_*` / `HAPPY_LOCAL_*` variables so the stack env stays authoritative.
+`happys stack ...` sets `HAPPY_STACKS_ENV_FILE=~/.happy/stacks/<name>/env` (and also sets legacy `HAPPY_LOCAL_ENV_FILE`) and clears any already-exported `HAPPY_STACKS_*` / `HAPPY_LOCAL_*` variables so the stack env stays authoritative.
+
+## Daemon auth + “no machine” on first run
+
+On a **fresh machine** (or any new stack), the daemon may need to authenticate before it can register a “machine”.
+If the UI shows “no machine” (or the daemon shows `auth_required`), it usually means the stack-specific CLI home
+doesn’t have credentials yet:
+
+- `~/.happy/stacks/<stack>/cli/access.key`
+
+To check / authenticate a stack, run:
+
+```bash
+happys stack auth <stack> status
+happys stack auth <stack> login
+```
+
+Notes:
+- For the **main** stack, use `<stack>=main` and the default `<port>=3005` (unless you changed it).
+- If you use Tailscale Serve, `HAPPY_WEBAPP_URL` should be your HTTPS URL (what you get from `happys tailscale url`).
+- Logs live under `~/.happy/stacks/<stack>/cli/logs/`.
 
 ## JSON mode
 
 For programmatic usage:
 
 ```bash
-pnpm stack list --json
-pnpm stack new exp3 --json
-pnpm stack edit exp3 --interactive --json
+happys stack list --json
+happys stack new exp3 --json
+happys stack edit exp3 --interactive --json
 ```
-

@@ -53,7 +53,7 @@ render_component_server() {
   local server_pid="$6"
   local server_metrics="$7"
   local tailscale_url="$8"  # main only (optional)
-  local launch_label="${9:-}" # optional (com.happy.local[.<stack>])
+  local launch_label="${9:-}" # optional (com.happy.stacks[.<stack>])
 
   local level="red"
   [[ "$server_status" == "running" ]] && level="green"
@@ -147,7 +147,7 @@ render_component_server() {
 
 render_component_daemon() {
   local prefix="$1"
-  local daemon_status="$2"   # running|stale|stopped|unknown|running-no-http
+  local daemon_status="$2"   # running|stale|stopped|unknown|running-no-http|auth_required|starting
   local daemon_pid="$3"
   local daemon_metrics="$4"
   local daemon_uptime="$5"
@@ -157,7 +157,7 @@ render_component_daemon() {
 
   local level="red"
   if [[ "$daemon_status" == "running" ]]; then level="green"; fi
-  if [[ "$daemon_status" == "running-no-http" || "$daemon_status" == "stale" ]]; then level="orange"; fi
+  if [[ "$daemon_status" == "running-no-http" || "$daemon_status" == "stale" || "$daemon_status" == "auth_required" || "$daemon_status" == "starting" ]]; then level="orange"; fi
 
   local sf="$(sf_for_level "$level")"
   local color="$(color_for_level "$level")"
@@ -178,10 +178,33 @@ render_component_daemon() {
   fi
   [[ -n "$daemon_uptime" ]] && print_item "$p2" "Started: $(shorten_text "$daemon_uptime" 52)"
   [[ -n "$last_heartbeat" ]] && print_item "$p2" "Last heartbeat: $(shorten_text "$last_heartbeat" 52)"
+  # State file may not exist yet (e.g. daemon is waiting for auth).
   print_item "$p2" "State file: $(shorten_path "$state_file" 52)"
 
   if [[ -n "$PNPM_BIN" ]]; then
     print_sep "$p2"
+    if [[ "$daemon_status" == "auth_required" ]]; then
+      # Provide a direct "fix" action for the common first-run problem under launchd.
+      local auth_helper="$HAPPY_LOCAL_DIR/extras/swiftbar/auth-login.sh"
+      local server_url="http://127.0.0.1:$(resolve_main_port)"
+      local webapp_url
+      webapp_url="$(get_tailscale_url)"
+      [[ -z "$webapp_url" ]] && webapp_url="http://localhost:$(resolve_main_port)"
+      if [[ "$stack_name" == "main" ]]; then
+        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=main param2=$server_url param3=$webapp_url dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
+      else
+        # For stacks, best-effort use the stack's configured port if available (fallback to main port).
+        local env_file="$HOME/.happy/stacks/$stack_name/env"
+        local port
+        port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
+        [[ -z "$port" ]] && port="$(resolve_main_port)"
+        server_url="http://127.0.0.1:${port}"
+        webapp_url="$(get_tailscale_url)"
+        [[ -z "$webapp_url" ]] && webapp_url="http://localhost:${port}"
+        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=$stack_name param2=$server_url param3=$webapp_url param4=$HOME/.happy/stacks/$stack_name/cli dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
+      fi
+      print_sep "$p2"
+    fi
     if [[ "$stack_name" == "main" ]]; then
       print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=service:restart dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     else
@@ -499,7 +522,7 @@ render_component_repo() {
     if [[ -z "$tsv" ]]; then
       print_item "$p3" "No worktrees found | color=$GRAY"
     else
-      local root="$HAPPY_LOCAL_DIR/components/.worktrees/$component/"
+      local root="$(resolve_components_dir)/.worktrees/$component/"
       local shown=0
       while IFS=$'\t' read -r wt_path wt_branchref; do
         [[ -n "$wt_path" ]] || continue
@@ -553,14 +576,16 @@ render_components_menu() {
 
   print_item "$prefix" "Components | sfimage=cube"
   local p2="${prefix}--"
-  if [[ ! -d "$HAPPY_LOCAL_DIR/components" ]]; then
-    print_item "$p2" "Missing components dir: $(shorten_path "$HAPPY_LOCAL_DIR/components" 52) | color=$GRAY"
+  local components_dir
+  components_dir="$(resolve_components_dir)"
+  if [[ ! -d "$components_dir" ]]; then
+    print_item "$p2" "Missing components dir: $(shorten_path "$components_dir" 52) | color=$GRAY"
     return
   fi
 
   local any="0"
   for c in happy happy-cli happy-server-light happy-server; do
-    if [[ -d "$HAPPY_LOCAL_DIR/components/$c" ]]; then
+    if [[ -d "$components_dir/$c" ]]; then
       any="1"
       render_component_repo "$p2" "$c" "$context" "$stack_name" "$env_file"
       print_sep "$p2"
@@ -741,5 +766,4 @@ render_stack_info() {
     print_item "$p2" "PR worktree into this stack (prompt) | bash=$pr_helper param1=_prompt_ param2=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   fi
 }
-
 

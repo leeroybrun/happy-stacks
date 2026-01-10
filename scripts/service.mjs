@@ -3,14 +3,16 @@ import { run, runCapture } from './utils/proc.mjs';
 import { getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/pm.mjs';
 import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { readFile } from 'node:fs/promises';
 
 /**
- * Manage the macOS LaunchAgent installed by `pnpm bootstrap -- --autostart`.
+ * Manage the macOS LaunchAgent installed by `happys bootstrap -- --autostart`.
  *
  * Commands:
  * - install | uninstall
@@ -41,7 +43,7 @@ function getAutostartEnv({ rootDir }) {
   // Instead, persist only the env file path; `scripts/utils/env.mjs` will load it on every start.
   //
   // Stack installs:
-  // - `pnpm stack service:install <name>` runs `scripts/service.mjs` under a stack env already
+  // - `happys stack service <name> install` runs `scripts/service.mjs` under a stack env already
   //   (HAPPY_LOCAL_ENV_FILE points at ~/.happy/stacks/<name>/env or legacy path), so we persist that.
   //
   // Main installs:
@@ -100,10 +102,23 @@ async function launchctlTry(args) {
   }
 }
 
+async function restartLaunchAgentBestEffort() {
+  const { plistPath, label } = getDefaultAutostartPaths();
+  if (!existsSync(plistPath)) {
+    throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: happys service:install (or happys bootstrap -- --autostart)`);
+  }
+  const uid = getUid();
+  if (uid == null) {
+    return false;
+  }
+  // Prefer kickstart -k to avoid overlapping stop/start windows (which can stop a freshly started daemon).
+  return await launchctlTry(['kickstart', '-k', `gui/${uid}/${label}`]);
+}
+
 async function startLaunchAgent({ persistent }) {
   const { plistPath } = getDefaultAutostartPaths();
   if (!existsSync(plistPath)) {
-    throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: pnpm service:install (or pnpm bootstrap -- --autostart)`);
+    throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: happys service:install (or happys bootstrap -- --autostart)`);
   }
 
   const { label } = getDefaultAutostartPaths();
@@ -131,10 +146,158 @@ async function startLaunchAgent({ persistent }) {
   await launchctlTry(['kickstart', '-k', `gui/${uid}/${label}`]);
 }
 
+async function postStartDiagnostics() {
+  const rootDir = getRootDir(import.meta.url);
+  const internalUrl = getInternalUrl();
+
+  const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
+    ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
+    : join(getDefaultAutostartPaths().baseDir, 'cli');
+
+  const publicUrl =
+    process.env.HAPPY_LOCAL_SERVER_URL?.trim()
+      ? process.env.HAPPY_LOCAL_SERVER_URL.trim()
+      : internalUrl.replace('127.0.0.1', 'localhost');
+
+  const cliDir = join(rootDir, 'components', 'happy-cli');
+  const cliBin = join(cliDir, 'bin', 'happy.mjs');
+
+  const accessKey = join(cliHomeDir, 'access.key');
+  const stateFile = join(cliHomeDir, 'daemon.state.json');
+  const lockFile = join(cliHomeDir, 'daemon.state.json.lock');
+  const logsDir = join(cliHomeDir, 'logs');
+
+  const readLastLines = async (path, lines = 60) => {
+    try {
+      const raw = await readFile(path, 'utf-8');
+      const parts = raw.split('\n');
+      return parts.slice(Math.max(0, parts.length - lines)).join('\n');
+    } catch {
+      return null;
+    }
+  };
+
+  const latestDaemonLog = async () => {
+    try {
+      const ls = await runCapture('bash', ['-lc', `ls -1t "${logsDir}"/*-daemon.log 2>/dev/null | head -1 || true`]);
+      const p = ls.trim();
+      return p || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const checkOnce = async () => {
+    // If state exists, trust it.
+    if (existsSync(stateFile)) {
+      try {
+        const raw = await readFile(stateFile, 'utf-8');
+        const s = JSON.parse(raw);
+        const pid = Number(s?.pid);
+        if (Number.isFinite(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0);
+            return { ok: true, kind: 'running', pid };
+          } catch {
+            return { ok: false, kind: 'stale_state', pid };
+          }
+        }
+      } catch {
+        return { ok: false, kind: 'bad_state' };
+      }
+    }
+
+    // No state yet: check lock PID (daemon may be starting or waiting for auth).
+    if (existsSync(lockFile)) {
+      try {
+        const raw = (await readFile(lockFile, 'utf-8')).trim();
+        const pid = Number(raw);
+        if (Number.isFinite(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0);
+            const logPath = await latestDaemonLog();
+            const tail = logPath ? await readLastLines(logPath, 120) : null;
+            if (tail && (tail.includes('No credentials found') || tail.includes('authentication flow') || tail.includes('Waiting for credentials'))) {
+              return { ok: false, kind: 'auth_required', pid, logPath };
+            }
+            return { ok: false, kind: 'starting', pid, logPath };
+          } catch {
+            return { ok: false, kind: 'stale_lock', pid };
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return { ok: false, kind: 'stopped' };
+  };
+
+  // Wait briefly for the daemon to settle after a restart.
+  let res = await checkOnce();
+  for (let i = 0; i < 12 && !res.ok; i++) {
+    if (res.kind === 'auth_required') {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 650));
+    // eslint-disable-next-line no-await-in-loop
+    res = await checkOnce();
+    if (res.ok) {
+      break;
+    }
+  }
+
+  if (res.ok && res.kind === 'running') {
+    console.log(`[local] daemon: running (pid=${res.pid})`);
+    return;
+  }
+
+  // Not running: print actionable diagnostics (without referencing SwiftBar).
+  if (res.kind === 'starting') {
+    console.log(`[local] daemon: starting (pid=${res.pid ?? 'unknown'})`);
+    if (res.logPath) {
+      console.log(`[local] daemon log: ${res.logPath}`);
+    }
+    return;
+  }
+  if (!existsSync(accessKey)) {
+    console.log(`[local] daemon: not running (auth required; missing credentials at ${accessKey})`);
+    console.log('[local] authenticate for this stack home with:');
+    console.log(
+      getDefaultAutostartPaths().stackName === 'main'
+        ? 'happys auth login'
+        : `happys stack auth ${getDefaultAutostartPaths().stackName} login`
+    );
+  } else if (res.kind === 'auth_required') {
+    console.log(`[local] daemon: waiting for auth (pid=${res.pid})`);
+    console.log('[local] authenticate for this stack home with:');
+    console.log(
+      getDefaultAutostartPaths().stackName === 'main'
+        ? 'happys auth login'
+        : `happys stack auth ${getDefaultAutostartPaths().stackName} login`
+    );
+  } else {
+    console.log('[local] daemon: not running');
+  }
+
+  const logPath = res.logPath ? res.logPath : await latestDaemonLog();
+  if (logPath) {
+    const tail = await readLastLines(logPath, 80);
+    console.log(`[local] last daemon log: ${logPath}`);
+    if (tail) {
+      console.log('--- last 80 daemon log lines ---');
+      console.log(tail);
+      console.log('--- end ---');
+    }
+  } else {
+    console.log(`[local] daemon logs dir: ${logsDir}`);
+  }
+}
+
 async function stopLaunchAgent({ persistent }) {
   const { plistPath } = getDefaultAutostartPaths();
   if (!existsSync(plistPath)) {
-    throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: pnpm service:install (or pnpm bootstrap -- --autostart)`);
+    throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: happys service:install (or happys bootstrap -- --autostart)`);
   }
 
   const { label } = getDefaultAutostartPaths();
@@ -156,6 +319,24 @@ async function stopLaunchAgent({ persistent }) {
     return;
   }
   await launchctlTry(['bootout', `gui/${uid}/${label}`]);
+}
+
+async function waitForLaunchAgentStopped({ timeoutMs = 8000 } = {}) {
+  const { label } = getDefaultAutostartPaths();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const list = await runCapture('launchctl', ['list']);
+      const still = list.split('\n').some((l) => l.includes(`\t${label}`) || l.trim().endsWith(` ${label}`) || l.trim() === label);
+      if (!still) {
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
 }
 
 async function showStatus() {
@@ -223,13 +404,13 @@ async function main() {
       data: { commands: ['install', 'uninstall', 'status', 'start', 'stop', 'restart', 'enable', 'disable', 'logs', 'tail'] },
       text: [
         '[service] usage:',
-        '  pnpm service:install [--json]',
-        '  pnpm service:uninstall [--json]',
-        '  pnpm service:status [--json]',
-        '  pnpm service:start|stop|restart [--json]',
-        '  pnpm service:enable|disable [--json]',
-        '  pnpm logs [--json]',
-        '  pnpm logs:tail',
+        '  happys service:install [--json]',
+        '  happys service:uninstall [--json]',
+        '  happys service:status [--json]',
+        '  happys service:start|stop|restart [--json]',
+        '  happys service:enable|disable [--json]',
+        '  happys logs [--json]',
+        '  happys logs:tail',
       ].join('\n'),
     });
     return;
@@ -278,6 +459,7 @@ async function main() {
       return;
     case 'start':
       await startLaunchAgent({ persistent: false });
+      await postStartDiagnostics();
       if (json) printResult({ json, data: { ok: true, action: 'start' } });
       return;
     case 'stop':
@@ -285,12 +467,17 @@ async function main() {
       if (json) printResult({ json, data: { ok: true, action: 'stop' } });
       return;
     case 'restart':
-      await stopLaunchAgent({ persistent: false });
-      await startLaunchAgent({ persistent: false });
+      if (!(await restartLaunchAgentBestEffort())) {
+        await stopLaunchAgent({ persistent: false });
+        await waitForLaunchAgentStopped();
+        await startLaunchAgent({ persistent: false });
+      }
+      await postStartDiagnostics();
       if (json) printResult({ json, data: { ok: true, action: 'restart' } });
       return;
     case 'enable':
       await startLaunchAgent({ persistent: true });
+      await postStartDiagnostics();
       if (json) printResult({ json, data: { ok: true, action: 'enable' } });
       return;
     case 'disable':
@@ -324,5 +511,3 @@ if (isDirectExecution()) {
     process.exit(1);
   });
 }
-
-

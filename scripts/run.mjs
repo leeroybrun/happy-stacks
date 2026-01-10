@@ -32,7 +32,8 @@ async function main() {
       data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon'], json: true },
       text: [
         '[start] usage:',
-        '  pnpm start [-- --server=happy-server|happy-server-light] [--json]',
+        '  happys start [--server=happy-server|happy-server-light] [--json]',
+        '  (legacy in a cloned repo): pnpm start [-- --server=happy-server|happy-server-light] [--json]',
         '  note: --json prints the resolved config (dry-run) and exits.',
       ].join('\n'),
     });
@@ -106,7 +107,7 @@ async function main() {
   }
 
   if (serveUi && !(await pathExists(uiBuildDir))) {
-    throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: pnpm build`);
+    throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: happys build (legacy in a cloned repo: pnpm build)`);
   }
 
   const children = [];
@@ -230,5 +231,3 @@ main().catch((err) => {
   console.error('[local] failed:', err);
   process.exit(1);
 });
-
-

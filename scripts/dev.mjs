@@ -29,7 +29,7 @@ async function main() {
       data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon'], json: true },
       text: [
         '[dev] usage:',
-        '  pnpm dev [-- --server=happy-server|happy-server-light] [--json]',
+        '  happys dev [--server=happy-server|happy-server-light] [--json]',
         '  note: --json prints the resolved config (dry-run) and exits.',
       ].join('\n'),
     });
@@ -176,4 +176,3 @@ main().catch((err) => {
   console.error('[local] failed:', err);
   process.exit(1);
 });
-

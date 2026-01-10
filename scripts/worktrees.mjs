@@ -21,9 +21,7 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
 
   if (!raw) {
     // Default: use currently active dir for this component (env override if present, otherwise components/<component>).
-    const key = componentDirEnvKey(component);
-    const active = (process.env[key] ?? '').trim();
-    return active ? resolve(rootDir, active) : join(getComponentsDir(rootDir), component);
+    return getComponentDir(rootDir, component);
   }
 
   if (raw === 'default' || raw === 'main') {
@@ -31,9 +29,7 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
   }
 
   if (raw === 'active') {
-    const key = componentDirEnvKey(component);
-    const active = (process.env[key] ?? '').trim();
-    return active ? resolve(rootDir, active) : join(getComponentsDir(rootDir), component);
+    return getComponentDir(rootDir, component);
   }
 
   if (isAbsolute(raw)) {
@@ -474,20 +470,22 @@ async function cmdUse({ rootDir, args }) {
   const component = args[0];
   const spec = args[1];
   if (!component || !spec) {
-    throw new Error('[wt] usage: pnpm wt use <component> <owner/branch|path|default>');
+    throw new Error('[wt] usage: happys wt use <component> <owner/branch|path|default>');
   }
 
   const key = componentDirEnvKey(component);
   const worktreesRoot = getWorktreesRoot(rootDir);
-  const envPath = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : null;
+  const envPath = process.env.HAPPY_STACKS_ENV_FILE?.trim()
+    ? process.env.HAPPY_STACKS_ENV_FILE.trim()
+    : process.env.HAPPY_LOCAL_ENV_FILE?.trim()
+      ? process.env.HAPPY_LOCAL_ENV_FILE.trim()
+      : null;
 
   if (spec === 'default' || spec === 'main') {
     // Clear override by setting it to empty (env.local keeps a record of last use, but override becomes inactive).
-    if (envPath) {
-      await ensureEnvFileUpdated({ envPath, updates: [{ key, value: '' }] });
-    } else {
-      await ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: '' }] });
-    }
+    await (envPath
+      ? ensureEnvFileUpdated({ envPath, updates: [{ key, value: '' }] })
+      : ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: '' }] }));
     return { component, activeDir: join(getComponentsDir(rootDir), component), mode: 'default' };
   }
 
@@ -502,11 +500,9 @@ async function cmdUse({ rootDir, args }) {
     throw new Error(`[wt] target does not exist: ${dir}`);
   }
 
-  if (envPath) {
-    await ensureEnvFileUpdated({ envPath, updates: [{ key, value: dir }] });
-  } else {
-    await ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: dir }] });
-  }
+  await (envPath
+    ? ensureEnvFileUpdated({ envPath, updates: [{ key, value: dir }] })
+    : ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: dir }] }));
   return { component, activeDir: dir, mode: 'override' };
 }
 
@@ -565,7 +561,7 @@ async function cmdNew({ rootDir, argv }) {
   const slug = positionals[2];
   if (!component || !slug) {
     throw new Error(
-      '[wt] usage: pnpm wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use]'
+      '[wt] usage: happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use]'
     );
   }
 
@@ -642,7 +638,7 @@ async function cmdPr({ rootDir, argv }) {
   const prInput = positionals[2];
   if (!component || !prInput) {
     throw new Error(
-      '[wt] usage: pnpm wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--force] [--json]'
+      '[wt] usage: happys wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--force] [--json]'
     );
   }
 
@@ -697,7 +693,7 @@ async function cmdPr({ rootDir, argv }) {
     if (!isAncestor && !force) {
       throw new Error(
         `[wt] PR update is not a fast-forward (likely force-push) for ${branchName}\n` +
-          `[wt] re-run with: pnpm wt pr ${component} ${pr.number} --remote=${remoteName} --update --force`
+          `[wt] re-run with: happys wt pr ${component} ${pr.number} --remote=${remoteName} --update --force`
       );
     }
 
@@ -778,7 +774,7 @@ async function cmdStatus({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt status <component> [worktreeSpec|default|path]');
+    throw new Error('[wt] usage: happys wt status <component> [worktreeSpec|default|path]');
   }
 
   const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
@@ -823,7 +819,7 @@ async function cmdPush({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt push <component> [worktreeSpec|default|path] [--remote=origin] [--dry-run]');
+    throw new Error('[wt] usage: happys wt push <component> [worktreeSpec|default|path] [--remote=origin] [--dry-run]');
   }
 
   const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
@@ -853,7 +849,7 @@ async function cmdUpdate({ rootDir, argv }) {
   const spec = positionals[2] ?? '';
   if (!component) {
     throw new Error(
-      '[wt] usage: pnpm wt update <component> [worktreeSpec|default|path] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--force]'
+      '[wt] usage: happys wt update <component> [worktreeSpec|default|path] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--force]'
     );
   }
 
@@ -1054,10 +1050,10 @@ async function cmdGit({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt git <component> [worktreeSpec|active|main|default|path] -- <git args...>');
+    throw new Error('[wt] usage: happys wt git <component> [worktreeSpec|active|main|default|path] -- <git args...>');
   }
   if (!after.length) {
-    throw new Error('[wt] git requires args after `--` (example: pnpm wt git happy main -- status)');
+    throw new Error('[wt] git requires args after `--` (example: happys wt git happy main -- status)');
   }
 
   const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
@@ -1085,7 +1081,7 @@ async function cmdSync({ rootDir, argv }) {
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const component = positionals[1];
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt sync <component> [--remote=<name>]');
+    throw new Error('[wt] usage: happys wt sync <component> [--remote=<name>]');
   }
 
   const { kv } = parseArgs(argv);
@@ -1218,7 +1214,7 @@ async function cmdShell({ rootDir, argv }) {
   const spec = positionals[2] ?? '';
   if (!component) {
     throw new Error(
-      '[wt] usage: pnpm wt shell <component> [worktreeSpec|active|default|main|path] [--shell=/bin/zsh] [--terminal=auto|current|ghostty|iterm|terminal] [--new-window] [--json]'
+      '[wt] usage: happys wt shell <component> [worktreeSpec|active|default|main|path] [--shell=/bin/zsh] [--terminal=auto|current|ghostty|iterm|terminal] [--new-window] [--json]'
     );
   }
   const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
@@ -1267,7 +1263,7 @@ async function cmdCode({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt code <component> [worktreeSpec|active|default|main|path] [--json]');
+    throw new Error('[wt] usage: happys wt code <component> [worktreeSpec|active|default|main|path] [--json]');
   }
   const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
   if (!(await pathExists(dir))) {
@@ -1290,7 +1286,7 @@ async function cmdCursor({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt cursor <component> [worktreeSpec|active|default|main|path] [--json]');
+    throw new Error('[wt] usage: happys wt cursor <component> [worktreeSpec|active|default|main|path] [--json]');
   }
   const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
   if (!(await pathExists(dir))) {
@@ -1452,7 +1448,7 @@ async function cmdNewInteractive({ rootDir, argv }) {
 async function cmdList({ rootDir, args }) {
   const component = args[0];
   if (!component) {
-    throw new Error('[wt] usage: pnpm wt list <component>');
+    throw new Error('[wt] usage: happys wt list <component>');
   }
 
   const wtRoot = getWorktreesRoot(rootDir);
@@ -1506,21 +1502,21 @@ async function main() {
       },
       text: [
         '[wt] usage:',
-        '  pnpm wt migrate [--json]',
-        '  pnpm wt sync <component> [--remote=<name>] [--json]',
-        '  pnpm wt sync-all [--remote=<name>] [--json]',
-        '  pnpm wt list <component> [--json]',
-        '  pnpm wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--interactive|-i] [--json]',
-        '  pnpm wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
-        '  pnpm wt use <component> <owner/branch|path|default|main> [--interactive|-i] [--json]',
-        '  pnpm wt status <component> [worktreeSpec|default|path] [--json]',
-        '  pnpm wt update <component> [worktreeSpec|default|path] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
-        '  pnpm wt update-all [component] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
-        '  pnpm wt push <component> [worktreeSpec|default|path] [--remote=origin] [--dry-run] [--json]',
-        '  pnpm wt git <component> [worktreeSpec|active|default|main|path] -- <git args...> [--json]',
-        '  pnpm wt shell <component> [worktreeSpec|active|default|main|path] [--shell=/bin/zsh] [--json]',
-        '  pnpm wt code <component> [worktreeSpec|active|default|main|path] [--json]',
-        '  pnpm wt cursor <component> [worktreeSpec|active|default|main|path] [--json]',
+        '  happys wt migrate [--json]',
+        '  happys wt sync <component> [--remote=<name>] [--json]',
+        '  happys wt sync-all [--remote=<name>] [--json]',
+        '  happys wt list <component> [--json]',
+        '  happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--interactive|-i] [--json]',
+        '  happys wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
+        '  happys wt use <component> <owner/branch|path|default|main> [--interactive|-i] [--json]',
+        '  happys wt status <component> [worktreeSpec|default|path] [--json]',
+        '  happys wt update <component> [worktreeSpec|default|path] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
+        '  happys wt update-all [component] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
+        '  happys wt push <component> [worktreeSpec|default|path] [--remote=origin] [--dry-run] [--json]',
+        '  happys wt git <component> [worktreeSpec|active|default|main|path] -- <git args...> [--json]',
+        '  happys wt shell <component> [worktreeSpec|active|default|main|path] [--shell=/bin/zsh] [--json]',
+        '  happys wt code <component> [worktreeSpec|active|default|main|path] [--json]',
+        '  happys wt cursor <component> [worktreeSpec|active|default|main|path] [--json]',
         '',
         'selectors:',
         '  (omitted) or "active": current active checkout (env override if set; else components/<component>)',
@@ -1694,4 +1690,3 @@ main().catch((err) => {
   console.error('[wt] failed:', err);
   process.exit(1);
 });
-

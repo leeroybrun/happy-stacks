@@ -234,23 +234,27 @@ resolve_component_dir_from_env_file() {
   # Usage: resolve_component_dir_from_env_file <env_file> <component>
   local env_file="$1"
   local component="$2"
-  local key=""
+  local stacks_key=""
+  local local_key=""
   case "$component" in
-    happy) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY" ;;
-    happy-cli) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI" ;;
-    happy-server-light) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT" ;;
-    happy-server) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER" ;;
-    *) key="" ;;
+    happy) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY" ;;
+    happy-cli) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI" ;;
+    happy-server-light) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT" ;;
+    happy-server) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER" ;;
+    *) stacks_key="" ;;
   esac
+  local_key="${stacks_key/HAPPY_STACKS_/HAPPY_LOCAL_}"
 
-  local fallback="$HAPPY_LOCAL_DIR/components/$component"
-  if [[ -z "$env_file" || -z "$key" || ! -f "$env_file" ]]; then
+  local fallback
+  fallback="$(resolve_components_dir)/$component"
+  if [[ -z "$env_file" || -z "$stacks_key" || ! -f "$env_file" ]]; then
     echo "$fallback"
     return
   fi
 
   local raw
-  raw="$(dotenv_get "$env_file" "$key")"
+  raw="$(dotenv_get "$env_file" "$stacks_key")"
+  [[ -z "$raw" ]] && raw="$(dotenv_get "$env_file" "$local_key")"
   if [[ -z "$raw" ]]; then
     echo "$fallback"
     return
@@ -262,7 +266,7 @@ resolve_component_dir_from_env_file() {
   if [[ "$raw" == /* ]]; then
     echo "$raw"
   else
-    echo "$HAPPY_LOCAL_DIR/$raw"
+    echo "$(resolve_workspace_dir)/$raw"
   fi
 }
 
@@ -271,27 +275,42 @@ resolve_component_dir_from_env() {
   # Usage: resolve_component_dir_from_env <component>
   # Output: absolute path (best-effort). Falls back to $HAPPY_LOCAL_DIR/components/<component>.
   local component="$1"
-  local key=""
+  local stacks_key=""
+  local local_key=""
   case "$component" in
-    happy) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY" ;;
-    happy-cli) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI" ;;
-    happy-server-light) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT" ;;
-    happy-server) key="HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER" ;;
-    *) key="" ;;
+    happy) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY" ;;
+    happy-cli) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI" ;;
+    happy-server-light) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT" ;;
+    happy-server) stacks_key="HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER" ;;
+    *) stacks_key="" ;;
   esac
+  local_key="${stacks_key/HAPPY_STACKS_/HAPPY_LOCAL_}"
 
   local raw=""
-  if [[ -n "$key" && -n "${!key:-}" ]]; then
-    raw="${!key}"
+  if [[ -n "$stacks_key" && -n "${!stacks_key:-}" ]]; then
+    raw="${!stacks_key}"
   fi
-  if [[ -z "$raw" && -n "$key" ]]; then
-    raw="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "$key")"
-  fi
-  if [[ -z "$raw" && -n "$key" ]]; then
-    raw="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "$key")"
+  if [[ -z "$raw" && -n "$local_key" && -n "${!local_key:-}" ]]; then
+    raw="${!local_key}"
   fi
 
-  local fallback="$HAPPY_LOCAL_DIR/components/$component"
+  local env_file
+  env_file="$(resolve_main_env_file)"
+  if [[ -z "$raw" && -n "$env_file" && -n "$stacks_key" ]]; then
+    raw="$(dotenv_get "$env_file" "$stacks_key")"
+    [[ -z "$raw" ]] && raw="$(dotenv_get "$env_file" "$local_key")"
+  fi
+  if [[ -z "$raw" && -n "$stacks_key" ]]; then
+    raw="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "$stacks_key")"
+    [[ -z "$raw" ]] && raw="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "$local_key")"
+  fi
+  if [[ -z "$raw" && -n "$stacks_key" ]]; then
+    raw="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "$stacks_key")"
+    [[ -z "$raw" ]] && raw="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "$local_key")"
+  fi
+
+  local fallback
+  fallback="$(resolve_components_dir)/$component"
   if [[ -z "$raw" ]]; then
     echo "$fallback"
     return
@@ -306,7 +325,6 @@ resolve_component_dir_from_env() {
   if [[ "$raw" == /* ]]; then
     echo "$raw"
   else
-    echo "$HAPPY_LOCAL_DIR/$raw"
+    echo "$(resolve_workspace_dir)/$raw"
   fi
 }
-

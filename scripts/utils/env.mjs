@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDotenv } from './dotenv.mjs';
@@ -22,7 +24,19 @@ async function loadEnvFile(path, { override = false, overridePrefix = null } = {
 // This file lives under scripts/utils/, so repo root is two directories up.
 const __utilsDir = dirname(fileURLToPath(import.meta.url));
 const __scriptsDir = dirname(__utilsDir);
-const __rootDir = dirname(__scriptsDir);
+const __cliRootDir = dirname(__scriptsDir);
+
+function expandHome(p) {
+  return p.replace(/^~(?=\/)/, homedir());
+}
+
+function resolveHomeDir() {
+  const fromEnv = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim();
+  if (fromEnv) {
+    return expandHome(fromEnv);
+  }
+  return join(homedir(), '.happy-stacks');
+}
 
 function applyStacksPrefixMapping() {
   // Canonicalize env var prefix:
@@ -51,11 +65,50 @@ function applyStacksPrefixMapping() {
   }
 }
 
-// 1) Load repo defaults (.env) first (lowest precedence)
-await loadEnvFile(join(__rootDir, '.env'), { override: false });
-// 2) Load repo-local overrides (env.local) (still below stack env)
-await loadEnvFile(join(__rootDir, 'env.local'), { override: true, overridePrefix: 'HAPPY_LOCAL_' });
-await loadEnvFile(join(__rootDir, 'env.local'), { override: true, overridePrefix: 'HAPPY_STACKS_' });
+const __homeDir = resolveHomeDir();
+process.env.HAPPY_STACKS_HOME_DIR = process.env.HAPPY_STACKS_HOME_DIR ?? __homeDir;
+
+// Prefer canonical home config:
+//   ~/.happy-stacks/.env
+//   ~/.happy-stacks/env.local
+//
+// Backwards compatible fallback for cloned-repo usage (when home config doesn't exist yet):
+//   <repo>/.env
+//   <repo>/env.local
+const homeEnv = join(__homeDir, '.env');
+const homeLocal = join(__homeDir, 'env.local');
+const hasHomeConfig = existsSync(homeEnv) || existsSync(homeLocal);
+
+// 1) Load defaults first (lowest precedence)
+if (hasHomeConfig) {
+  await loadEnvFile(homeEnv, { override: false });
+  await loadEnvFile(homeLocal, { override: true, overridePrefix: 'HAPPY_LOCAL_' });
+  await loadEnvFile(homeLocal, { override: true, overridePrefix: 'HAPPY_STACKS_' });
+} else {
+  await loadEnvFile(join(__cliRootDir, '.env'), { override: false });
+  await loadEnvFile(join(__cliRootDir, 'env.local'), { override: true, overridePrefix: 'HAPPY_LOCAL_' });
+  await loadEnvFile(join(__cliRootDir, 'env.local'), { override: true, overridePrefix: 'HAPPY_STACKS_' });
+}
+
+// If no explicit env file is set, and we're on the default "main" stack, prefer the stack-scoped env file
+// if it exists: ~/.happy/stacks/main/env
+(() => {
+  const stacksEnv = (process.env.HAPPY_STACKS_ENV_FILE ?? '').trim();
+  const localEnv = (process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim();
+  if (stacksEnv || localEnv) {
+    return;
+  }
+  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+  if (stackName !== 'main') {
+    return;
+  }
+  const mainEnv = join(homedir(), '.happy', 'stacks', 'main', 'env');
+  if (!existsSync(mainEnv)) {
+    return;
+  }
+  process.env.HAPPY_STACKS_ENV_FILE = mainEnv;
+  process.env.HAPPY_LOCAL_ENV_FILE = mainEnv;
+})();
 // 3) Load explicit env file overlay (stack env, or any caller-provided env file) last (highest precedence)
 if (process.env.HAPPY_STACKS_ENV_FILE?.trim()) {
   await loadEnvFile(process.env.HAPPY_STACKS_ENV_FILE.trim(), { override: true, overridePrefix: 'HAPPY_STACKS_' });
@@ -83,4 +136,3 @@ process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT = process.env.NPM_CONFIG_PACKAGE_M
   const next = [...want.filter((p) => p && !current.includes(p)), ...current];
   process.env.PATH = next.join(delimiter);
 })();
-

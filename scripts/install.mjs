@@ -9,14 +9,14 @@ import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { installService, uninstallService } from './service.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
+import { ensureHomeEnvLocalUpdated } from './utils/config.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
 
 /**
  * Install/setup the local stack:
  * - ensure components exist (optionally clone if missing)
- * - pnpm install where needed
- * - build + npm link happy-cli (so `happy` is on PATH)
+ * - install dependencies where needed
+ * - build happy-cli (optional) and install `happy`/`happys` shims under `~/.happy-stacks/bin`
  * - build the web UI bundle (so `run` can serve it)
  * - optional macOS autostart (LaunchAgent)
  */
@@ -95,7 +95,7 @@ async function ensureComponentPresent({ dir, label, repoUrl, allowClone }) {
   if (!repoUrl) {
     throw new Error(
       `[local] missing ${label} at ${dir} and no repo URL configured.\n` +
-        `Set HAPPY_LOCAL_${label}_REPO_URL, or run: pnpm bootstrap -- --forks / --upstream`
+        `Set HAPPY_LOCAL_${label}_REPO_URL, or run: happys bootstrap -- --forks / --upstream`
     );
   }
   await mkdir(dirname(dir), { recursive: true });
@@ -201,11 +201,9 @@ async function main() {
       data: { flags: ['--forks', '--upstream', '--clone', '--no-clone', '--autostart', '--no-autostart', '--server=...'], json: true },
       text: [
         '[bootstrap] usage:',
-        '  pnpm bootstrap [-- --forks|--upstream] [--server=happy-server|happy-server-light|both] [--json]',
-        '  pnpm bootstrap -- --interactive',
-        '  pnpm local:setup   # alias for interactive bootstrap',
-        '  pnpm bootstrap:wizard   # alias for interactive bootstrap',
-        '  pnpm bootstrap -- --no-clone',
+        '  happys bootstrap [--forks|--upstream] [--server=happy-server|happy-server-light|both] [--json]',
+        '  happys bootstrap --interactive',
+        '  happys bootstrap --no-clone',
       ].join('\n'),
     });
     return;
@@ -233,8 +231,7 @@ async function main() {
   if (wizard) {
     const owners = repoUrlsFromOwners({ forkOwner: wizard.forkOwner, upstreamOwner: wizard.upstreamOwner });
     const chosen = repoSource === 'upstream' ? owners.upstream : owners.forks;
-    await ensureEnvLocalUpdated({
-      rootDir,
+    await ensureHomeEnvLocalUpdated({
       updates: [
         { key: 'HAPPY_LOCAL_REPO_SOURCE', value: repoSource },
         { key: 'HAPPY_LOCAL_UI_REPO_URL', value: chosen.ui },
@@ -332,7 +329,7 @@ async function main() {
 
   // Optional git remote + mirror branch configuration
   if (wizard?.configureGit) {
-    // Ensure upstream remotes exist so `pnpm wt sync-all` works consistently.
+    // Ensure upstream remotes exist so `happys wt sync-all` works consistently.
     const upstreamRepos = getRepoUrls({ repoSource: 'upstream' });
     await ensureUpstreamRemote({ repoDir: uiDir, upstreamUrl: upstreamRepos.ui });
     await ensureUpstreamRemote({ repoDir: cliDir, upstreamUrl: upstreamRepos.cli });
@@ -346,7 +343,7 @@ async function main() {
 
     // Create/update mirror branches like slopus/main for each repo (best-effort).
     try {
-      await run('pnpm', ['-s', 'wt', 'sync-all', '--json'], { cwd: rootDir });
+      await run(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), 'sync-all', '--json'], { cwd: rootDir });
     } catch {
       // ignore (still useful even if one component fails)
     }
@@ -371,5 +368,3 @@ main().catch((err) => {
   console.error('[local] install failed:', err);
   process.exit(1);
 });
-
-

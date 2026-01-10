@@ -116,7 +116,7 @@ Legacy aliases still work:
 
 - `HAPPY_LOCAL_COMPONENT_DIR_*`
 
-Use `pnpm wt use ...` instead of editing env files by hand.
+Use `happys wt use ...` instead of editing env files by hand. (Legacy in a cloned repo: `pnpm wt use ...`.)
 
 ---
 
@@ -152,7 +152,7 @@ Legacy stack env files are still supported:
 To migrate legacy stack env files:
 
 ```bash
-pnpm stack migrate
+happys stack migrate
 ```
 
 ---
@@ -161,9 +161,15 @@ pnpm stack migrate
 
 Scripts load environment in this order:
 
+1. `~/.happy-stacks/.env` (lowest precedence; created by `happys init`)
+2. `~/.happy-stacks/env.local`
+3. stack env file (highest precedence) via `HAPPY_STACKS_ENV_FILE` (legacy: `HAPPY_LOCAL_ENV_FILE`)
+
+Backwards compatible fallback for cloned-repo usage (when home config doesn’t exist yet):
+
 1. repo `.env` (lowest precedence)
 2. repo `env.local`
-3. stack env file (highest precedence) via `HAPPY_STACKS_ENV_FILE` (legacy: `HAPPY_LOCAL_ENV_FILE`)
+3. stack env file (highest precedence)
 
 #### **Prefix migration**
 
@@ -176,20 +182,29 @@ The loader maps both ways so either prefix works, but new configuration should u
 
 ### The only commands you should use (cheat sheet)
 
+#### **Install / init (recommended)**
+
+No repo clone required:
+
+```bash
+npx happy-stacks init
+export PATH="$HOME/.happy-stacks/bin:$PATH"
+```
+
 #### **Bootstrap / setup**
 
 Clone missing components, install deps, build/link wrappers, optional autostart:
 
 ```bash
-pnpm bootstrap
-pnpm bootstrap -- --interactive
+happys bootstrap
+happys bootstrap --interactive
 ```
 
 Pick upstream clone source explicitly:
 
 ```bash
-pnpm bootstrap -- --forks
-pnpm bootstrap -- --upstream
+happys bootstrap --forks
+happys bootstrap --upstream
 ```
 
 #### **Run**
@@ -197,13 +212,13 @@ pnpm bootstrap -- --upstream
 Production-like (serves built UI via server-light):
 
 ```bash
-pnpm start
+happys start
 ```
 
 Dev mode (Expo web dev server for UI):
 
 ```bash
-pnpm dev
+happys dev
 ```
 
 #### **Server flavor**
@@ -211,37 +226,37 @@ pnpm dev
 We support `happy-server-light` and `happy-server` (not simultaneously for one run).
 
 ```bash
-pnpm srv -- status
-pnpm srv -- use happy-server-light
-pnpm srv -- use happy-server
-pnpm srv -- use --interactive
+happys srv status
+happys srv use happy-server-light
+happys srv use happy-server
+happys srv use --interactive
 ```
 
-Note: we use `pnpm srv` (not `pnpm server`) because pnpm has a built-in `server` command.
+Note: in a cloned repo, `pnpm srv -- ...` still works (legacy).
 
 #### **Worktrees**
 
 Key commands:
 
 ```bash
-pnpm wt migrate
-pnpm wt use --interactive
-pnpm wt new --interactive
-pnpm wt list happy
-pnpm wt status happy
-pnpm wt sync-all
-pnpm wt update-all --dry-run
-pnpm wt update-all --stash
-pnpm wt git happy active -- status
-pnpm wt shell happy slopus/pr/123-fix-thing
-pnpm wt code happy slopus/pr/123-fix-thing
-pnpm wt cursor happy slopus/pr/123-fix-thing
+happys wt migrate
+happys wt use --interactive
+happys wt new --interactive
+happys wt list happy
+happys wt status happy
+happys wt sync-all
+happys wt update-all --dry-run
+happys wt update-all --stash
+happys wt git happy active -- status
+happys wt shell happy slopus/pr/123-fix-thing
+happys wt code happy slopus/pr/123-fix-thing
+happys wt cursor happy slopus/pr/123-fix-thing
 ```
 
 Create a worktree for an upstream PR:
 
 ```bash
-pnpm wt pr happy https://github.com/slopus/happy/pull/123 --use
+happys wt pr happy https://github.com/slopus/happy/pull/123 --use
 ```
 
 Update a PR worktree when new commits are pushed:
@@ -251,9 +266,9 @@ Update a PR worktree when new commits are pushed:
 - use `--stash` to auto-stash local modifications before updating
 
 ```bash
-pnpm wt pr happy 123 --update
-pnpm wt pr happy 123 --update --stash
-pnpm wt pr happy 123 --update --force
+happys wt pr happy 123 --update
+happys wt pr happy 123 --update --stash
+happys wt pr happy 123 --update --force
 ```
 
 #### **Stacks**
@@ -261,24 +276,24 @@ pnpm wt pr happy 123 --update --force
 Create and run additional isolated stacks:
 
 ```bash
-pnpm stack new exp1 --interactive
-pnpm stack dev exp1
-pnpm stack start exp1
-pnpm stack edit exp1 --interactive
-pnpm stack list
+happys stack new exp1 --interactive
+happys stack dev exp1
+happys stack start exp1
+happys stack edit exp1 --interactive
+happys stack list
 ```
 
 Run worktree tooling scoped to a stack env file:
 
 ```bash
-pnpm stack wt exp1 -- use --interactive
-pnpm stack wt exp1 -- status happy
+happys stack wt exp1 -- use --interactive
+happys stack wt exp1 -- status happy
 ```
 
 Switch server flavor for a stack:
 
 ```bash
-pnpm stack srv exp1 -- use --interactive
+happys stack srv exp1 -- use --interactive
 ```
 
 ---
@@ -293,14 +308,14 @@ Example: you want to propose a change to upstream `slopus/happy`.
 
 ```bash
 # Create a new worktree branch based on upstream.
-pnpm wt new happy pr/my-feature --from=upstream --use
+happys wt new happy pr/my-feature --from=upstream --use
 
 # (optional) open a shell/editor in that worktree
-pnpm wt shell happy active
-pnpm wt cursor happy active
+happys wt shell happy active
+happys wt cursor happy active
 
 # When done, push to upstream remote (or push to your fork and open PR to upstream)
-pnpm wt push happy active --remote=upstream
+happys wt push happy active --remote=upstream
 ```
 
 Notes:
@@ -312,8 +327,8 @@ Notes:
 Example: you want a change that stays in our fork distribution branch, not upstream.
 
 ```bash
-pnpm wt new happy local/my-fork-only-patch --from=origin --use
-pnpm wt push happy active --remote=origin
+happys wt new happy local/my-fork-only-patch --from=origin --use
+happys wt push happy active --remote=origin
 ```
 
 #### **3) Check out a GitHub PR as a worktree**
@@ -322,34 +337,34 @@ Example: you want to review/test a PR locally without mixing it into other work.
 
 ```bash
 # Create from PR URL (recommended)
-pnpm wt pr happy https://github.com/slopus/happy/pull/123 --use
+happys wt pr happy https://github.com/slopus/happy/pull/123 --use
 
 # Update later when new commits land on the PR:
-pnpm wt pr happy 123 --update
+happys wt pr happy 123 --update
 
 # If the worktree is dirty:
-pnpm wt pr happy 123 --update --stash
+happys wt pr happy 123 --update --stash
 
 # If the PR was force-pushed and FF-only fails:
-pnpm wt pr happy 123 --update --force
+happys wt pr happy 123 --update --force
 ```
 
 #### **4) Switch what the launcher runs (“activate” a worktree)**
 
-Example: you have multiple worktrees and want `pnpm dev/start/build` to use one of them.
+Example: you have multiple worktrees and want `happys dev/start/build` to use one of them.
 
 ```bash
-pnpm wt use happy slopus/pr/123-fix-thing
-pnpm wt use happy-cli default
-pnpm wt use happy-server-light default
+happys wt use happy slopus/pr/123-fix-thing
+happys wt use happy-cli default
+happys wt use happy-server-light default
 ```
 
 Reset back to defaults:
 
 ```bash
-pnpm wt use happy default
-pnpm wt use happy-cli default
-pnpm wt use happy-server-light default
+happys wt use happy default
+happys wt use happy-cli default
+happys wt use happy-server-light default
 ```
 
 #### **5) Create a new stack (isolated env + ports + dirs)**
@@ -357,15 +372,15 @@ pnpm wt use happy-server-light default
 Interactive (recommended):
 
 ```bash
-pnpm stack new exp1 --interactive
-pnpm stack dev exp1
+happys stack new exp1 --interactive
+happys stack dev exp1
 ```
 
 Non-interactive:
 
 ```bash
-pnpm stack new exp2 --port=3010 --server=happy-server-light
-pnpm stack start exp2
+happys stack new exp2 --port=3010 --server=happy-server-light
+happys stack start exp2
 ```
 
 #### **6) Test a PR inside a stack (recommended for parallel work)**
@@ -374,26 +389,26 @@ Example: keep your “main” stack stable, test PRs in `exp1`.
 
 ```bash
 # Create/update PR worktree
-pnpm wt pr happy 123 --use
+happys wt pr happy 123 --use
 
 # Point exp1 at that worktree (stack-scoped; does NOT touch env.local)
-pnpm stack wt exp1 -- use happy slopus/pr/123-fix-thing
+happys stack wt exp1 -- use happy slopus/pr/123-fix-thing
 
 # Run the stack
-pnpm stack dev exp1
+happys stack dev exp1
 ```
 
 #### **7) Update everything (sync mirror branches + update active worktrees)**
 
 ```bash
 # Ensure slopus/main (mirror) is up to date across components
-pnpm wt sync-all
+happys wt sync-all
 
 # Preview updates across components
-pnpm wt update-all --dry-run
+happys wt update-all --dry-run
 
 # Apply updates (auto-stash if needed)
-pnpm wt update-all --stash
+happys wt update-all --stash
 ```
 
 ---
@@ -404,8 +419,8 @@ pnpm wt update-all --stash
 
 - Keep our fork’s `main` as the day-to-day distribution branch.
 - For upstream PRs, use **worktrees** so you get clean branches based on upstream:
-  - create PR worktree with `pnpm wt pr ...`
-  - or create a new branch from upstream with `pnpm wt new ... --from=upstream`
+  - create PR worktree with `happys wt pr ...`
+  - or create a new branch from upstream with `happys wt new ... --from=upstream`
 
 #### **When upstream merges a change you also carried locally**
 
@@ -441,19 +456,19 @@ Expectations:
 Commands:
 
 ```bash
-pnpm service:install
-pnpm service:status
-pnpm logs:tail
-pnpm stack service:install exp1
-pnpm stack service:status exp1
+happys service install
+happys service status
+happys service tail
+happys stack service:install exp1
+happys stack service:status exp1
 ```
 
 ---
 
 ### SwiftBar menu bar plugin (optional)
 
-- Installer: `pnpm menubar:install`
-- It supports stacks and worktrees, and uses the same terminal/shell preferences as `pnpm wt shell`.
+- Installer: `happys menubar install`
+- It supports stacks and worktrees, and uses the same terminal/shell preferences as `happys wt shell`.
 
 ---
 
@@ -462,7 +477,6 @@ pnpm stack service:status exp1
 - **Don’t edit component repos in-place on `components/<component>` unless that’s the intended “main/default” checkout.**
   - Prefer creating a worktree for any change that should become a PR.
 - **Always pick a target upstream** (usually `slopus`) and keep PR branches clean.
-- **Use `pnpm wt` / `pnpm stack` commands instead of raw `git worktree` / manual env edits** whenever possible.
+- **Use `happys wt` / `happys stack` commands instead of raw `git worktree` / manual env edits** whenever possible.
 - **Respect env precedence**: stack env file overrides everything; don’t “hardcode” paths in scripts.
 - **Avoid breaking changes** to env vars/paths; preserve legacy behavior when possible
-

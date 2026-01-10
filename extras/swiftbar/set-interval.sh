@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Runs non-interactively from SwiftBar:
 # - figures out SwiftBar's active plugin directory
-# - renames (or installs) happy-stacks.<interval>.sh (legacy: happy-local.<interval>.sh)
+# - renames (or installs) happy-stacks.<interval>.sh
 # - restarts SwiftBar so the new schedule takes effect
 
 INTERVAL="${1:-}"
@@ -26,32 +26,19 @@ if [[ -z "$PLUGIN_DIR" ]]; then
 fi
 mkdir -p "$PLUGIN_DIR"
 
-TARGET="$PLUGIN_DIR/happy-local.${INTERVAL}.sh"
-LEGACY_TARGET="$PLUGIN_DIR/happy-local.${INTERVAL}.sh"
 TARGET="$PLUGIN_DIR/happy-stacks.${INTERVAL}.sh"
-SOURCE="${PWD}/extras/swiftbar/happy-stacks.5s.sh"
-LEGACY_SOURCE="${PWD}/extras/swiftbar/happy-local.5s.sh"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
+SOURCE="${HAPPY_LOCAL_DIR}/extras/swiftbar/happy-stacks.5s.sh"
 
-# If a happy-stacks or happy-local plugin already exists, rename it into place; otherwise copy from repo source.
+# If a happy-stacks plugin already exists, rename it into place; otherwise copy from repo source.
 EXISTING="$(ls "$PLUGIN_DIR"/happy-stacks.*.sh 2>/dev/null | head -1 || true)"
-if [[ -z "$EXISTING" ]]; then
-EXISTING="$(ls "$PLUGIN_DIR"/happy-local.*.sh 2>/dev/null | head -1 || true)"
-fi
 if [[ -n "$EXISTING" ]]; then
   if [[ "$EXISTING" != "$TARGET" ]]; then
     rm -f "$TARGET"
     mv "$EXISTING" "$TARGET"
   fi
 else
-  if [[ ! -f "$SOURCE" ]]; then
-    # Fall back to legacy source in older checkouts.
-    if [[ -f "$LEGACY_SOURCE" ]]; then
-      SOURCE="$LEGACY_SOURCE"
-    else
-      echo "cannot find plugin source at: $SOURCE" >&2
-      exit 1
-    fi
-  fi
   if [[ ! -f "$SOURCE" ]]; then
     echo "cannot find plugin source at: $SOURCE" >&2
     exit 1
@@ -60,9 +47,8 @@ else
 fi
 
 # Remove any other intervals to avoid duplicates in SwiftBar.
-for f in "$PLUGIN_DIR"/happy-stacks.*.sh "$PLUGIN_DIR"/happy-local.*.sh; do
+for f in "$PLUGIN_DIR"/happy-stacks.*.sh; do
   [[ "$f" == "$TARGET" ]] && continue
-  [[ "$f" == "$LEGACY_TARGET" ]] && continue
   rm -f "$f" || true
 done
 
@@ -74,4 +60,3 @@ killall SwiftBar 2>/dev/null || true
 open -a SwiftBar
 
 echo "ok: $TARGET"
-

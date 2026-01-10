@@ -70,10 +70,9 @@ export async function getRemoteOwner({ repoDir, remoteName = 'upstream' }) {
 }
 
 export async function createWorktree({ rootDir, component, slug, remoteName = 'upstream' }) {
-  // Use pnpm wt new but do not set env.local.
-  await run('pnpm', ['-s', 'wt', 'new', component, slug, `--remote=${remoteName}`], { cwd: rootDir });
+  // Create without modifying env.local (unless caller passes --use elsewhere).
+  await run(process.execPath, [join(rootDir, 'bin', 'happys.mjs'), 'wt', 'new', component, slug, `--remote=${remoteName}`], { cwd: rootDir });
   const repoDir = componentRepoDir(rootDir, component);
   const owner = await getRemoteOwner({ repoDir, remoteName });
   return join(getWorktreesRoot(rootDir), component, owner, ...slug.split('/'));
 }
-

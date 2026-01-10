@@ -9,6 +9,7 @@ import { daemonStatusSummary } from './daemon.mjs';
 import { tailscaleServeStatus, resolvePublicServerUrl } from './tailscale.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 
 /**
@@ -60,7 +61,7 @@ async function main() {
       data: { flags: ['--fix', '--server=happy-server|happy-server-light'], json: true },
       text: [
         '[doctor] usage:',
-        '  pnpm stack:doctor [--fix] [--json]',
+        '  happys doctor [--fix] [--json]',
         '  node scripts/doctor.mjs [--fix] [--server=happy-server|happy-server-light] [--json]',
       ].join('\n'),
     });
@@ -151,7 +152,7 @@ async function main() {
       if (!json) console.log('✅ ui build dir present');
     } else {
       report.checks.uiBuildDir = { ok: false, missing: uiBuildDir };
-      if (!json) console.log(`❌ ui build dir missing (${uiBuildDir}) → run: pnpm build`);
+      if (!json) console.log(`❌ ui build dir missing (${uiBuildDir}) → run: happys build`);
     }
   } else {
     report.checks.uiServing = { ok: false, reason: 'disabled (HAPPY_LOCAL_SERVE_UI=0)' };
@@ -170,8 +171,18 @@ async function main() {
     report.checks.daemon = { ok: true, line: line || null };
     if (!json) console.log(`✅ daemon: ${line ? line : 'status ok'}`);
   } catch (e) {
-    report.checks.daemon = { ok: false };
-    if (!json) console.log('❌ daemon: not running / status failed');
+    const accessKeyPath = join(cliHomeDir, 'access.key');
+    const hasAccessKey = existsSync(accessKeyPath);
+    report.checks.daemon = { ok: false, hasAccessKey, accessKeyPath };
+    if (!json) {
+      console.log('❌ daemon: not running / status failed');
+      if (!hasAccessKey) {
+        const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+        console.log(`  ↪ likely cause: missing credentials at ${accessKeyPath}`);
+        console.log(`  ↪ fix: authenticate for this stack:`);
+        console.log(`     ${stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`}`);
+      }
+    }
   }
 
   // Tailscale Serve status (best-effort)
@@ -189,7 +200,7 @@ async function main() {
   if (process.platform === 'darwin') {
     try {
       const list = await runCapture('launchctl', ['list']);
-      const line = list.split('\n').find((l) => l.includes('com.happy.local'))?.trim();
+      const line = list.split('\n').find((l) => l.includes('com.happy.stacks'))?.trim();
       report.checks.launchd = { ok: true, line: line || null };
       if (!json) console.log(`✅ launchd: ${line ? line : 'not loaded'}`);
     } catch {
@@ -207,7 +218,7 @@ async function main() {
     }
   } catch {
     report.checks.happyOnPath = { ok: false };
-    if (!json) console.log('ℹ️ happy on PATH: not found (run: pnpm bootstrap)');
+    if (!json) console.log('ℹ️ happy on PATH: not found (run: happys bootstrap)');
   }
 
   if (json) {
@@ -219,4 +230,3 @@ main().catch((err) => {
   console.error('[local] doctor failed:', err);
   process.exit(1);
 });
-

@@ -48,7 +48,7 @@ ensure_launchctl_cache() {
 }
 
 check_launchagent_status() {
-  local label="${1:-com.happy.local}"
+  local label="${1:-com.happy.stacks}"
   local plist="${2:-$HOME/Library/LaunchAgents/${label}.plist}"
   if [[ ! -f "$plist" ]]; then
     echo "not_installed"
@@ -100,6 +100,31 @@ check_daemon_status() {
   local cli_home_dir="$1"
   local state_file="$cli_home_dir/daemon.state.json"
   if [[ -z "$cli_home_dir" ]] || [[ ! -f "$state_file" ]]; then
+    # If the daemon is starting but hasn't written daemon.state.json yet, we can still detect it
+    # via the lock file PID.
+    local lock_file="$cli_home_dir/daemon.state.json.lock"
+    if [[ -f "$lock_file" ]]; then
+      local lock_pid
+      lock_pid="$(cat "$lock_file" 2>/dev/null | tr -d '[:space:]')"
+      if [[ -n "$lock_pid" ]] && [[ "$lock_pid" =~ ^[0-9]+$ ]]; then
+        if kill -0 "$lock_pid" 2>/dev/null; then
+          # Best-effort: classify "auth required" by inspecting the latest daemon log.
+          local latest_log
+          latest_log="$(ls -1t "$cli_home_dir"/logs/*-daemon.log 2>/dev/null | head -1 || true)"
+          if [[ -n "$latest_log" ]]; then
+            if tail -n 120 "$latest_log" 2>/dev/null | rg -q "No credentials found|starting authentication flow|Waiting for credentials"; then
+              echo "auth_required:$lock_pid"
+              return
+            fi
+          fi
+          echo "starting:$lock_pid"
+          return
+        fi
+        echo "stale"
+        return
+      fi
+    fi
+
     echo "stopped"
     return
   fi

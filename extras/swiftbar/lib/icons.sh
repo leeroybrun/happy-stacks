@@ -15,13 +15,16 @@ get_menu_icon_b64() {
   fi
 
   # Fallback: use Happy's favicon if present.
-  if [[ -z "$source" ]] && [[ -f "$HAPPY_LOCAL_DIR/components/happy/dist/favicon.ico" ]]; then
-    source="$HAPPY_LOCAL_DIR/components/happy/dist/favicon.ico"
+  local workspace_dir
+  workspace_dir="$(resolve_workspace_dir)"
+
+  if [[ -z "$source" ]] && [[ -f "$workspace_dir/components/happy/dist/favicon.ico" ]]; then
+    source="$workspace_dir/components/happy/dist/favicon.ico"
   fi
 
   # Final fallback: Happy logo if present.
-  if [[ -z "$source" ]] && [[ -f "$HAPPY_LOCAL_DIR/components/happy/logo.png" ]]; then
-    source="$HAPPY_LOCAL_DIR/components/happy/logo.png"
+  if [[ -z "$source" ]] && [[ -f "$workspace_dir/components/happy/logo.png" ]]; then
+    source="$workspace_dir/components/happy/logo.png"
   fi
 
   if [[ -z "$source" ]]; then
@@ -100,4 +103,3 @@ status_icon_b64() {
   local path="$HAPPY_LOCAL_DIR/extras/swiftbar/icons/happy-$level.png"
   icon_b64_for_file "$path" "happy-$level" "$size"
 }
-

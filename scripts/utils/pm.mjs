@@ -1,10 +1,12 @@
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 
 import { pathExists } from './fs.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
-import { getDefaultAutostartPaths } from './paths.mjs';
+import { getDefaultAutostartPaths, getHappyStacksHomeDir } from './paths.mjs';
+import { resolveInstalledPath, resolveInstalledCliRoot } from './runtime.mjs';
 
 async function commandExists(cmd, options = {}) {
   try {
@@ -19,7 +21,10 @@ export async function requirePnpm() {
   if (await commandExists('pnpm')) {
     return;
   }
-  throw new Error('[local] pnpm is required to run happy-stacks. Install it via: `corepack enable && corepack prepare pnpm@latest --activate`');
+  throw new Error(
+    '[local] pnpm is required to install dependencies for Happy Stacks.\n' +
+      'Install it via Corepack: `corepack enable && corepack prepare pnpm@latest --activate`'
+  );
 }
 
 async function getComponentPm(dir) {
@@ -44,7 +49,7 @@ export async function requireDir(label, dir) {
   }
   throw new Error(
     `[local] missing ${label} at ${dir}\n` +
-      `Run: pnpm bootstrap (auto-clones missing components), or place the repo under components/`
+      `Run: happys bootstrap (auto-clones missing components), or place the repo under components/`
   );
 }
 
@@ -211,56 +216,31 @@ export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {
     return;
   }
 
-  const wrapperDir = join(rootDir, 'packages', 'happy-cli-local');
-  if (!(await pathExists(wrapperDir))) {
-    throw new Error(`[local] missing happy-cli-local wrapper at ${wrapperDir}`);
-  }
+  const homeDir = getHappyStacksHomeDir();
+  const binDir = join(homeDir, 'bin');
+  await mkdir(binDir, { recursive: true });
 
-  const happyBin = await findHappyOnPath();
-  if (happyBin) {
-    try {
-      const resolved = await realpath(happyBin);
-      if (isPathInside(resolved, wrapperDir)) {
-        return;
-      }
-    } catch {
-      // ignore
-    }
-  }
+  const happysShim = join(binDir, 'happys');
+  const happyShim = join(binDir, 'happy');
+
+  const shim = `#!/bin/bash
+set -euo pipefail
+HOME_DIR="\${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+HAPPYS="$HOME_DIR/bin/happys"
+if [[ -x "$HAPPYS" ]]; then
+  exec "$HAPPYS" happy "$@"
+fi
+exec happys happy "$@"
+`;
+
+  await writeFile(happyShim, shim, 'utf-8');
+  await chmod(happyShim, 0o755).catch(() => {});
 
   // eslint-disable-next-line no-console
-  console.log('[local] linking happy-cli-local into PATH (npm link)...');
-  // `happy` often already exists from a previous global install (e.g. happy-coder).
-  // We intentionally overwrite it so the wrapper becomes the default `happy`.
-  await run('npm', ['link', '--force'], { cwd: wrapperDir });
-
-  const happyBinAfter = await findHappyOnPath();
-  if (happyBinAfter) {
-    try {
-      const resolved = await realpath(happyBinAfter);
-      if (isPathInside(resolved, wrapperDir)) {
-        return;
-      }
-    } catch {
-      // ignore
-    }
+  console.log(`[local] installed 'happy' shim at ${happyShim}`);
+  if (!existsSync(happysShim)) {
     // eslint-disable-next-line no-console
-    console.log(`[local] warning: 'happy' is on PATH but does not point to happy-cli-local (${happyBinAfter})`);
-    return;
-  }
-
-  try {
-    const npmBin = (await runCapture('npm', ['bin', '-g'])).trim();
-    if (npmBin) {
-      // eslint-disable-next-line no-console
-      console.log(`[local] 'happy' was linked but is still not on your PATH.`);
-      // eslint-disable-next-line no-console
-      console.log(`[local] Add this directory to PATH: ${npmBin}`);
-      // eslint-disable-next-line no-console
-      console.log(`[local] Example (zsh): echo 'export PATH=\"${npmBin}:$PATH\"' >> ~/.zshrc && source ~/.zshrc`);
-    }
-  } catch {
-    // ignore
+    console.log(`[local] note: run \`happys init\` to install a stable ${happysShim} shim for services/SwiftBar.`);
   }
 }
 
@@ -302,8 +282,13 @@ export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.lo
   } = getDefaultAutostartPaths();
   await mkdir(logsDir, { recursive: true });
 
-  const nodePath = process.env.HAPPY_LOCAL_NODE?.trim() ? process.env.HAPPY_LOCAL_NODE.trim() : process.execPath;
-  const runScript = join(rootDir, 'scripts', 'run.mjs');
+  const nodePath = process.env.HAPPY_STACKS_NODE?.trim()
+    ? process.env.HAPPY_STACKS_NODE.trim()
+    : process.env.HAPPY_LOCAL_NODE?.trim()
+      ? process.env.HAPPY_LOCAL_NODE.trim()
+      : process.execPath;
+  const installedRoot = resolveInstalledCliRoot(rootDir);
+  const happysEntrypoint = resolveInstalledPath(rootDir, join('bin', 'happys.mjs'));
 
   // Ensure we write to the plist path that matches the label we're installing, instead of the
   // "active" plist path (which might be legacy and cause filename/label mismatches).
@@ -321,10 +306,11 @@ export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.lo
     <key>ProgramArguments</key>
     <array>
       <string>${nodePath}</string>
-      <string>${runScript}</string>
+      <string>${happysEntrypoint}</string>
+      <string>start</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>${rootDir}</string>
+    <string>${installedRoot}</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -378,4 +364,3 @@ export async function ensureMacAutostartDisabled({ label = 'com.happy.local' }) 
   // eslint-disable-next-line no-console
   console.log(`[local] autostart disabled (${label})`);
 }
-

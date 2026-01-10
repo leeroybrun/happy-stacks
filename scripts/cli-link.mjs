@@ -7,19 +7,19 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 /**
  * Link the local Happy CLI wrapper into your PATH.
  *
- * This is intentionally extracted so you can re-run linking without doing a full `pnpm bootstrap`.
+ * This is intentionally extracted so you can re-run linking without doing a full `happys bootstrap`.
  *
  * What it does:
  * - optionally builds `components/happy-cli` (controlled by env/flags)
- * - `npm link --force` the `packages/happy-cli-local` wrapper (so `happy` points at happy-stacks)
+ * - installs `happy`/`happys` shims under `~/.happy-stacks/bin` (recommended over `npm link`)
  *
  * Env:
  * - HAPPY_LOCAL_CLI_BUILD=0 to skip building happy-cli
- * - HAPPY_LOCAL_NPM_LINK=0 to skip npm link
+ * - HAPPY_LOCAL_NPM_LINK=0 to skip shim installation
  *
  * Flags:
  * - --no-build: skip building happy-cli
- * - --no-link: skip npm link
+ * - --no-link: skip shim installation
  */
 
 async function main() {
@@ -32,7 +32,8 @@ async function main() {
       data: { flags: ['--no-build', '--no-link'], json: true },
       text: [
         '[cli-link] usage:',
-        '  pnpm cli:link [-- --no-build] [--json]',
+        '  happys cli:link [--no-build] [--no-link] [--json]',
+        '  (legacy in a cloned repo): pnpm cli:link [-- --no-build] [--json]',
         '  node scripts/cli-link.mjs [--no-build] [--no-link] [--json]',
       ].join('\n'),
     });
@@ -55,4 +56,3 @@ main().catch((err) => {
   console.error('[local] cli link failed:', err);
   process.exit(1);
 });
-
