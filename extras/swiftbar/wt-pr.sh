@@ -20,7 +20,7 @@ STACK_NAME="${2:-}"
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
 HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-HAPPYS="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
+HAPPYS="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
 if [[ ! -x "$HAPPYS" ]]; then
   HAPPYS="$(command -v happys 2>/dev/null || true)"
 fi

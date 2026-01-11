@@ -18,14 +18,14 @@ _cli_home_dir="${4:-}" # ignored (kept for backwards compatibility)
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
 HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
-if [[ ! -x "$PNPM_TERM" ]]; then
-  echo "missing terminal happys wrapper: $PNPM_TERM" >&2
+HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+if [[ ! -x "$HAPPYS_TERM" ]]; then
+  echo "missing terminal happys wrapper: $HAPPYS_TERM" >&2
   exit 1
 fi
 
 if [[ "$stack" == "main" ]]; then
-  exec "$PNPM_TERM" auth login
+  exec "$HAPPYS_TERM" auth login
 fi
 
-exec "$PNPM_TERM" stack auth "$stack" login
+exec "$HAPPYS_TERM" stack auth "$stack" login

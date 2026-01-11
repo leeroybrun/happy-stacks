@@ -112,7 +112,7 @@ check_daemon_status() {
           local latest_log
           latest_log="$(ls -1t "$cli_home_dir"/logs/*-daemon.log 2>/dev/null | head -1 || true)"
           if [[ -n "$latest_log" ]]; then
-            if tail -n 120 "$latest_log" 2>/dev/null | rg -q "No credentials found|starting authentication flow|Waiting for credentials"; then
+            if tail -n 120 "$latest_log" 2>/dev/null | grep -Eq "No credentials found|starting authentication flow|Waiting for credentials"; then
               echo "auth_required:$lock_pid"
               return
             fi
@@ -129,9 +129,16 @@ check_daemon_status() {
     return
   fi
 
+  local node_bin
+  node_bin="$(resolve_node_bin)"
+  if [[ -z "$node_bin" ]] || [[ ! -x "$node_bin" ]]; then
+    echo "unknown"
+    return
+  fi
+
   local pid httpPort
-  pid="$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(s.pid ?? ""));' "$state_file" 2>/dev/null || true)"
-  httpPort="$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(s.httpPort ?? ""));' "$state_file" 2>/dev/null || true)"
+  pid="$("$node_bin" -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(s.pid ?? ""));' "$state_file" 2>/dev/null || true)"
+  httpPort="$("$node_bin" -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(s.httpPort ?? ""));' "$state_file" 2>/dev/null || true)"
 
   if [[ -z "$pid" ]] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
     echo "unknown"
@@ -162,7 +169,12 @@ get_daemon_uptime() {
   if [[ -z "$cli_home_dir" ]] || [[ ! -f "$state_file" ]]; then
     return
   fi
-  node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (s.startTime) process.stdout.write(String(s.startTime));' "$state_file" 2>/dev/null || true
+  local node_bin
+  node_bin="$(resolve_node_bin)"
+  if [[ -z "$node_bin" ]] || [[ ! -x "$node_bin" ]]; then
+    return
+  fi
+  "$node_bin" -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (s.startTime) process.stdout.write(String(s.startTime));' "$state_file" 2>/dev/null || true
 }
 
 get_last_heartbeat() {
@@ -171,7 +183,12 @@ get_last_heartbeat() {
   if [[ -z "$cli_home_dir" ]] || [[ ! -f "$state_file" ]]; then
     return
   fi
-  node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (s.lastHeartbeat) process.stdout.write(String(s.lastHeartbeat));' "$state_file" 2>/dev/null || true
+  local node_bin
+  node_bin="$(resolve_node_bin)"
+  if [[ -z "$node_bin" ]] || [[ ! -x "$node_bin" ]]; then
+    return
+  fi
+  "$node_bin" -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (s.lastHeartbeat) process.stdout.write(String(s.lastHeartbeat));' "$state_file" 2>/dev/null || true
 }
 
 get_tailscale_url() {
@@ -181,10 +198,12 @@ get_tailscale_url() {
   if command -v tailscale &>/dev/null; then
     url="$(tailscale serve status 2>/dev/null | grep -oE 'https://[^ ]+' | head -1 || true)"
   fi
+  if [[ -z "$url" ]] && [[ -x "/Applications/Tailscale.app/Contents/MacOS/tailscale" ]]; then
+    url="$(/Applications/Tailscale.app/Contents/MacOS/tailscale serve status 2>/dev/null | grep -oE 'https://[^ ]+' | head -1 || true)"
+  fi
   if [[ -z "$url" ]] && [[ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
     url="$(/Applications/Tailscale.app/Contents/MacOS/Tailscale serve status 2>/dev/null | grep -oE 'https://[^ ]+' | head -1 || true)"
   fi
 
   echo "$url"
 }
-

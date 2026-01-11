@@ -27,31 +27,31 @@ fi
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
 HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-PNPM_BIN="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
-if [[ ! -x "$PNPM_BIN" ]]; then
+HAPPYS_BIN="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
+if [[ ! -x "$HAPPYS_BIN" ]]; then
   echo "happys wrapper not found (run: happys menubar install)" >&2
   exit 1
 fi
 
 restart_main_service_best_effort() {
-  "$PNPM_BIN" service:restart >/dev/null 2>&1 || true
+  "$HAPPYS_BIN" service:restart >/dev/null 2>&1 || true
   # If the installed LaunchAgent is still legacy/baked, reinstall so it persists only env-file pointer.
-  "$PNPM_BIN" service:install >/dev/null 2>&1 || true
+  "$HAPPYS_BIN" service:install >/dev/null 2>&1 || true
 }
 
 restart_stack_service_best_effort() {
   local name="$1"
-  "$PNPM_BIN" stack service:restart "$name" >/dev/null 2>&1 || true
-  "$PNPM_BIN" stack service:install "$name" >/dev/null 2>&1 || true
+  "$HAPPYS_BIN" stack service:restart "$name" >/dev/null 2>&1 || true
+  "$HAPPYS_BIN" stack service:install "$name" >/dev/null 2>&1 || true
 }
 
 if [[ "$STACK" == "main" ]]; then
-  "$PNPM_BIN" srv -- use "$FLAVOR"
+  "$HAPPYS_BIN" srv -- use "$FLAVOR"
   restart_main_service_best_effort
   echo "ok: main -> $FLAVOR"
   exit 0
 fi
 
-"$PNPM_BIN" stack srv "$STACK" -- use "$FLAVOR"
+"$HAPPYS_BIN" stack srv "$STACK" -- use "$FLAVOR"
 restart_stack_service_best_effort "$STACK"
 echo "ok: $STACK -> $FLAVOR"

@@ -123,9 +123,9 @@ echo "Stacks"
 echo "---"
 
 if [[ -n "$PNPM_BIN" ]]; then
-  PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
-  echo "New stack (interactive) | bash=$PNPM_TERM param1=stack param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "List stacks | bash=$PNPM_TERM param1=stack param2=list dir=$HAPPY_LOCAL_DIR terminal=false"
+  HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+  echo "New stack (interactive) | bash=$HAPPYS_TERM param1=stack param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  echo "List stacks | bash=$HAPPYS_TERM param1=stack param2=list dir=$HAPPY_LOCAL_DIR terminal=false"
   echo "---"
 fi
 
@@ -179,12 +179,12 @@ echo "Worktrees | sfimage=arrow.triangle.branch"
 if [[ -z "$PNPM_BIN" ]]; then
   echo "--⚠️ happys not found (run: npx happy-stacks init, or install happy-stacks globally)"
 else
-  PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
-  echo "--Use (interactive) | bash=$PNPM_TERM param1=wt param2=use param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--New (interactive) | bash=$PNPM_TERM param1=wt param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+  echo "--Use (interactive) | bash=$HAPPYS_TERM param1=wt param2=use param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  echo "--New (interactive) | bash=$HAPPYS_TERM param1=wt param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   echo "--PR worktree (prompt) | bash=$HAPPY_LOCAL_DIR/extras/swiftbar/wt-pr.sh dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   echo "--Sync mirrors (all) | bash=$PNPM_BIN param1=wt param2=sync-all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--Update all (dry-run) | bash=$PNPM_TERM param1=wt param2=update-all param3=--dry-run dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  echo "--Update all (dry-run) | bash=$HAPPYS_TERM param1=wt param2=update-all param3=--dry-run dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   echo "--Update all (apply) | bash=$PNPM_BIN param1=wt param2=update-all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
 fi
 
@@ -193,10 +193,10 @@ echo "Setup / Tools"
 if [[ -z "$PNPM_BIN" ]]; then
   echo "--⚠️ happys not found (run: npx happy-stacks init, or install happy-stacks globally)"
 else
-  PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
-  echo "--Bootstrap (clone/install) | bash=$PNPM_TERM param1=bootstrap dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--CLI link (install happy wrapper) | bash=$PNPM_TERM param1=cli:link dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--Mobile dev helper | bash=$PNPM_TERM param1=mobile dir=$HAPPY_LOCAL_DIR terminal=false"
+  HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+  echo "--Bootstrap (clone/install) | bash=$HAPPYS_TERM param1=bootstrap dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  echo "--CLI link (install happy wrapper) | bash=$HAPPYS_TERM param1=cli:link dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  echo "--Mobile dev helper | bash=$HAPPYS_TERM param1=mobile dir=$HAPPY_LOCAL_DIR terminal=false"
 fi
 
 echo "---"
@@ -215,4 +215,6 @@ echo "--1h | bash=$SET_INTERVAL param1=1h dir=$HAPPY_LOCAL_DIR terminal=false re
 echo "--2h | bash=$SET_INTERVAL param1=2h dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
 echo "--6h | bash=$SET_INTERVAL param1=6h dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
 echo "--12h | bash=$SET_INTERVAL param1=12h dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-echo "--1d | bash=$SET_INTERVAL param1=1d dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"exit 0
+echo "--1d | bash=$SET_INTERVAL param1=1d dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+
+exit 0

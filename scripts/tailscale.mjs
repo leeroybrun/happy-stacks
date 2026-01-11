@@ -2,6 +2,8 @@ import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
 
 /**
  * Manage Tailscale Serve for exposing the local UI/API over HTTPS (secure context).
@@ -43,34 +45,91 @@ function extractHttpsUrl(serveStatusText) {
   return m ? m[0] : null;
 }
 
+function extractServeEnableUrl(text) {
+  const m = String(text ?? '').match(/https:\/\/login\.tailscale\.com\/f\/serve\?node=\S+/i);
+  return m ? m[0] : null;
+}
+
+function parseTimeoutMs(raw, defaultMs) {
+  const s = (raw ?? '').trim();
+  if (!s) return defaultMs;
+  const n = Number(s);
+  // Allow 0 to disable timeouts for user-triggered commands.
+  if (!Number.isFinite(n)) return defaultMs;
+  return n > 0 ? n : 0;
+}
+
+function tailscaleProbeTimeoutMs() {
+  return parseTimeoutMs(process.env.HAPPY_LOCAL_TAILSCALE_CMD_TIMEOUT_MS, 2500);
+}
+
+function tailscaleUserEnableTimeoutMs() {
+  return parseTimeoutMs(process.env.HAPPY_LOCAL_TAILSCALE_ENABLE_TIMEOUT_MS, 30000);
+}
+
+function tailscaleAutoEnableTimeoutMs() {
+  return parseTimeoutMs(process.env.HAPPY_LOCAL_TAILSCALE_ENABLE_TIMEOUT_MS_AUTO, tailscaleProbeTimeoutMs());
+}
+
+function tailscaleUserResetTimeoutMs() {
+  return parseTimeoutMs(process.env.HAPPY_LOCAL_TAILSCALE_RESET_TIMEOUT_MS, 15000);
+}
+
+function tailscaleEnv() {
+  // LaunchAgents inherit `XPC_SERVICE_NAME`, which can confuse some CLI tools.
+  // In practice, we’ve seen Tailscale commands like `tailscale version` hang under
+  // this env. Strip it for any tailscale subprocesses.
+  const env = { ...process.env };
+  delete env.XPC_SERVICE_NAME;
+  return env;
+}
+
+async function isExecutable(path) {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function resolveTailscaleCmd() {
   // Allow explicit override (useful for LaunchAgents where aliases don't exist).
   if (process.env.HAPPY_LOCAL_TAILSCALE_BIN?.trim()) {
     return process.env.HAPPY_LOCAL_TAILSCALE_BIN.trim();
   }
 
-  // Try PATH first.
+  // Try PATH first (without executing `tailscale`, which can hang in some environments).
   try {
-    await runCapture('tailscale', ['version']);
-    return 'tailscale';
+    const found = (await runCapture('sh', ['-lc', 'command -v tailscale 2>/dev/null || true'], { env: tailscaleEnv(), timeoutMs: tailscaleProbeTimeoutMs() })).trim();
+    if (found) {
+      return found;
+    }
   } catch {
-    // fall through
+    // ignore and fall back
   }
 
-  // Common macOS app install path.
+  // Common macOS app install paths.
+  //
+  // IMPORTANT:
+  // Prefer the lowercase `tailscale` CLI inside the app bundle. The capitalized
+  // `Tailscale` binary can behave differently under LaunchAgents (XPC env),
+  // potentially hanging instead of printing a version and exiting.
+  const appCliPath = '/Applications/Tailscale.app/Contents/MacOS/tailscale';
+  if (await isExecutable(appCliPath)) {
+    return appCliPath;
+  }
+
   const appPath = '/Applications/Tailscale.app/Contents/MacOS/Tailscale';
-  try {
-    await runCapture(appPath, ['version']);
+  if (await isExecutable(appPath)) {
     return appPath;
-  } catch {
-    // fall through
   }
 
   throw new Error(
     `[local] tailscale CLI not found.\n` +
     `- Install Tailscale, or\n` +
     `- Put 'tailscale' on PATH, or\n` +
-    `- Set HAPPY_LOCAL_TAILSCALE_BIN="${appPath}"`
+    `- Set HAPPY_LOCAL_TAILSCALE_BIN="${appCliPath}"`
   );
 }
 
@@ -85,10 +144,10 @@ export async function tailscaleServeHttpsUrl() {
 
 export async function tailscaleServeStatus() {
   const cmd = await resolveTailscaleCmd();
-  return await runCapture(cmd, ['serve', 'status']);
+  return await runCapture(cmd, ['serve', 'status'], { env: tailscaleEnv(), timeoutMs: tailscaleProbeTimeoutMs() });
 }
 
-export async function tailscaleServeEnable({ internalServerUrl }) {
+export async function tailscaleServeEnable({ internalServerUrl, timeoutMs } = {}) {
   const cmd = await resolveTailscaleCmd();
   const { upstream, servePath } = getServeConfig(internalServerUrl);
   const args = ['serve', '--bg'];
@@ -96,14 +155,39 @@ export async function tailscaleServeEnable({ internalServerUrl }) {
     args.push(`--set-path=${servePath}`);
   }
   args.push(upstream);
-  await run(cmd, args);
-  const status = await runCapture(cmd, ['serve', 'status']).catch(() => '');
+  const env = tailscaleEnv();
+  const timeout = Number.isFinite(timeoutMs) ? (timeoutMs > 0 ? timeoutMs : 0) : tailscaleUserEnableTimeoutMs();
+
+  try {
+    // `tailscale serve --bg` can hang in some environments (and should never block stack startup).
+    // Use a short, best-effort timeout; if it prints an enable URL, open it and return a helpful result.
+    await runCapture(cmd, args, { env, timeoutMs: timeout });
+  } catch (e) {
+    const out = e && typeof e === 'object' && 'out' in e ? e.out : '';
+    const err = e && typeof e === 'object' && 'err' in e ? e.err : '';
+    const msg = e instanceof Error ? e.message : String(e);
+    const combined = `${out ?? ''}\n${err ?? ''}\n${msg ?? ''}`.trim();
+    const enableUrl = extractServeEnableUrl(combined);
+    if (enableUrl) {
+      // User-initiated action (CLI / menubar): open the enable page.
+      try {
+        await run('open', [enableUrl]);
+      } catch {
+        // ignore (headless / restricted environment)
+      }
+      return { status: combined || String(e), httpsUrl: null, enableUrl };
+    }
+    throw e;
+  }
+
+  const status = await runCapture(cmd, ['serve', 'status'], { env, timeoutMs: tailscaleProbeTimeoutMs() }).catch(() => '');
   return { status, httpsUrl: status ? extractHttpsUrl(status) : null };
 }
 
-export async function tailscaleServeReset() {
+export async function tailscaleServeReset({ timeoutMs } = {}) {
   const cmd = await resolveTailscaleCmd();
-  await run(cmd, ['serve', 'reset']);
+  const timeout = Number.isFinite(timeoutMs) ? (timeoutMs > 0 ? timeoutMs : 0) : tailscaleUserResetTimeoutMs();
+  await run(cmd, ['serve', 'reset'], { env: tailscaleEnv(), timeoutMs: timeout });
 }
 
 export async function maybeEnableTailscaleServe({ internalServerUrl }) {
@@ -112,7 +196,8 @@ export async function maybeEnableTailscaleServe({ internalServerUrl }) {
     return null;
   }
   try {
-    return await tailscaleServeEnable({ internalServerUrl });
+    // This is called from automation; it must not hang for long.
+    return await tailscaleServeEnable({ internalServerUrl, timeoutMs: tailscaleAutoEnableTimeoutMs() });
   } catch (e) {
     throw new Error(`[local] failed to enable tailscale serve (is Tailscale running/authenticated?): ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -125,7 +210,8 @@ export async function maybeResetTailscaleServe() {
     return;
   }
   try {
-    await tailscaleServeReset();
+    // Shutdown path: never block for long.
+    await tailscaleServeReset({ timeoutMs: tailscaleProbeTimeoutMs() });
   } catch {
     // ignore
   }
@@ -172,7 +258,7 @@ export async function resolvePublicServerUrl({
 
   // Try enabling serve (best-effort); then wait a bit for Tailscale to be ready/configured.
   try {
-    const res = await tailscaleServeEnable({ internalServerUrl });
+    const res = await tailscaleServeEnable({ internalServerUrl, timeoutMs: tailscaleAutoEnableTimeoutMs() });
     if (res?.httpsUrl) {
       return { publicServerUrl: res.httpsUrl, source: 'tailscale-enable' };
     }
@@ -252,6 +338,14 @@ async function main() {
     }
     case 'enable': {
       const res = await tailscaleServeEnable({ internalServerUrl });
+      if (res?.enableUrl && !res?.httpsUrl) {
+        printResult({
+          json,
+          data: { ok: true, httpsUrl: null, enableUrl: res.enableUrl },
+          text: `[local] tailscale serve is not enabled for this tailnet. Opened:\n${res.enableUrl}`,
+        });
+        return;
+      }
       printResult({
         json,
         data: { ok: true, httpsUrl: res.httpsUrl ?? null },

@@ -70,8 +70,15 @@ resolve_happy_local_dir() {
 }
 
 resolve_pnpm_bin() {
-  # Back-compat: historically this was "pnpm", but the plugin now runs `happys` via a wrapper script.
-  local wrapper="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
+  # Back-compat: historically this was "pnpm", but the plugin now runs `happys` via wrapper scripts.
+  local wrapper="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
+  if [[ -x "$wrapper" ]]; then
+    echo "$wrapper"
+    return
+  fi
+
+  # Older installs.
+  wrapper="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm.sh"
   if [[ -x "$wrapper" ]]; then
     echo "$wrapper"
     return
@@ -85,6 +92,37 @@ resolve_pnpm_bin() {
   fi
 
   echo ""
+}
+
+resolve_node_bin() {
+  # Prefer explicit env vars first.
+  if [[ -n "${HAPPY_STACKS_NODE:-}" ]] && [[ -x "${HAPPY_STACKS_NODE:-}" ]]; then
+    echo "$HAPPY_STACKS_NODE"
+    return
+  fi
+  if [[ -n "${HAPPY_LOCAL_NODE:-}" ]] && [[ -x "${HAPPY_LOCAL_NODE:-}" ]]; then
+    echo "$HAPPY_LOCAL_NODE"
+    return
+  fi
+
+  # Fall back to reading ~/.happy-stacks/.env (written by `happys init`).
+  local home="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+  local env_file="$home/.env"
+  if [[ -f "$env_file" ]]; then
+    local v
+    v="$(dotenv_get "$env_file" "HAPPY_STACKS_NODE")"
+    if [[ -n "$v" ]] && [[ -x "$v" ]]; then
+      echo "$v"
+      return
+    fi
+    v="$(dotenv_get "$env_file" "HAPPY_LOCAL_NODE")"
+    if [[ -n "$v" ]] && [[ -x "$v" ]]; then
+      echo "$v"
+      return
+    fi
+  fi
+
+  command -v node 2>/dev/null || true
 }
 
 resolve_workspace_dir() {

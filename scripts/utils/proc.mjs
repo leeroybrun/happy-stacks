@@ -39,28 +39,69 @@ export function killProcessTree(child, signal) {
 }
 
 export async function run(cmd, args, options = {}) {
+  const { timeoutMs, ...spawnOptions } = options ?? {};
   await new Promise((resolvePromise, rejectPromise) => {
-    const proc = spawn(cmd, args, { stdio: 'inherit', shell: false, ...options });
+    const proc = spawn(cmd, args, { stdio: 'inherit', shell: false, ...spawnOptions });
+    const t =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            try {
+              proc.kill('SIGKILL');
+            } catch {
+              // ignore
+            }
+            const e = new Error(`${cmd} timed out after ${timeoutMs}ms`);
+            e.code = 'ETIMEDOUT';
+            rejectPromise(e);
+          }, timeoutMs)
+        : null;
     proc.on('error', rejectPromise);
     proc.on('exit', (code) => (code === 0 ? resolvePromise() : rejectPromise(new Error(`${cmd} failed (code=${code})`))));
-  });
-}
-
-export async function runCapture(cmd, args, options = {}) {
-  return await new Promise((resolvePromise, rejectPromise) => {
-    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, ...options });
-    let out = '';
-    let err = '';
-    proc.stdout?.on('data', (d) => (out += d.toString()));
-    proc.stderr?.on('data', (d) => (err += d.toString()));
-    proc.on('error', rejectPromise);
-    proc.on('exit', (code) => {
-      if (code === 0) {
-        resolvePromise(out);
-      } else {
-        rejectPromise(new Error(`${cmd} ${args.join(' ')} failed (code=${code}): ${err.trim()}`));
-      }
+    proc.on('exit', () => {
+      if (t) clearTimeout(t);
     });
   });
 }
 
+export async function runCapture(cmd, args, options = {}) {
+  const { timeoutMs, ...spawnOptions } = options ?? {};
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, ...spawnOptions });
+    let out = '';
+    let err = '';
+    const t =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            try {
+              proc.kill('SIGKILL');
+            } catch {
+              // ignore
+            }
+            const e = new Error(`${cmd} ${args.join(' ')} timed out after ${timeoutMs}ms`);
+            e.code = 'ETIMEDOUT';
+            e.out = out;
+            e.err = err;
+            rejectPromise(e);
+          }, timeoutMs)
+        : null;
+    proc.stdout?.on('data', (d) => (out += d.toString()));
+    proc.stderr?.on('data', (d) => (err += d.toString()));
+    proc.on('error', rejectPromise);
+    proc.on('exit', (code, signal) => {
+      if (t) clearTimeout(t);
+      if (code === 0) {
+        resolvePromise(out);
+      } else {
+        const e = new Error(
+          `${cmd} ${args.join(' ')} failed (code=${code ?? 'null'}, sig=${signal ?? 'null'}): ${err.trim()}`
+        );
+        e.code = 'EEXIT';
+        e.exitCode = code;
+        e.signal = signal;
+        e.out = out;
+        e.err = err;
+        rejectPromise(e);
+      }
+    });
+  });
+}

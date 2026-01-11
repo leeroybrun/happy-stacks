@@ -21,9 +21,16 @@ level_from_server_daemon() {
 
 color_for_level() {
   local level="$1"
-  if [[ "$level" == "green" ]]; then echo "$GREEN"; return; fi
-  if [[ "$level" == "orange" ]]; then echo "$YELLOW"; return; fi
-  echo "$RED"
+  if [[ "$level" == "green" ]]; then echo "#16a34a"; return; fi
+  if [[ "$level" == "orange" ]]; then echo "#f59e0b"; return; fi
+  echo "#e74c3c"
+}
+
+sfconfig_for_level() {
+  local level="$1"
+  local color="$(color_for_level "$level")"
+  # sfconfig	SFSymbol configuration	Configures Rendering Mode for sfimage. Accepts a json encoded as base64, example json {"renderingMode":"Palette", "colors":["red","blue"], "scale": "large", "weight": "bold"}. Original issue #354
+  echo "{\"colors\":[\"$color\"], \"scale\": \"small\"}" | base64 -b 0
 }
 
 sf_for_level() {
@@ -31,6 +38,13 @@ sf_for_level() {
   if [[ "$level" == "green" ]]; then echo "checkmark.circle.fill"; return; fi
   if [[ "$level" == "orange" ]]; then echo "exclamationmark.triangle.fill"; return; fi
   echo "xmark.circle.fill"
+}
+
+sf_suffix_for_level() {
+  local level="$1"
+  if [[ "$level" == "green" ]]; then echo "badge.checkmark"; return; fi
+  if [[ "$level" == "orange" ]]; then echo "trianglebadge.exclamationmark"; return; fi
+  echo "badge.xmark"
 }
 
 print_item() {
@@ -60,8 +74,8 @@ render_component_server() {
 
   local label="Server (${server_component})"
   local sf="$(sf_for_level "$level")"
-  local color="$(color_for_level "$level")"
-  print_item "$prefix" "$label | sfimage=$sf color=$color"
+  local sfconfig="$(sfconfig_for_level "$level")"
+  print_item "$prefix" "$label | sfimage=$sf sfconfig=$sfconfig"
 
   local p2="${prefix}--"
   print_item "$p2" "Status: $server_status"
@@ -85,7 +99,7 @@ render_component_server() {
 
   # Start/stop shortcuts (so you can control from the Server submenu too).
   if [[ -n "$PNPM_BIN" ]]; then
-    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     local plist=""
     local svc_installed="0"
     if [[ -n "$launch_label" ]]; then
@@ -130,7 +144,7 @@ render_component_server() {
   # Flavor switching (status-aware: only show switching to the other option).
   local helper="$HAPPY_LOCAL_DIR/extras/swiftbar/set-server-flavor.sh"
   if [[ -n "$PNPM_BIN" ]]; then
-    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     print_sep "$p2"
     if [[ "$server_component" == "happy-server" ]]; then
       print_item "$p2" "Switch to happy-server-light (restart if service installed) | bash=$helper param1=$stack_name param2=happy-server-light dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
@@ -159,9 +173,10 @@ render_component_daemon() {
   if [[ "$daemon_status" == "running" ]]; then level="green"; fi
   if [[ "$daemon_status" == "running-no-http" || "$daemon_status" == "stale" || "$daemon_status" == "auth_required" || "$daemon_status" == "starting" ]]; then level="orange"; fi
 
+  local sfconfig="$(sfconfig_for_level "$level")"
+
   local sf="$(sf_for_level "$level")"
-  local color="$(color_for_level "$level")"
-  print_item "$prefix" "Daemon | sfimage=$sf color=$color"
+  print_item "$prefix" "Daemon | sfimage=$sf sfconfig=$sfconfig"
 
   local p2="${prefix}--"
   print_item "$p2" "Status: $daemon_status"
@@ -227,8 +242,8 @@ render_component_autostart() {
   if [[ "$launchagent_status" == "unloaded" ]]; then level="orange"; fi
 
   local sf="$(sf_for_level "$level")"
-  local color="$(color_for_level "$level")"
-  print_item "$prefix" "Autostart | sfimage=$sf color=$color"
+  local sfconfig="$(sfconfig_for_level "$level")"
+  print_item "$prefix" "Autostart | sfimage=$sf sfconfig=$sfconfig"
 
   local p2="${prefix}--"
   print_item "$p2" "Status: $launchagent_status"
@@ -292,8 +307,8 @@ render_component_tailscale() {
   [[ -n "$tailscale_url" ]] && level="green"
 
   local sf="$(sf_for_level "$level")"
-  local color="$(color_for_level "$level")"
-  print_item "$prefix" "Tailscale | sfimage=$sf color=$color"
+  local sfconfig="$(sfconfig_for_level "$level")"
+  print_item "$prefix" "Tailscale | sfimage=$sf sfconfig=$sfconfig"
 
   local p2="${prefix}--"
   if [[ -n "$tailscale_url" ]]; then
@@ -312,7 +327,7 @@ render_component_tailscale() {
   print_sep "$p2"
 
   if [[ "$stack_name" == "main" ]]; then
-    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     print_item "$p2" "Tailscale status | bash=$PNPM_TERM param1=tailscale:status dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     if [[ -n "$tailscale_url" ]]; then
       print_item "$p2" "Disable Tailscale Serve | bash=$PNPM_BIN param1=tailscale:disable dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
@@ -323,7 +338,7 @@ render_component_tailscale() {
     return
   fi
 
-  local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+  local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
   print_item "$p2" "Tailscale status | bash=$PNPM_TERM param1=stack param2=tailscale:status param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   if [[ -n "$tailscale_url" ]]; then
     print_item "$p2" "Disable Tailscale Serve | bash=$PNPM_BIN param1=stack param2=tailscale:disable param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
@@ -383,7 +398,7 @@ render_component_repo() {
     print_item "$p2" "Status: not a git repo / missing"
     if [[ -n "$PNPM_BIN" ]]; then
       print_sep "$p2"
-      local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+      local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
       print_item "$p2" "Bootstrap (clone missing components) | bash=$PNPM_TERM param1=bootstrap dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     fi
     return
@@ -465,7 +480,7 @@ render_component_repo() {
   print_item "$p2" "Open folder | bash=/usr/bin/open param1='$active_dir' terminal=false"
 
   if [[ -n "$PNPM_BIN" ]]; then
-    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     # Run via stack wrappers when in a stack context so env-file stays authoritative.
     if [[ "$context" == "stack" && -n "$stack_name" ]]; then
       print_item "$p2" "Status (active) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=status param6=$component dir=$HAPPY_LOCAL_DIR terminal=false"
@@ -688,7 +703,7 @@ render_stack_info() {
   local tailscale_url="$9"  # optional
 
   # Avoid low-contrast gray in the main list; keep it readable in both light/dark.
-  print_item "$prefix" "Stack details | sfimage=info.circle"
+  print_item "$prefix" "Stack details | sfimage=server.rack"
   local p2="${prefix}--"
   print_item "$p2" "Server component: ${server_component}"
   print_item "$p2" "Port: ${port}"
@@ -723,7 +738,7 @@ render_stack_info() {
   [[ -f "$plist" ]] && svc_installed="1"
 
   if [[ "$stack_name" == "main" ]]; then
-    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     if [[ "$svc_installed" == "1" ]]; then
       # Status-aware: only show start/stop based on whether the stack is running.
       if [[ "${MAIN_LEVEL:-}" == "red" ]]; then
@@ -745,7 +760,7 @@ render_stack_info() {
     return
   fi
 
-  local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/pnpm-term.sh"
+  local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
   if [[ "$svc_installed" == "1" ]]; then
     # Status-aware: only show start/stop based on whether the stack is running.
     if [[ "$STACK_LEVEL" == "red" ]]; then
