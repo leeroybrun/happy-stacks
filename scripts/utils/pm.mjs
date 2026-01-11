@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 
 import { pathExists } from './fs.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
@@ -133,82 +133,10 @@ function getPathEntries() {
   return raw.split(delimiter).filter(Boolean);
 }
 
-async function findHappyOnPath() {
-  const candidates = process.platform === 'win32' ? ['happy.cmd', 'happy.exe', 'happy.bat', 'happy'] : ['happy'];
-  for (const dir of getPathEntries()) {
-    for (const name of candidates) {
-      const p = join(dir, name);
-      if (await pathExists(p)) {
-        return p;
-      }
-    }
-  }
-  return null;
-}
-
 function isPathInside(path, dir) {
   const p = resolve(path);
   const d = resolve(dir);
   return p === d || p.startsWith(d.endsWith(sep) ? d : d + sep);
-}
-
-export async function ensureCliNpmLinked(cliDir, { npmLinkCli }) {
-  if (!npmLinkCli) {
-    return;
-  }
-
-  // Reliable check: does global node_modules/happy-coder resolve into this folder?
-  try {
-    const npmRootRaw = await runCapture('npm', ['root', '-g']);
-    const npmRoot = npmRootRaw.trim();
-    if (npmRoot) {
-      const globalPkg = join(npmRoot, 'happy-coder');
-      if (await pathExists(globalPkg)) {
-        const resolvedPkg = await realpath(globalPkg);
-        if (isPathInside(resolvedPkg, cliDir)) {
-          return;
-        }
-      }
-    }
-  } catch {
-    // ignore and fall back to PATH heuristic below
-  }
-
-  const happyBin = await findHappyOnPath();
-  if (happyBin) {
-    try {
-      const resolved = await realpath(happyBin);
-      if (isPathInside(resolved, cliDir)) {
-        return;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // eslint-disable-next-line no-console
-  console.log('[local] linking happy-cli into PATH (npm link)...');
-  await run('npm', ['link'], { cwd: cliDir });
-
-  const happyBinAfter = await findHappyOnPath();
-  if (happyBinAfter) {
-    return;
-  }
-
-  // If npm global bin isn't on PATH, users won't see the command.
-  try {
-    const npmBin = (await runCapture('npm', ['bin', '-g'])).trim();
-    if (npmBin) {
-      // eslint-disable-next-line no-console
-      console.log(`[local] 'happy' was linked but is still not on your PATH.`);
-      // eslint-disable-next-line no-console
-      console.log(`[local] Add this directory to PATH: ${npmBin}`);
-      // eslint-disable-next-line no-console
-      console.log(`[local] Example (zsh): echo 'export PATH=\"${npmBin}:$PATH\"' >> ~/.zshrc && source ~/.zshrc`);
-    }
-  } catch {
-    // ignore
-  }
 }
 
 export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {

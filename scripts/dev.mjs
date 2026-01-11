@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { assertServerComponentDirMatches } from './utils/validate.mjs';
 
 /**
  * Dev mode stack:
@@ -63,6 +64,8 @@ async function main() {
   const serverDir = getComponentDir(rootDir, serverComponentName);
   const uiDir = getComponentDir(rootDir, 'happy');
   const cliDir = getComponentDir(rootDir, 'happy-cli');
+
+  assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
 
   await requireDir(serverComponentName, serverDir);
   await requireDir('happy', uiDir);

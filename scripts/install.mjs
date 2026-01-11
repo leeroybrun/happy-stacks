@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { installService, uninstallService } from './service.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { ensureHomeEnvLocalUpdated } from './utils/config.mjs';
+import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
 
 /**
@@ -227,18 +227,27 @@ async function main() {
   const wizard = interactive ? await interactiveWizard({ rootDir, defaults }) : null;
   const repoSource = wizard?.repoSource ?? defaultRepoSource;
 
-  // Persist chosen repo source + URLs into env.local (so future runs are consistent).
+  // Persist chosen repo source + URLs into the user config env file:
+  // - main stack env by default (recommended; consistent across install modes)
+  // - legacy fallback: <repo>/env.local when no home config exists yet
   if (wizard) {
     const owners = repoUrlsFromOwners({ forkOwner: wizard.forkOwner, upstreamOwner: wizard.upstreamOwner });
     const chosen = repoSource === 'upstream' ? owners.upstream : owners.forks;
-    await ensureHomeEnvLocalUpdated({
+    await ensureEnvLocalUpdated({
+      rootDir,
       updates: [
+        { key: 'HAPPY_STACKS_REPO_SOURCE', value: repoSource },
         { key: 'HAPPY_LOCAL_REPO_SOURCE', value: repoSource },
+        { key: 'HAPPY_STACKS_UI_REPO_URL', value: chosen.ui },
         { key: 'HAPPY_LOCAL_UI_REPO_URL', value: chosen.ui },
+        { key: 'HAPPY_STACKS_CLI_REPO_URL', value: chosen.cli },
         { key: 'HAPPY_LOCAL_CLI_REPO_URL', value: chosen.cli },
         // Backwards compatible: SERVER_REPO_URL historically meant server-light.
+        { key: 'HAPPY_STACKS_SERVER_REPO_URL', value: chosen.serverLight },
         { key: 'HAPPY_LOCAL_SERVER_REPO_URL', value: chosen.serverLight },
+        { key: 'HAPPY_STACKS_SERVER_LIGHT_REPO_URL', value: chosen.serverLight },
         { key: 'HAPPY_LOCAL_SERVER_LIGHT_REPO_URL', value: chosen.serverLight },
+        { key: 'HAPPY_STACKS_SERVER_FULL_REPO_URL', value: chosen.serverFull },
         { key: 'HAPPY_LOCAL_SERVER_FULL_REPO_URL', value: chosen.serverFull },
       ],
     });

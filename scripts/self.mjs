@@ -71,8 +71,12 @@ async function getInvokerVersion({ rootDir }) {
 async function fetchLatestVersion() {
   // Prefer npm (available on most systems with Node).
   // Keep it simple: `npm view happy-stacks version` prints a single version.
-  const out = (await runCapture('npm', ['view', 'happy-stacks', 'version'])).trim();
-  return out || null;
+  try {
+    const out = (await runCapture('npm', ['view', 'happy-stacks', 'version'])).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
 }
 
 function compareVersions(a, b) {
@@ -160,7 +164,26 @@ async function cmdUpdate({ rootDir, argv }) {
   await mkdir(runtimeDir, { recursive: true });
 
   // Install/update runtime package.
-  await run('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, spec], { cwd: rootDir });
+  try {
+    await run('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, spec], { cwd: rootDir });
+  } catch (err) {
+    // Pre-publish dev fallback: allow updating runtime from the local checkout.
+    if (!to && existsSync(join(rootDir, 'package.json'))) {
+      try {
+        const raw = await readFile(join(rootDir, 'package.json'), 'utf-8');
+        const pkg = JSON.parse(raw);
+        if (pkg?.name === 'happy-stacks') {
+          await run('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, rootDir], { cwd: rootDir });
+        } else {
+          throw err;
+        }
+      } catch {
+        throw err;
+      }
+    } else {
+      throw err;
+    }
+  }
 
   // Refresh cache best-effort.
   try {
@@ -236,7 +259,7 @@ async function main() {
   const argv = process.argv.slice(2);
 
   const { flags } = parseArgs(argv);
-  const cmd = argv.find((a) => !a.startsWith('--')) ?? 'status';
+  const cmd = argv.find((a) => !a.startsWith('--')) ?? 'help';
 
   if (wantsHelp(argv, { flags }) || cmd === 'help') {
     const json = wantsJson(argv, { flags });
@@ -273,4 +296,3 @@ main().catch((err) => {
   console.error('[self] failed:', err);
   process.exit(1);
 });
-

@@ -32,3 +32,15 @@ jobs:
 
             - name: Build
               run: pnpm run build
+
+            - name: CLI smoke (help)
+              run: |
+                  node ./bin/happys.mjs help
+                  node ./bin/happys.mjs init --help
+                  node ./bin/happys.mjs self status --no-check
+                  node ./bin/happys.mjs where --json
+                  node ./scripts/utils/smoke_help.mjs
+
+            - name: npm pack smoke
+              run: |
+                  npm pack --silent

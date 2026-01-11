@@ -1,15 +1,15 @@
 import './utils/env.mjs';
 import { run, runCapture } from './utils/proc.mjs';
-import { getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/pm.mjs';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 /**
  * Manage the macOS LaunchAgent installed by `happys bootstrap -- --autostart`.
@@ -43,15 +43,14 @@ function getAutostartEnv({ rootDir }) {
   // Instead, persist only the env file path; `scripts/utils/env.mjs` will load it on every start.
   //
   // Stack installs:
-  // - `happys stack service <name> install` runs `scripts/service.mjs` under a stack env already
-  //   (HAPPY_LOCAL_ENV_FILE points at ~/.happy/stacks/<name>/env or legacy path), so we persist that.
+  // - `happys stack service <name> ...` runs under a stack env already, so we persist that pointer.
   //
   // Main installs:
-  // - default to repo `env.local` so server flavor/worktree changes apply on restart without reinstall.
+  // - default to the main stack env (outside the repo): ~/.happy/stacks/main/env
 
   const stacksEnvFile = process.env.HAPPY_STACKS_ENV_FILE?.trim() ? process.env.HAPPY_STACKS_ENV_FILE.trim() : '';
   const localEnvFile = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : '';
-  const envFile = stacksEnvFile || localEnvFile || join(rootDir, 'env.local');
+  const envFile = stacksEnvFile || localEnvFile || resolveStackEnvPath('main').envPath;
 
   // Persist both prefixes for backwards compatibility.
   return {
@@ -67,6 +66,16 @@ export async function installService() {
   const rootDir = getRootDir(import.meta.url);
   const { primaryLabel: label } = getDefaultAutostartPaths();
   const env = getAutostartEnv({ rootDir });
+  // Ensure the env file exists so the service never points at a missing path.
+  try {
+    const envFile = env.HAPPY_STACKS_ENV_FILE;
+    await mkdir(dirname(envFile), { recursive: true });
+    if (!existsSync(envFile)) {
+      await writeFile(envFile, '', { flag: 'a' });
+    }
+  } catch {
+    // ignore
+  }
   await ensureMacAutostartEnabled({ rootDir, label, env });
   console.log('[local] service installed (macOS LaunchAgent)');
 }
@@ -395,8 +404,9 @@ async function main() {
     throw new Error('[local] service commands are only supported on macOS (LaunchAgents).');
   }
 
-  const cmd = process.argv[2] || 'status';
   const argv = process.argv.slice(2);
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const cmd = positionals[0] ?? 'help';
   const json = wantsJson(argv);
   if (wantsHelp(argv) || cmd === 'help') {
     printResult({
@@ -404,13 +414,16 @@ async function main() {
       data: { commands: ['install', 'uninstall', 'status', 'start', 'stop', 'restart', 'enable', 'disable', 'logs', 'tail'] },
       text: [
         '[service] usage:',
-        '  happys service:install [--json]',
-        '  happys service:uninstall [--json]',
-        '  happys service:status [--json]',
-        '  happys service:start|stop|restart [--json]',
-        '  happys service:enable|disable [--json]',
-        '  happys logs [--json]',
-        '  happys logs:tail',
+        '  happys service install|uninstall [--json]',
+        '  happys service status [--json]',
+        '  happys service start|stop|restart [--json]',
+        '  happys service enable|disable [--json]',
+        '  happys service logs [--json]',
+        '  happys service tail',
+        '',
+        'legacy aliases:',
+        '  happys service:install|uninstall|status|start|stop|restart|enable|disable',
+        '  happys logs | happys logs:tail',
       ].join('\n'),
     });
     return;

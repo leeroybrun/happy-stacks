@@ -43,7 +43,7 @@ Where:
 
 ## Choosing which checkout happy-stacks runs
 
-`happy-stacks` supports per-component directory overrides via `env.local`:
+`happy-stacks` supports per-component directory overrides via the stack env file (main: `~/.happy/stacks/main/env`, or a specific stack: `~/.happy/stacks/<name>/env`):
 
 - `HAPPY_STACKS_COMPONENT_DIR_HAPPY` (legacy: `HAPPY_LOCAL_COMPONENT_DIR_HAPPY`)
 - `HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI` (legacy: `HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI`)
@@ -61,7 +61,7 @@ Now `happys dev`, `happys start`, and `happys build` will use those active check
 
 ## Switching server flavor (server-light vs full server)
 
-You can persistently switch which server implementation is used by setting `HAPPY_STACKS_SERVER_COMPONENT` (legacy: `HAPPY_LOCAL_SERVER_COMPONENT`) in `env.local`.
+You can persistently switch which server implementation is used by setting `HAPPY_STACKS_SERVER_COMPONENT` (legacy: `HAPPY_LOCAL_SERVER_COMPONENT`) in the stack env file (main: `~/.happy/stacks/main/env`).
 
 Use the convenience CLI (recommended):
 
@@ -79,7 +79,14 @@ Reset back to default:
 ```bash
 happys wt use happy default
 happys wt use happy-cli default
+happys wt use happy-server-light default
+happys wt use happy-server default
 ```
+
+Note:
+- `happys srv use ...` picks **which** server component is run.
+- `happys wt use happy-server-light ...` / `happys wt use happy-server ...` pick **which checkout** is used for each server component.
+- `happys start/dev/doctor` will error if these are accidentally mismatched (e.g. server-light selected but its component dir points inside a `happy-server` checkout).
 
 ## Creating worktrees
 
@@ -360,24 +367,25 @@ You can set a default server implementation via:
 - `HAPPY_STACKS_SERVER_COMPONENT=happy-server-light` (default) (legacy: `HAPPY_LOCAL_SERVER_COMPONENT`)
 - `HAPPY_STACKS_SERVER_COMPONENT=happy-server` (legacy: `HAPPY_LOCAL_SERVER_COMPONENT`)
 
-If you use the macOS LaunchAgent (`happys service:install`), this env var is persisted into the plist at install time.
+If you use the macOS LaunchAgent (`happys service install`), the service persists only a pointer to the env file path; the server flavor is read from that env file on every start.
 
 ## Env precedence (important)
 
 When `happy-stacks` starts, it loads env in this order:
 
 1) `~/.happy-stacks/.env` (defaults)
-2) `~/.happy-stacks/env.local` (local overrides)
+2) `~/.happy-stacks/env.local` (optional global overrides; most config is written to the stack env)
 3) `HAPPY_STACKS_ENV_FILE` (stack env / explicit overlay; highest precedence for `HAPPY_STACKS_*` / `HAPPY_LOCAL_*`)
 
 Notes:
 
 - `HAPPY_STACKS_ENV_FILE` (legacy: `HAPPY_LOCAL_ENV_FILE`) is the mechanism used by `happys stack ...` to apply stack-specific settings.
 - For stack runs, the stack wrapper clears any already-exported `HAPPY_STACKS_*` / legacy `HAPPY_LOCAL_*` variables so the stack env file stays authoritative.
+ - By default (after `happys init`), commands that “persist config” write to the main stack env file: `~/.happy/stacks/main/env`.
 
 ## Repo URLs
 
-You can override clone sources in `env.local`:
+You can override clone sources in your main stack env file (`~/.happy/stacks/main/env`) or any explicit `HAPPY_STACKS_ENV_FILE`:
 
 - `HAPPY_STACKS_REPO_SOURCE=forks|upstream` (legacy: `HAPPY_LOCAL_REPO_SOURCE`)
 - `HAPPY_STACKS_UI_REPO_URL` (legacy: `HAPPY_LOCAL_UI_REPO_URL`)

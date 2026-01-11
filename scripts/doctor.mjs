@@ -2,7 +2,7 @@ import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { runCapture } from './utils/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { killPortListeners } from './utils/ports.mjs';
 import { getServerComponentName } from './utils/server.mjs';
 import { daemonStatusSummary } from './daemon.mjs';
@@ -10,7 +10,10 @@ import { tailscaleServeStatus, resolvePublicServerUrl } from './tailscale.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { getRuntimeDir } from './utils/runtime.mjs';
+import { assertServerComponentDirMatches } from './utils/validate.mjs';
 
 /**
  * Doctor script for common happy-stacks failure modes.
@@ -49,6 +52,41 @@ async function fetchHealth(url) {
   return health.ok ? health : root;
 }
 
+async function readJsonSafe(path) {
+  try {
+    const raw = await readFile(path, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function readPkgVersion(path) {
+  try {
+    const raw = await readFile(path, 'utf-8');
+    const pkg = JSON.parse(raw);
+    const v = String(pkg.version ?? '').trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSwiftbarPluginsDir() {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+  try {
+    const dir = (await runCapture('bash', [
+      '-lc',
+      'DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)"; if [[ -n "$DIR" && -d "$DIR" ]]; then echo "$DIR"; exit 0; fi; D="$HOME/Library/Application Support/SwiftBar/Plugins"; if [[ -d "$D" ]]; then echo "$D"; exit 0; fi; echo ""',
+    ])).trim();
+    return dir || null;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { flags, kv } = parseArgs(argv);
@@ -69,6 +107,14 @@ async function main() {
   }
 
   const rootDir = getRootDir(import.meta.url);
+  const homeDir = getHappyStacksHomeDir();
+  const runtimeDir = getRuntimeDir();
+  const workspaceDir = getWorkspaceDir(rootDir);
+  const updateCachePath = join(homeDir, 'cache', 'update.json');
+  const runtimePkgJson = join(runtimeDir, 'node_modules', 'happy-stacks', 'package.json');
+  const runtimeVersion = await readPkgVersion(runtimePkgJson);
+  const updateCache = existsSync(updateCachePath) ? await readJsonSafe(updateCachePath) : null;
+
   const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? Number(process.env.HAPPY_LOCAL_SERVER_PORT) : 3005;
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
 
@@ -100,7 +146,28 @@ async function main() {
   const cliDir = getComponentDir(rootDir, 'happy-cli');
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
 
+  assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
+
   const report = {
+    paths: {
+      rootDir,
+      homeDir,
+      runtimeDir,
+      workspaceDir,
+      updateCachePath,
+    },
+    runtime: {
+      installed: Boolean(runtimeVersion),
+      version: runtimeVersion,
+      packageJson: runtimePkgJson,
+      updateCache,
+    },
+    env: {
+      homeEnv: join(homeDir, '.env'),
+      homeLocal: join(homeDir, 'env.local'),
+      mainStackEnv: resolveStackEnvPath('main').envPath,
+      activeEnv: process.env.HAPPY_STACKS_ENV_FILE?.trim() || process.env.HAPPY_LOCAL_ENV_FILE?.trim() || null,
+    },
     internalServerUrl,
     publicServerUrl,
     serverComponentName,
@@ -110,12 +177,15 @@ async function main() {
   };
   if (!json) {
     console.log('🩺 happy-stacks doctor\n');
-  console.log(`- internal: ${internalServerUrl}`);
-  console.log(`- public:   ${publicServerUrl}`);
+    console.log(`- internal: ${internalServerUrl}`);
+    console.log(`- public:   ${publicServerUrl}`);
     console.log(`- server:   ${serverComponentName}`);
-  console.log(`- uiBuild:  ${uiBuildDir}`);
-  console.log(`- cliHome:  ${cliHomeDir}`);
-  console.log('');
+    console.log(`- uiBuild:  ${uiBuildDir}`);
+    console.log(`- cliHome:  ${cliHomeDir}`);
+    console.log(`- home:     ${homeDir}`);
+    console.log(`- runtime:  ${runtimeVersion ? `${runtimeDir} (${runtimeVersion})` : `${runtimeDir} (not installed)`}`);
+    console.log(`- workspace:${workspaceDir}`);
+    console.log('');
   }
 
   if (!(await pathExists(serverDir))) {
@@ -200,12 +270,28 @@ async function main() {
   if (process.platform === 'darwin') {
     try {
       const list = await runCapture('launchctl', ['list']);
-      const line = list.split('\n').find((l) => l.includes('com.happy.stacks'))?.trim();
+      const { primaryLabel, legacyLabel } = getDefaultAutostartPaths();
+      const primaryLine = list.split('\n').find((l) => l.includes(primaryLabel))?.trim() || null;
+      const legacyLine = list.split('\n').find((l) => l.includes(legacyLabel))?.trim() || null;
+      const line = primaryLine || legacyLine;
       report.checks.launchd = { ok: true, line: line || null };
       if (!json) console.log(`✅ launchd: ${line ? line : 'not loaded'}`);
     } catch {
       report.checks.launchd = { ok: false };
       if (!json) console.log('ℹ️ launchd: unable to query');
+    }
+  }
+
+  // SwiftBar plugin status (macOS)
+  if (process.platform === 'darwin') {
+    const pluginsDir = await resolveSwiftbarPluginsDir();
+    const pluginInstalled =
+      pluginsDir && existsSync(pluginsDir)
+        ? Boolean((await runCapture('bash', ['-lc', `ls -1 "${pluginsDir}"/happy-stacks.*.sh 2>/dev/null | head -n 1 || true`])).trim())
+        : false;
+    report.checks.swiftbar = { ok: true, pluginsDir, pluginInstalled };
+    if (!json) {
+      console.log(`✅ swiftbar: ${pluginInstalled ? 'plugin installed' : 'not installed'}`);
     }
   }
 
@@ -218,7 +304,31 @@ async function main() {
     }
   } catch {
     report.checks.happyOnPath = { ok: false };
-    if (!json) console.log('ℹ️ happy on PATH: not found (run: happys bootstrap)');
+    if (!json) console.log('ℹ️ happy on PATH: not found (run: happys init --install-path, or add ~/.happy-stacks/bin to PATH)');
+  }
+
+  // happys on PATH
+  try {
+    const happysPath = (await runCapture('sh', ['-lc', 'command -v happys'])).trim();
+    if (happysPath) {
+      report.checks.happysOnPath = { ok: true, path: happysPath };
+      if (!json) console.log(`✅ happys on PATH: ${happysPath}`);
+    }
+  } catch {
+    report.checks.happysOnPath = { ok: false };
+    if (!json) console.log('ℹ️ happys on PATH: not found (run: happys init --install-path, or add ~/.happy-stacks/bin to PATH)');
+  }
+
+  if (!json) {
+    if (!runtimeVersion) {
+      console.log('');
+      console.log('Tips:');
+      console.log('- Install a stable runtime (recommended for SwiftBar/services): happys self update');
+    }
+    if (!report.checks.happysOnPath?.ok) {
+      console.log('- Add shims to PATH: export PATH="$HOME/.happy-stacks/bin:$PATH" (or: happys init --install-path)');
+    }
+    console.log('');
   }
 
   if (json) {

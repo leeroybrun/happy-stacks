@@ -34,6 +34,17 @@ function openSwiftbarPluginsDir() {
   }
 }
 
+function removeSwiftbarPlugins() {
+  const s =
+    'DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)"; if [[ -z "$DIR" ]]; then DIR="$HOME/Library/Application Support/SwiftBar/Plugins"; fi; if [[ -d "$DIR" ]]; then rm -f "$DIR"/happy-stacks.*.sh "$DIR"/happy-local.*.sh 2>/dev/null || true; echo "$DIR"; else echo ""; fi';
+  const res = spawnSync('bash', ['-lc', s], { encoding: 'utf-8' });
+  if (res.status !== 0) {
+    return null;
+  }
+  const out = String(res.stdout ?? '').trim();
+  return out || null;
+}
+
 async function main() {
   const rawArgv = process.argv.slice(2);
   const argv = rawArgv[0] === 'menubar' ? rawArgv.slice(1) : rawArgv;
@@ -44,10 +55,11 @@ async function main() {
   if (wantsHelp(argv, { flags }) || cmd === 'help') {
     printResult({
       json,
-      data: { commands: ['install', 'open'] },
+      data: { commands: ['install', 'uninstall', 'open'] },
       text: [
         '[menubar] usage:',
         '  happys menubar install [--json]',
+        '  happys menubar uninstall [--json]',
         '  happys menubar open [--json]',
         '',
         'notes:',
@@ -66,6 +78,12 @@ async function main() {
       return;
     }
     openSwiftbarPluginsDir();
+    return;
+  }
+
+  if (cmd === 'menubar:uninstall' || cmd === 'uninstall') {
+    const dir = removeSwiftbarPlugins();
+    printResult({ json, data: { ok: true, pluginsDir: dir }, text: dir ? `[menubar] removed plugins from ${dir}` : '[menubar] no plugins dir found' });
     return;
   }
 

@@ -702,7 +702,13 @@ render_stack_info() {
   print_item "$p2" "Open logs dir | bash=/usr/bin/open param1='${base_dir}/logs' terminal=false"
   print_item "$p2" "Open CLI home | bash=/usr/bin/open param1='$cli_home_dir' terminal=false"
   if [[ "$stack_name" == "main" ]]; then
-    print_item "$p2" "Edit env.local | bash=/usr/bin/open param1=-a param2=TextEdit param3='$HAPPY_LOCAL_DIR/env.local' terminal=false"
+    local main_env
+    main_env="$(resolve_main_env_file)"
+    if [[ -n "$main_env" ]]; then
+      print_item "$p2" "Edit main env | bash=/usr/bin/open param1=-a param2=TextEdit param3='$main_env' terminal=false"
+    else
+      print_item "$p2" "Edit env.local | bash=/usr/bin/open param1=-a param2=TextEdit param3='$HAPPY_LOCAL_DIR/env.local' terminal=false"
+    fi
   else
     print_item "$p2" "Open stack env | bash=/usr/bin/open param1='$env_file' terminal=false"
   fi
@@ -766,4 +772,3 @@ render_stack_info() {
     print_item "$p2" "PR worktree into this stack (prompt) | bash=$pr_helper param1=_prompt_ param2=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   fi
 }
-

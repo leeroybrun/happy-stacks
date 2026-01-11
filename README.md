@@ -30,12 +30,6 @@ npx happy-stacks init
 export PATH="$HOME/.happy-stacks/bin:$PATH"
 ```
 
-Tip: to have `init` add PATH automatically (optional):
-
-```bash
-npx happy-stacks init --install-path
-```
-
 Alternative (global install):
 
 ```bash

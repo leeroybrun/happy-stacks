@@ -78,6 +78,7 @@ PNPM_BIN="$(resolve_pnpm_bin)"
 MAIN_PORT="$(resolve_main_port)"
 MAIN_SERVER_COMPONENT="$(resolve_main_server_component)"
 TAILSCALE_URL="$(get_tailscale_url)"
+MAIN_ENV_FILE="$(resolve_main_env_file)"
 
 ensure_launchctl_cache
 
@@ -111,7 +112,7 @@ echo "---"
 echo "Main stack"
 echo "---"
 export MAIN_LEVEL="$MAIN_LEVEL"
-render_stack_info "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$HAPPY_HOME_DIR" "$CLI_HOME_DIR" "com.happy.stacks" "" "$TAILSCALE_URL"
+render_stack_info "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$HAPPY_HOME_DIR" "$CLI_HOME_DIR" "com.happy.stacks" "$MAIN_ENV_FILE" "$TAILSCALE_URL"
 render_component_server "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$MAIN_SERVER_STATUS" "$MAIN_SERVER_PID" "$MAIN_SERVER_METRICS" "$TAILSCALE_URL" "com.happy.stacks"
 render_component_daemon "" "$MAIN_DAEMON_STATUS" "$MAIN_DAEMON_PID" "$MAIN_DAEMON_METRICS" "$MAIN_DAEMON_UPTIME" "$MAIN_LAST_HEARTBEAT" "$CLI_HOME_DIR/daemon.state.json" "main"
 render_component_autostart "" "main" "com.happy.stacks" "$MAIN_LAUNCHAGENT_STATUS" "$MAIN_AUTOSTART_PID" "$MAIN_AUTOSTART_METRICS" "$LOGS_DIR"
@@ -214,6 +215,4 @@ echo "--1h | bash=$SET_INTERVAL param1=1h dir=$HAPPY_LOCAL_DIR terminal=false re
 echo "--2h | bash=$SET_INTERVAL param1=2h dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
 echo "--6h | bash=$SET_INTERVAL param1=6h dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
 echo "--12h | bash=$SET_INTERVAL param1=12h dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-echo "--1d | bash=$SET_INTERVAL param1=1d dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-
-exit 0
+echo "--1d | bash=$SET_INTERVAL param1=1d dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"exit 0

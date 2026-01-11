@@ -20,7 +20,7 @@ Important: for a given run (`happys start` / `happys dev`) you choose **one** fl
 
 ## How to switch (main stack)
 
-Use the `srv` helper (persisted in `env.local`):
+Use the `srv` helper (persisted in `~/.happy/stacks/main/env` by default, or in your stack env file when using `happys stack ...`):
 
 ```bash
 happys srv status
@@ -55,6 +55,20 @@ happys start --server=happy-server
 happys dev --server=happy-server-light
 happys dev --server=happy-server
 ```
+
+## Flavor vs worktree selection (common pitfall)
+
+There are two separate concepts:
+
+- **Flavor selection**: which server component the launcher will run
+  - controlled by `HAPPY_STACKS_SERVER_COMPONENT` (via `happys srv use ...`)
+- **Worktree selection**: which checkout directory to use for each component
+  - controlled by `HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT` and `HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER`
+  - easiest via `happys wt use happy-server-light ...` / `happys wt use happy-server ...`
+
+If you set `HAPPY_STACKS_SERVER_COMPONENT=happy-server-light` but accidentally point the *server-light component dir* at a `happy-server` worktree (or vice versa), `happys start/dev/doctor` will refuse to run and print a fix hint.
+
+`happys wt use` also prevents the most common mismatch when selecting server worktrees inside `components/` / `components/.worktrees/`.
 
 ## Setup note (cloning both)
 

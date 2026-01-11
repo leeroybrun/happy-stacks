@@ -4,12 +4,15 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from './utils/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
-import { componentDirEnvKey, getComponentDir, getComponentsDir, getRootDir } from './utils/paths.mjs';
+import { componentDirEnvKey, getComponentDir, getComponentsDir, getRootDir, getWorkspaceDir } from './utils/paths.mjs';
 import { parseGithubOwner } from './utils/worktrees.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { ensureEnvFileUpdated } from './utils/env_file.mjs';
+import { existsSync } from 'node:fs';
+import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/config.mjs';
+import { detectServerComponentDirMismatch } from './utils/validate.mjs';
 
 function getWorktreesRoot(rootDir) {
   return join(getComponentsDir(rootDir), '.worktrees');
@@ -268,7 +271,7 @@ function parseWorktreeListPorcelain(out) {
 }
 
 function getComponentRepoRoot(rootDir, component) {
-  // Respect env.local overrides so repos can live outside components/ (e.g. an existing checkout at ../happy-server).
+  // Respect component dir overrides so repos can live outside components/ (e.g. an existing checkout at ../happy-server).
   return getComponentDir(rootDir, component);
 }
 
@@ -433,11 +436,16 @@ async function cmdMigrate({ rootDir }) {
     totalRenamed += res.renamed;
   }
 
-  // If env.local pins any component dir to a legacy location, attempt to rewrite it.
+  // If the persisted config pins any component dir to a legacy location, attempt to rewrite it.
   const envUpdates = [];
-  const envLocalPath = join(rootDir, 'env.local');
-  if (await pathExists(envLocalPath)) {
-    const raw = await readFile(envLocalPath, 'utf-8');
+
+  // Keep in sync with scripts/utils/env_local.mjs selection logic.
+  const explicitEnv = (process.env.HAPPY_STACKS_ENV_FILE ?? process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim();
+  const hasHomeConfig = existsSync(getHomeEnvPath()) || existsSync(getHomeEnvLocalPath());
+  const envPath = explicitEnv ? explicitEnv : hasHomeConfig ? resolveUserConfigEnvPath({ cliRootDir: rootDir }) : join(rootDir, 'env.local');
+
+  if (await pathExists(envPath)) {
+    const raw = await readFile(envPath, 'utf-8');
     const rewrite = (v) => {
       if (!v.includes('/components/')) {
         return v;
@@ -461,7 +469,8 @@ async function cmdMigrate({ rootDir }) {
       }
     }
   }
-  await ensureEnvLocalUpdated({ rootDir, updates: envUpdates });
+  // Write to the same file we inspected.
+  await ensureEnvFileUpdated({ envPath, updates: envUpdates });
 
   return { moved: totalMoved, branchesRenamed: totalRenamed };
 }
@@ -491,13 +500,33 @@ async function cmdUse({ rootDir, args }) {
 
   let dir = spec;
   if (!isAbsolute(dir)) {
-    // Interpret as <owner>/<rest...> under components/.worktrees/<component>/.
-    dir = join(worktreesRoot, component, ...spec.split('/'));
+    // Allow passing a repo-relative path (e.g. "components/happy-cli") as an escape hatch.
+    const rel = resolve(getWorkspaceDir(rootDir), dir);
+    if (await pathExists(rel)) {
+      dir = rel;
+    } else {
+      // Interpret as <owner>/<rest...> under components/.worktrees/<component>/.
+      dir = join(worktreesRoot, component, ...spec.split('/'));
+    }
+  } else {
+    dir = resolve(dir);
   }
-  dir = resolve(rootDir, dir);
 
   if (!(await pathExists(dir))) {
     throw new Error(`[wt] target does not exist: ${dir}`);
+  }
+
+  if (component === 'happy-server-light' || component === 'happy-server') {
+    const mismatch = detectServerComponentDirMismatch({ rootDir, serverComponentName: component, serverDir: dir });
+    if (mismatch) {
+      throw new Error(
+        `[wt] invalid target for ${component}:\n` +
+          `- expected a checkout of: ${mismatch.expected}\n` +
+          `- but the path points inside: ${mismatch.actual}\n` +
+          `- path: ${mismatch.serverDir}\n` +
+          `Fix: pick a worktree under components/.worktrees/${mismatch.expected}/ (or run: happys wt use ${mismatch.actual} <spec>).`
+      );
+    }
   }
 
   await (envPath

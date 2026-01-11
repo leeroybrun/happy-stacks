@@ -191,6 +191,12 @@ npx happy-stacks init
 export PATH="$HOME/.happy-stacks/bin:$PATH"
 ```
 
+Optional (automate PATH changes):
+
+```bash
+npx happy-stacks init --install-path
+```
+
 #### **Bootstrap / setup**
 
 Clone missing components, install deps, build/link wrappers, optional autostart:
@@ -459,8 +465,8 @@ Commands:
 happys service install
 happys service status
 happys service tail
-happys stack service:install exp1
-happys stack service:status exp1
+happys stack service exp1 install
+happys stack service exp1 status
 ```
 
 ---
@@ -480,3 +486,21 @@ happys stack service:status exp1
 - **Use `happys wt` / `happys stack` commands instead of raw `git worktree` / manual env edits** whenever possible.
 - **Respect env precedence**: stack env file overrides everything; don’t “hardcode” paths in scripts.
 - **Avoid breaking changes** to env vars/paths; preserve legacy behavior when possible
+
+---
+
+### Keeping happy-stacks up to date
+
+Happy-stacks can run from a persistent runtime install under `~/.happy-stacks/runtime` (recommended for SwiftBar/services).
+
+```bash
+happys self status
+happys self update
+```
+
+### Debug + uninstall
+
+```bash
+happys where
+happys uninstall --yes
+```

@@ -107,7 +107,7 @@ HAPPY_STACKS_IOS_APP_NAME="Happy Local" happys mobile:install
 
 ## Suggested env (recommended)
 
-Add these to your `~/.happy-stacks/env.local` (or a stack env like `~/.happy/stacks/main/env`) so you don’t have to prefix every command:
+Add these to your main stack env file (`~/.happy/stacks/main/env`) (or `~/.happy-stacks/env.local` for global overrides) so you don’t have to prefix every command:
 
 ```bash
 # Required if you want the Release app to default to your stack server:

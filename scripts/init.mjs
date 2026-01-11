@@ -137,9 +137,15 @@ async function main() {
     const spec = version === '0.0.0' ? 'happy-stacks@latest' : `happy-stacks@${version}`;
 
     console.log(`[init] installing runtime into ${runtimeDir} (${spec})...`);
-    const res = spawnSync('npm', ['install', '--silent', '--prefix', runtimeDir, spec], { stdio: 'inherit' });
+    let res = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, spec], { stdio: 'inherit' });
     if (res.status !== 0) {
-      process.exit(res.status ?? 1);
+      // Pre-publish developer experience: if the package isn't on npm yet (E404),
+      // fall back to installing the local checkout into the runtime prefix.
+      console.log(`[init] runtime install failed; attempting local install from ${cliRootDir}...`);
+      res = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, cliRootDir], { stdio: 'inherit' });
+      if (res.status !== 0) {
+        process.exit(res.status ?? 1);
+      }
     }
   }
 

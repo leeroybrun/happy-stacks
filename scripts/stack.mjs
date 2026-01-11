@@ -636,7 +636,8 @@ async function main() {
         '  happys stack srv <name> -- status|use ...',
         '  happys stack wt <name> -- <wt args...>',
         '  happys stack tailscale:status|enable|disable|url <name> [-- ...]',
-        '  happys stack service:* <name>',
+        '  happys stack service <name> <install|uninstall|status|start|stop|restart|enable|disable|logs|tail>',
+        '  happys stack service:* <name>   # legacy alias',
       ].join('\n'),
     });
     return;
@@ -691,7 +692,46 @@ async function main() {
   // Commands that need a stack name.
   const stackName = stackNameFromArg(positionals, 1);
   if (!stackName) {
-    throw new Error('[stack] missing stack name (run with --help)');
+    const helpLines =
+      cmd === 'service'
+        ? [
+            '[stack] usage:',
+            '  happys stack service <name> <install|uninstall|status|start|stop|restart|enable|disable|logs|tail>',
+            '',
+            'example:',
+            '  happys stack service exp1 status',
+          ]
+        : cmd === 'wt'
+          ? [
+              '[stack] usage:',
+              '  happys stack wt <name> -- <wt args...>',
+              '',
+              'example:',
+              '  happys stack wt exp1 -- use happy slopus/pr/123-fix-thing',
+            ]
+          : cmd === 'srv'
+            ? [
+                '[stack] usage:',
+                '  happys stack srv <name> -- status|use ...',
+                '',
+                'example:',
+                '  happys stack srv exp1 -- status',
+              ]
+            : cmd.startsWith('tailscale:')
+              ? [
+                  '[stack] usage:',
+                  '  happys stack tailscale:status|enable|disable|url <name> [-- ...]',
+                  '',
+                  'example:',
+                  '  happys stack tailscale:status exp1',
+                ]
+              : [
+                  '[stack] missing stack name.',
+                  'Run: happys stack --help',
+                ];
+
+    printResult({ json, data: { ok: false, error: 'missing_stack_name', cmd }, text: helpLines.join('\n') });
+    process.exit(1);
   }
 
   // Remaining args after "<cmd> <name>"
@@ -728,6 +768,26 @@ async function main() {
   }
   if (cmd === 'auth') {
     await cmdAuth({ rootDir, stackName, args: passthrough });
+    return;
+  }
+
+  if (cmd === 'service') {
+    const svcCmd = passthrough[0];
+    if (!svcCmd) {
+      printResult({
+        json,
+        data: { ok: false, error: 'missing_service_subcommand', stackName },
+        text: [
+          '[stack] usage:',
+          '  happys stack service <name> <install|uninstall|status|start|stop|restart|enable|disable|logs|tail>',
+          '',
+          'example:',
+          `  happys stack service ${stackName} status`,
+        ].join('\n'),
+      });
+      process.exit(1);
+    }
+    await cmdService({ rootDir, stackName, svcCmd });
     return;
   }
 

@@ -198,7 +198,8 @@ export async function resolvePublicServerUrl({
 async function main() {
   const argv = process.argv.slice(2);
   const { flags, kv } = parseArgs(argv);
-  const cmd = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'status';
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const cmd = positionals[0] ?? 'help';
   const json = wantsJson(argv, { flags });
 
   if (wantsHelp(argv, { flags }) || cmd === 'help') {

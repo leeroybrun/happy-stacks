@@ -133,10 +133,10 @@ Global/non-stack commands:
 Each stack can have its own LaunchAgent (so multiple stacks can start at login).
 
 ```bash
-happys stack service:install exp1
-happys stack service:status exp1
-happys stack service:restart exp1
-happys stack service:logs exp1
+happys stack service exp1 install
+happys stack service exp1 status
+happys stack service exp1 restart
+happys stack service exp1 logs
 ```
 
 Implementation notes:
@@ -176,10 +176,16 @@ You can also pass an absolute path.
 On startup, `happy-stacks` loads env in this order:
 
 1. `~/.happy-stacks/.env` (defaults)
-2. `~/.happy-stacks/env.local` (local overrides)
+2. `~/.happy-stacks/env.local` (optional global overrides; prefer stack env for persistent config)
 3. `HAPPY_STACKS_ENV_FILE` (stack env; highest precedence for `HAPPY_STACKS_*` / `HAPPY_LOCAL_*`)
 
 `happys stack ...` sets `HAPPY_STACKS_ENV_FILE=~/.happy/stacks/<name>/env` (and also sets legacy `HAPPY_LOCAL_ENV_FILE`) and clears any already-exported `HAPPY_STACKS_*` / `HAPPY_LOCAL_*` variables so the stack env stays authoritative.
+
+Cloned-repo fallback (before you run `happys init`):
+
+1. `<repo>/.env` (defaults)
+2. `<repo>/env.local` (optional overrides)
+3. `HAPPY_STACKS_ENV_FILE` (stack env)
 
 ## Daemon auth + “no machine” on first run
 

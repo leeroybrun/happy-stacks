@@ -12,6 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { maybeResetTailscaleServe, resolvePublicServerUrl } from './tailscale.mjs';
 import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { assertServerComponentDirMatches } from './utils/validate.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -71,6 +72,8 @@ async function main() {
 
   const serverDir = getComponentDir(rootDir, serverComponentName);
   const cliDir = getComponentDir(rootDir, 'happy-cli');
+
+  assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
 
   await requireDir(serverComponentName, serverDir);
   await requireDir('happy-cli', cliDir);

@@ -103,6 +103,14 @@ SwiftBar can be configured to use a custom plugin directory. To open the *active
 happys menubar open
 ```
 
+## Uninstall
+
+Remove the installed SwiftBar plugin files (does not delete your stacks/workspace):
+
+```bash
+happys menubar uninstall
+```
+
 ## How refresh works (important)
 
 SwiftBar’s refresh interval is controlled by the **filename** suffix:
