@@ -12,7 +12,10 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 /**
- * Manage the macOS LaunchAgent installed by `happys bootstrap -- --autostart`.
+ * Manage the autostart service installed by `happys bootstrap -- --autostart`.
+ *
+ * - macOS: launchd LaunchAgents
+ * - Linux: systemd user services
  *
  * Commands:
  * - install | uninstall
@@ -60,8 +63,8 @@ function getAutostartEnv({ rootDir }) {
 }
 
 export async function installService() {
-  if (process.platform !== 'darwin') {
-    throw new Error('[local] service install is only supported on macOS (LaunchAgents).');
+  if (process.platform !== 'darwin' && process.platform !== 'linux') {
+    throw new Error('[local] service install is only supported on macOS (launchd) and Linux (systemd user).');
   }
   const rootDir = getRootDir(import.meta.url);
   const { primaryLabel: label } = getDefaultAutostartPaths();
@@ -76,12 +79,21 @@ export async function installService() {
   } catch {
     // ignore
   }
-  await ensureMacAutostartEnabled({ rootDir, label, env });
-  console.log('[local] service installed (macOS LaunchAgent)');
+  if (process.platform === 'darwin') {
+    await ensureMacAutostartEnabled({ rootDir, label, env });
+    console.log('[local] service installed (macOS launchd)');
+    return;
+  }
+  await ensureSystemdUserServiceEnabled({ rootDir, label, env });
+  console.log('[local] service installed (Linux systemd --user)');
 }
 
 export async function uninstallService() {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return;
+
+  if (process.platform === 'linux') {
+    await ensureSystemdUserServiceDisabled({ remove: true });
+    console.log('[local] service uninstalled (systemd user unit removed)');
     return;
   }
   const { primaryPlistPath, legacyPlistPath, primaryLabel, legacyLabel } = getDefaultAutostartPaths();
@@ -100,6 +112,91 @@ export async function uninstallService() {
     // ignore
   }
   console.log('[local] service uninstalled (plist removed)');
+}
+
+function systemdUnitName() {
+  const { label } = getDefaultAutostartPaths();
+  return `${label}.service`;
+}
+
+function systemdUnitPath() {
+  return join(homedir(), '.config', 'systemd', 'user', systemdUnitName());
+}
+
+function systemdEnvLines(env) {
+  return Object.entries(env)
+    .map(([k, v]) => `Environment=${k}=${String(v)}`)
+    .join('\n');
+}
+
+async function ensureSystemdUserServiceEnabled({ rootDir, label, env }) {
+  const unitPath = systemdUnitPath();
+  await mkdir(dirname(unitPath), { recursive: true });
+  const happysShim = join(homedir(), '.happy-stacks', 'bin', 'happys');
+  const entry = existsSync(happysShim) ? happysShim : join(rootDir, 'bin', 'happys.mjs');
+  const exec = existsSync(happysShim) ? entry : `${process.execPath} ${entry}`;
+
+  const unit = `[Unit]
+Description=Happy Stacks (${label})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+${systemdEnvLines(env)}
+ExecStart=${exec} start
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+`;
+
+  await writeFile(unitPath, unit, 'utf-8');
+  await runCapture('systemctl', ['--user', 'daemon-reload']).catch(() => {});
+  await run('systemctl', ['--user', 'enable', '--now', systemdUnitName()]);
+}
+
+async function ensureSystemdUserServiceDisabled({ remove } = {}) {
+  await runCapture('systemctl', ['--user', 'disable', '--now', systemdUnitName()]).catch(() => {});
+  await runCapture('systemctl', ['--user', 'stop', systemdUnitName()]).catch(() => {});
+  if (remove) {
+    await rm(systemdUnitPath(), { force: true }).catch(() => {});
+    await runCapture('systemctl', ['--user', 'daemon-reload']).catch(() => {});
+  }
+}
+
+async function systemdStatus() {
+  await run('systemctl', ['--user', 'status', systemdUnitName(), '--no-pager']);
+}
+
+async function systemdStart({ persistent }) {
+  if (persistent) {
+    await run('systemctl', ['--user', 'enable', '--now', systemdUnitName()]);
+  } else {
+    await run('systemctl', ['--user', 'start', systemdUnitName()]);
+  }
+}
+
+async function systemdStop({ persistent }) {
+  if (persistent) {
+    await run('systemctl', ['--user', 'disable', '--now', systemdUnitName()]);
+  } else {
+    await run('systemctl', ['--user', 'stop', systemdUnitName()]);
+  }
+}
+
+async function systemdRestart() {
+  await run('systemctl', ['--user', 'restart', systemdUnitName()]);
+}
+
+async function systemdLogs({ lines = 120 } = {}) {
+  await run('journalctl', ['--user', '-u', systemdUnitName(), '-n', String(lines), '--no-pager']);
+}
+
+async function systemdTail() {
+  await run('journalctl', ['--user', '-u', systemdUnitName(), '-f']);
 }
 
 async function launchctlTry(args) {
@@ -400,8 +497,8 @@ async function tailLogs() {
 }
 
 async function main() {
-  if (process.platform !== 'darwin') {
-    throw new Error('[local] service commands are only supported on macOS (LaunchAgents).');
+  if (process.platform !== 'darwin' && process.platform !== 'linux') {
+    throw new Error('[local] service commands are only supported on macOS (launchd) and Linux (systemd user).');
   }
 
   const argv = process.argv.slice(2);
@@ -439,19 +536,6 @@ async function main() {
       return;
     case 'status':
       if (json) {
-        const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
-        let launchctlLine = null;
-        try {
-          const list = await runCapture('launchctl', ['list']);
-          launchctlLine =
-            list
-              .split('\n')
-              .map((l) => l.trim())
-              .find((l) => l.endsWith(` ${label}`) || l === label || l.includes(`\t${label}`)) ?? null;
-        } catch {
-          launchctlLine = null;
-        }
-
         const internalUrl = getInternalUrl();
         let health = null;
         try {
@@ -462,46 +546,100 @@ async function main() {
           health = { ok: false, status: null, body: null };
         }
 
-        printResult({
-          json,
-          data: { label, plistPath, stdoutPath, stderrPath, internalUrl, launchctlLine, health },
-        });
+        if (process.platform === 'darwin') {
+          const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
+          let launchctlLine = null;
+          try {
+            const list = await runCapture('launchctl', ['list']);
+            launchctlLine =
+              list
+                .split('\n')
+                .map((l) => l.trim())
+                .find((l) => l.endsWith(` ${label}`) || l === label || l.includes(`\t${label}`)) ?? null;
+          } catch {
+            launchctlLine = null;
+          }
+          printResult({ json, data: { label, plistPath, stdoutPath, stderrPath, internalUrl, launchctlLine, health } });
+        } else {
+          const unitName = systemdUnitName();
+          const unitPath = systemdUnitPath();
+          let systemctlStatus = null;
+          try {
+            systemctlStatus = await runCapture('systemctl', ['--user', 'status', unitName, '--no-pager']);
+          } catch (e) {
+            systemctlStatus = e && typeof e === 'object' && 'out' in e ? e.out : null;
+          }
+          printResult({ json, data: { unitName, unitPath, internalUrl, systemctlStatus, health } });
+        }
       } else {
-      await showStatus();
+        if (process.platform === 'darwin') {
+          await showStatus();
+        } else {
+          await systemdStatus();
+        }
       }
       return;
     case 'start':
-      await startLaunchAgent({ persistent: false });
+      if (process.platform === 'darwin') {
+        await startLaunchAgent({ persistent: false });
+      } else {
+        await systemdStart({ persistent: false });
+      }
       await postStartDiagnostics();
       if (json) printResult({ json, data: { ok: true, action: 'start' } });
       return;
     case 'stop':
-      await stopLaunchAgent({ persistent: false });
+      if (process.platform === 'darwin') {
+        await stopLaunchAgent({ persistent: false });
+      } else {
+        await systemdStop({ persistent: false });
+      }
       if (json) printResult({ json, data: { ok: true, action: 'stop' } });
       return;
     case 'restart':
-      if (!(await restartLaunchAgentBestEffort())) {
-        await stopLaunchAgent({ persistent: false });
-        await waitForLaunchAgentStopped();
-        await startLaunchAgent({ persistent: false });
+      if (process.platform === 'darwin') {
+        if (!(await restartLaunchAgentBestEffort())) {
+          await stopLaunchAgent({ persistent: false });
+          await waitForLaunchAgentStopped();
+          await startLaunchAgent({ persistent: false });
+        }
+      } else {
+        await systemdRestart();
       }
       await postStartDiagnostics();
       if (json) printResult({ json, data: { ok: true, action: 'restart' } });
       return;
     case 'enable':
-      await startLaunchAgent({ persistent: true });
+      if (process.platform === 'darwin') {
+        await startLaunchAgent({ persistent: true });
+      } else {
+        await systemdStart({ persistent: true });
+      }
       await postStartDiagnostics();
       if (json) printResult({ json, data: { ok: true, action: 'enable' } });
       return;
     case 'disable':
-      await stopLaunchAgent({ persistent: true });
+      if (process.platform === 'darwin') {
+        await stopLaunchAgent({ persistent: true });
+      } else {
+        await systemdStop({ persistent: true });
+      }
       if (json) printResult({ json, data: { ok: true, action: 'disable' } });
       return;
     case 'logs':
-      await showLogs();
+      if (process.platform === 'darwin') {
+        await showLogs();
+      } else {
+        const lines = Number(process.env.HAPPY_STACKS_LOG_LINES ?? process.env.HAPPY_LOCAL_LOG_LINES ?? 120) || 120;
+        await systemdLogs({ lines });
+      }
       return;
     case 'tail':
-      await tailLogs();
+      if (process.platform === 'darwin') {
+        await tailLogs();
+      } else {
+        await systemdTail();
+      }
       return;
     default:
       throw new Error(`[local] unknown command: ${cmd}`);

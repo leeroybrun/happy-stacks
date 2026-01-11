@@ -22,6 +22,43 @@ export function getServerComponentName({ kv } = {}) {
   return raw;
 }
 
+export async function fetchHappyHealth(baseUrl) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 1500);
+  try {
+    const url = baseUrl.replace(/\/+$/, '') + '/health';
+    const res = await fetch(url, { method: 'GET', signal: ctl.signal });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = null;
+    }
+    return { ok: res.ok, status: res.status, json, text };
+  } catch {
+    return { ok: false, status: null, json: null, text: null };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function isHappyServerRunning(baseUrl) {
+  const health = await fetchHappyHealth(baseUrl);
+  if (!health.ok) return false;
+  // Both happy-server and happy-server-light use `service: 'happy-server'` today.
+  // Treat any ok health response as "running" to avoid duplicate spawns.
+  const svc = typeof health.json?.service === 'string' ? health.json.service : '';
+  const status = typeof health.json?.status === 'string' ? health.json.status : '';
+  if (svc && svc !== 'happy-server') {
+    return false;
+  }
+  if (status && status !== 'ok') {
+    return false;
+  }
+  return true;
+}
+
 export async function waitForServerReady(url) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {

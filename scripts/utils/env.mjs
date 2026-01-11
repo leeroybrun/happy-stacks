@@ -110,22 +110,33 @@ if (hasHomeConfig) {
     return;
   }
   const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
-  if (stackName !== 'main') {
-    return;
-  }
-  const mainEnv = join(homedir(), '.happy', 'stacks', 'main', 'env');
-  if (!existsSync(mainEnv)) {
-    return;
-  }
-  process.env.HAPPY_STACKS_ENV_FILE = mainEnv;
-  process.env.HAPPY_LOCAL_ENV_FILE = mainEnv;
+  const stacksStorageRootRaw = (process.env.HAPPY_STACKS_STORAGE_DIR ?? process.env.HAPPY_LOCAL_STORAGE_DIR ?? '').trim();
+  const stacksStorageRoot = stacksStorageRootRaw ? expandHome(stacksStorageRootRaw) : join(homedir(), '.happy', 'stacks');
+  const legacyStacksRoot = join(homedir(), '.happy', 'local', 'stacks');
+
+  const candidates = [
+    join(stacksStorageRoot, stackName, 'env'),
+    join(legacyStacksRoot, stackName, 'env'),
+  ];
+  const envPath = candidates.find((p) => existsSync(p));
+  if (!envPath) return;
+
+  process.env.HAPPY_STACKS_ENV_FILE = envPath;
+  process.env.HAPPY_LOCAL_ENV_FILE = envPath;
 })();
-// 3) Load explicit env file overlay (stack env, or any caller-provided env file) last (highest precedence)
-if (process.env.HAPPY_STACKS_ENV_FILE?.trim()) {
-  await loadEnvFile(process.env.HAPPY_STACKS_ENV_FILE.trim(), { override: true, overridePrefix: 'HAPPY_STACKS_' });
-}
-if (process.env.HAPPY_LOCAL_ENV_FILE?.trim()) {
-  await loadEnvFile(process.env.HAPPY_LOCAL_ENV_FILE.trim(), { override: true, overridePrefix: 'HAPPY_LOCAL_' });
+// 3) Load explicit env file overlay (stack env, or any caller-provided env file) last (highest precedence).
+//
+// IMPORTANT:
+// Stack env files intentionally include some non-prefixed keys (e.g. DATABASE_URL, HAPPY_SERVER_LIGHT_DATA_DIR)
+// that must apply for true per-stack isolation. Do not filter by prefix here.
+{
+  const stacksEnv = process.env.HAPPY_STACKS_ENV_FILE?.trim() ? process.env.HAPPY_STACKS_ENV_FILE.trim() : '';
+  const localEnv = process.env.HAPPY_LOCAL_ENV_FILE?.trim() ? process.env.HAPPY_LOCAL_ENV_FILE.trim() : '';
+  const unique = Array.from(new Set([stacksEnv, localEnv].filter(Boolean)));
+  for (const p of unique) {
+    // eslint-disable-next-line no-await-in-loop
+    await loadEnvFile(p, { override: true });
+  }
 }
 
 // Make both prefixes available to the rest of the codebase.

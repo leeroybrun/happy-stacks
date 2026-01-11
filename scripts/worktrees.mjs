@@ -14,6 +14,14 @@ import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/validate.mjs';
 
+function getActiveStackName() {
+  return (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+}
+
+function isMainStack() {
+  return getActiveStackName() === 'main';
+}
+
 function getWorktreesRoot(rootDir) {
   return join(getComponentsDir(rootDir), '.worktrees');
 }
@@ -475,11 +483,31 @@ async function cmdMigrate({ rootDir }) {
   return { moved: totalMoved, branchesRenamed: totalRenamed };
 }
 
-async function cmdUse({ rootDir, args }) {
+async function cmdUse({ rootDir, args, flags }) {
   const component = args[0];
   const spec = args[1];
   if (!component || !spec) {
     throw new Error('[wt] usage: happys wt use <component> <owner/branch|path|default>');
+  }
+
+  // Safety: main stack should not be repointed to arbitrary worktrees by default.
+  // This is the most common “oops, the main stack now runs my PR checkout” footgun (especially for agents).
+  const force = Boolean(flags?.has('--force'));
+  if (!force && isMainStack() && spec !== 'default' && spec !== 'main') {
+    throw new Error(
+      `[wt] refusing to change main stack component override by default.\n` +
+        `- stack: main\n` +
+        `- component: ${component}\n` +
+        `- requested: ${spec}\n` +
+        `\n` +
+        `Recommendation:\n` +
+        `- Create a new isolated stack and switch that stack instead:\n` +
+        `  happys stack new exp1 --interactive\n` +
+        `  happys stack wt exp1 -- use ${component} ${spec}\n` +
+        `\n` +
+        `If you really intend to repoint the main stack, re-run with --force:\n` +
+        `  happys wt use ${component} ${spec} --force\n`
+    );
   }
 
   const key = componentDirEnvKey(component);
@@ -577,10 +605,10 @@ async function cmdUseInteractive({ rootDir }) {
         options: specs.map((s) => ({ label: s, value: s })),
         defaultIndex: 0,
       });
-      await cmdUse({ rootDir, args: [component, picked] });
+      await cmdUse({ rootDir, args: [component, picked], flags: new Set(['--force']) });
       return;
     }
-    await cmdUse({ rootDir, args: [component, 'default'] });
+    await cmdUse({ rootDir, args: [component, 'default'], flags: new Set(['--force']) });
   });
 }
 
@@ -652,7 +680,24 @@ async function cmdNew({ rootDir, argv }) {
   const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: destPath, depsMode });
 
   const shouldUse = flags.has('--use');
+  const force = flags.has('--force');
   if (shouldUse) {
+    if (isMainStack() && !force) {
+      throw new Error(
+        `[wt] refusing to set main stack component override via --use by default.\n` +
+          `- stack: main\n` +
+          `- component: ${component}\n` +
+          `- new worktree: ${destPath}\n` +
+          `\n` +
+          `Recommendation:\n` +
+          `- Use an isolated stack instead:\n` +
+          `  happys stack new exp1 --interactive\n` +
+          `  happys stack wt exp1 -- use ${component} ${owner}/${slug}\n` +
+          `\n` +
+          `If you really intend to repoint the main stack, re-run with --force:\n` +
+          `  happys wt new ${component} ${slug} --use --force\n`
+      );
+    }
     const key = componentDirEnvKey(component);
     await ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: destPath }] });
   }
@@ -776,7 +821,7 @@ async function cmdPr({ rootDir, argv }) {
   const shouldUse = flags.has('--use');
   if (shouldUse) {
     // Reuse cmdUse so it writes to env.local or stack env file depending on context.
-    await cmdUse({ rootDir, args: [component, destPath] });
+    await cmdUse({ rootDir, args: [component, destPath], flags });
   }
 
   const newHead = (await git(destPath, ['rev-parse', 'HEAD'])).trim();
@@ -1535,9 +1580,9 @@ async function main() {
         '  happys wt sync <component> [--remote=<name>] [--json]',
         '  happys wt sync-all [--remote=<name>] [--json]',
         '  happys wt list <component> [--json]',
-        '  happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--interactive|-i] [--json]',
+        '  happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--force] [--interactive|-i] [--json]',
         '  happys wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
-        '  happys wt use <component> <owner/branch|path|default|main> [--interactive|-i] [--json]',
+        '  happys wt use <component> <owner/branch|path|default|main> [--force] [--interactive|-i] [--json]',
         '  happys wt status <component> [worktreeSpec|default|path] [--json]',
         '  happys wt update <component> [worktreeSpec|default|path] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
         '  happys wt update-all [component] [--remote=upstream] [--base=<ref>] [--rebase|--merge] [--dry-run] [--stash|--stash-keep] [--force] [--json]',
@@ -1569,7 +1614,7 @@ async function main() {
     if (interactive && isTty()) {
       await cmdUseInteractive({ rootDir });
     } else {
-      const res = await cmdUse({ rootDir, args: positionals.slice(1) });
+      const res = await cmdUse({ rootDir, args: positionals.slice(1), flags });
       printResult({ json, data: res, text: `[wt] ${res.component}: active dir -> ${res.activeDir}` });
     }
     return;

@@ -65,6 +65,21 @@ export function getHappysRegistry() {
       description: 'Build UI bundle',
     },
     {
+      name: 'typecheck',
+      aliases: ['type-check', 'check-types'],
+      kind: 'node',
+      scriptRelPath: 'scripts/typecheck.mjs',
+      rootUsage: 'happys typecheck [component...] [--json]',
+      description: 'Run TypeScript typechecks for components',
+    },
+    {
+      name: 'migrate',
+      kind: 'node',
+      scriptRelPath: 'scripts/migrate.mjs',
+      rootUsage: 'happys migrate light-to-server --from-stack=<name> --to-stack=<name> [--include-files] [--force] [--json]',
+      description: 'Migrate data between server flavors (experimental)',
+    },
+    {
       name: 'mobile',
       kind: 'node',
       scriptRelPath: 'scripts/mobile.mjs',
@@ -260,3 +275,4 @@ export function renderHappysRootHelp() {
     '  happys help [command]',
   ].join('\n');
 }
+

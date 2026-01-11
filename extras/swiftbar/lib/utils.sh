@@ -50,6 +50,15 @@ dotenv_get() {
   ' "$file" 2>/dev/null
 }
 
+expand_home_path() {
+  local p="$1"
+  if [[ "$p" == "~/"* ]]; then
+    echo "$HOME/${p#~/}"
+    return
+  fi
+  echo "$p"
+}
+
 resolve_happy_local_dir() {
   local home="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
 
@@ -67,6 +76,120 @@ resolve_happy_local_dir() {
 
   # Fall back to home even if missing so the menu can show actionable errors.
   echo "$home"
+}
+
+resolve_stacks_storage_root() {
+  # Priority:
+  # 1) explicit env var
+  # 2) home env.local
+  # 3) home .env (canonical pointer file, written by `happys init`)
+  # 4) default to ~/.happy/stacks
+  if [[ -n "${HAPPY_STACKS_STORAGE_DIR:-}" ]]; then
+    echo "$(expand_home_path "$HAPPY_STACKS_STORAGE_DIR")"
+    return
+  fi
+  if [[ -n "${HAPPY_LOCAL_STORAGE_DIR:-}" ]]; then
+    echo "$(expand_home_path "$HAPPY_LOCAL_STORAGE_DIR")"
+    return
+  fi
+
+  local p
+  p="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "HAPPY_STACKS_STORAGE_DIR")"
+  [[ -z "$p" ]] && p="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "HAPPY_LOCAL_STORAGE_DIR")"
+  [[ -z "$p" ]] && p="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "HAPPY_STACKS_STORAGE_DIR")"
+  [[ -z "$p" ]] && p="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "HAPPY_LOCAL_STORAGE_DIR")"
+  if [[ -n "$p" ]]; then
+    echo "$(expand_home_path "$p")"
+    return
+  fi
+
+  echo "$HOME/.happy/stacks"
+}
+
+resolve_stack_env_file() {
+  local stack_name="${1:-main}"
+  local storage_root
+  storage_root="$(resolve_stacks_storage_root)"
+
+  local primary="${storage_root}/${stack_name}/env"
+  if [[ -f "$primary" ]]; then
+    echo "$primary"
+    return
+  fi
+
+  local legacy="$HOME/.happy/local/stacks/${stack_name}/env"
+  if [[ -f "$legacy" ]]; then
+    echo "$legacy"
+    return
+  fi
+
+  # Very old single-stack location (best-effort).
+  if [[ "$stack_name" == "main" ]]; then
+    local legacy_single="$HOME/.happy/local/env"
+    if [[ -f "$legacy_single" ]]; then
+      echo "$legacy_single"
+      return
+    fi
+  fi
+
+  echo "$primary"
+}
+
+resolve_stack_base_dir() {
+  local stack_name="${1:-main}"
+  local env_file="${2:-}"
+  if [[ -z "$env_file" ]]; then
+    env_file="$(resolve_stack_env_file "$stack_name")"
+  fi
+  # If the env file exists, its parent directory is the stack base dir for all supported layouts.
+  if [[ -n "$env_file" ]] && [[ -f "$env_file" ]]; then
+    dirname "$env_file"
+    return
+  fi
+  local storage_root
+  storage_root="$(resolve_stacks_storage_root)"
+  echo "${storage_root}/${stack_name}"
+}
+
+resolve_stack_cli_home_dir() {
+  local stack_name="${1:-main}"
+  local env_file="${2:-}"
+  if [[ -z "$env_file" ]]; then
+    env_file="$(resolve_stack_env_file "$stack_name")"
+  fi
+  local cli_home=""
+  if [[ -n "$env_file" ]] && [[ -f "$env_file" ]]; then
+    cli_home="$(dotenv_get "$env_file" "HAPPY_STACKS_CLI_HOME_DIR")"
+    [[ -z "$cli_home" ]] && cli_home="$(dotenv_get "$env_file" "HAPPY_LOCAL_CLI_HOME_DIR")"
+  fi
+  if [[ -n "$cli_home" ]]; then
+    echo "$(expand_home_path "$cli_home")"
+    return
+  fi
+  local base_dir
+  base_dir="$(resolve_stack_base_dir "$stack_name" "$env_file")"
+  echo "${base_dir}/cli"
+}
+
+resolve_stack_label() {
+  local stack_name="${1:-main}"
+  local primary="com.happy.stacks"
+  local legacy="com.happy.local"
+  if [[ "$stack_name" != "main" ]]; then
+    primary="com.happy.stacks.${stack_name}"
+    legacy="com.happy.local.${stack_name}"
+  fi
+  local primary_plist="$HOME/Library/LaunchAgents/${primary}.plist"
+  local legacy_plist="$HOME/Library/LaunchAgents/${legacy}.plist"
+  if [[ -f "$primary_plist" ]]; then
+    echo "$primary"
+    return
+  fi
+  if [[ -f "$legacy_plist" ]]; then
+    echo "$legacy"
+    return
+  fi
+  echo "$primary"
 }
 
 resolve_pnpm_bin() {
@@ -150,7 +273,10 @@ resolve_main_env_file() {
     echo "$explicit"
     return
   fi
-  local main="$HOME/.happy/stacks/main/env"
+
+  local storage_root
+  storage_root="$(resolve_stacks_storage_root)"
+  local main="$storage_root/main/env"
   if [[ -f "$main" ]]; then
     echo "$main"
     return
@@ -173,7 +299,7 @@ resolve_main_env_file() {
 resolve_main_port() {
   # Priority:
   # 1) explicit env var
-  # 2) main stack env (~/.happy/stacks/main/env)
+  # 2) main stack env
   # 3) home env.local
   # 4) home .env
   # 4) fallback to HAPPY_LOCAL_PORT / 3005

@@ -209,7 +209,8 @@ render_component_daemon() {
         print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=main param2=$server_url param3=$webapp_url dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
       else
         # For stacks, best-effort use the stack's configured port if available (fallback to main port).
-        local env_file="$HOME/.happy/stacks/$stack_name/env"
+        local env_file
+        env_file="$(resolve_stack_env_file "$stack_name")"
         local port
         port="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
         [[ -z "$port" ]] && port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
@@ -217,7 +218,7 @@ render_component_daemon() {
         server_url="http://127.0.0.1:${port}"
         webapp_url="$(get_tailscale_url)"
         [[ -z "$webapp_url" ]] && webapp_url="http://localhost:${port}"
-        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=$stack_name param2=$server_url param3=$webapp_url param4=$HOME/.happy/stacks/$stack_name/cli dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
+        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=$stack_name param2=$server_url param3=$webapp_url dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
       fi
       print_sep "$p2"
     fi

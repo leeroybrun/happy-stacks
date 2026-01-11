@@ -180,6 +180,14 @@ export async function pmSpawnScript({ label, dir, script, env, options = {} }) {
   return spawnProc(label, pm.cmd, ['--silent', script], env, { ...options, cwd: dir });
 }
 
+export async function pmSpawnBin({ label, dir, bin, args, env, options = {} }) {
+  const pm = await getComponentPm(dir);
+  if (pm.name === 'yarn') {
+    return spawnProc(label, pm.cmd, [bin, ...args], env, { ...options, cwd: dir });
+  }
+  return spawnProc(label, pm.cmd, ['exec', bin, ...args], env, { ...options, cwd: dir });
+}
+
 export async function pmExecBin({ dir, bin, args, env }) {
   const pm = await getComponentPm(dir);
   if (pm.name === 'yarn') {
@@ -217,6 +225,8 @@ export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.lo
       : process.execPath;
   const installedRoot = resolveInstalledCliRoot(rootDir);
   const happysEntrypoint = resolveInstalledPath(rootDir, join('bin', 'happys.mjs'));
+  const happysShim = join(getHappyStacksHomeDir(), 'bin', 'happys');
+  const useShim = existsSync(happysShim);
 
   // Ensure we write to the plist path that matches the label we're installing, instead of the
   // "active" plist path (which might be legacy and cause filename/label mismatches).
@@ -233,8 +243,7 @@ export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.lo
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
-      <string>${nodePath}</string>
-      <string>${happysEntrypoint}</string>
+      ${useShim ? `<string>${happysShim}</string>` : `<string>${nodePath}</string>\n      <string>${happysEntrypoint}</string>`}
       <string>start</string>
     </array>
     <key>WorkingDirectory</key>

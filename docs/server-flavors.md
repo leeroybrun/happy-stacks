@@ -13,8 +13,67 @@ Both are forks/flavors of the same upstream server repo (`slopus/happy-server`),
 
 - **`happy-server`** (full server)
   - closer to upstream “full” behavior (useful when developing server changes meant to go upstream)
-  - typically does **not** serve the built UI (you’ll use the UI dev server or connect the UI separately)
-  - useful when you need to test upstream/server-only behavior or reproduce upstream issues
+  - the upstream server typically does **not** serve the built UI itself, but happy-stacks provides a **UI gateway** so you still get a single URL that serves the UI and proxies API/websockets/files
+  - useful when you need to test upstream/server-only behavior or reproduce upstream issues, with per-stack infra isolation
+
+## Full server infra (no AWS required)
+
+`happy-server` requires:
+
+- Postgres (`DATABASE_URL`)
+- Redis (`REDIS_URL`)
+- S3-compatible object storage (`S3_*`)
+
+Happy Stacks can **manage this for you automatically per stack** using Docker Compose (Postgres + Redis + Minio),
+so you **do not need AWS S3**.
+
+This happens automatically when you run `happys start/dev --server=happy-server` (or when a stack uses `happy-server`),
+unless you disable it with:
+
+```bash
+export HAPPY_STACKS_MANAGED_INFRA=0
+```
+
+If disabled, you must provide `DATABASE_URL`, `REDIS_URL`, and `S3_*` yourself.
+
+## UI serving with `happy-server`
+
+The upstream `happy-server` does not serve the built UI itself.
+
+For a “one URL” UX (especially with Tailscale), happy-stacks starts a lightweight **UI gateway** that:
+
+- serves the built UI at `/` (if a build exists)
+- reverse-proxies API calls to the backend server
+- reverse-proxies realtime websocket upgrades (`/v1/updates`)
+- reverse-proxies public files (to local Minio)
+
+This means `happys start --server=happy-server` can still work end-to-end without requiring AWS S3 or a separate nginx setup.
+
+## Migrating between flavors (SQLite ⇢ Postgres)
+
+Happy Stacks includes an **experimental** migration helper that can copy core chat data from a
+`happy-server-light` stack (SQLite) into a `happy-server` stack (Postgres):
+
+```bash
+happys migrate light-to-server --from-stack=main --to-stack=full1
+```
+
+Optional: include local public files (server-light `files/`) by mirroring them into Minio:
+
+```bash
+happys migrate light-to-server --from-stack=main --to-stack=full1 --include-files
+```
+
+Notes:
+- This preserves IDs (session URLs remain valid on the target server).
+- It also copies the `HANDY_MASTER_SECRET` from the source stack into the target stack’s secret file so auth tokens remain valid.
+
+## Prisma behavior (why start is safer under LaunchAgents)
+
+- **`happys start`** is “production-like”. It avoids running heavyweight schema sync loops under launchd KeepAlive.
+- **`happys dev`** is for rapid iteration:
+  - for `happy-server`: Happy Stacks runs `prisma migrate deploy` by default (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`).
+  - for `happy-server-light`: the upstream dev script runs `prisma db push` by default (configurable via `HAPPY_STACKS_PRISMA_PUSH`).
 
 Important: for a given run (`happys start` / `happys dev`) you choose **one** flavor.
 

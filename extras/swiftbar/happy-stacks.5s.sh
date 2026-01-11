@@ -63,17 +63,6 @@ if [[ -n "${HAPPY_STACKS_WT_TERMINAL:-}" && -z "${HAPPY_LOCAL_WT_TERMINAL:-}" ]]
 if [[ -n "${HAPPY_STACKS_WT_SHELL:-}" && -z "${HAPPY_LOCAL_WT_SHELL:-}" ]]; then HAPPY_LOCAL_WT_SHELL="$HAPPY_STACKS_WT_SHELL"; fi
 if [[ -n "${HAPPY_STACKS_SWIFTBAR_ICON_PATH:-}" && -z "${HAPPY_LOCAL_SWIFTBAR_ICON_PATH:-}" ]]; then HAPPY_LOCAL_SWIFTBAR_ICON_PATH="$HAPPY_STACKS_SWIFTBAR_ICON_PATH"; fi
 
-# Storage root migrated from ~/.happy/local -> ~/.happy/stacks/main.
-if [[ -z "${HAPPY_HOME_DIR:-}" ]]; then
-  if [[ -d "$HOME/.happy/stacks/main" ]] || [[ ! -d "$HOME/.happy/local" ]]; then
-    HAPPY_HOME_DIR="$HOME/.happy/stacks/main"
-  else
-    HAPPY_HOME_DIR="$HOME/.happy/local"
-  fi
-fi
-CLI_HOME_DIR="$HAPPY_HOME_DIR/cli"
-LOGS_DIR="$HAPPY_HOME_DIR/logs"
-
 # Colors
 GREEN="#34C759"
 RED="#FF3B30"
@@ -119,7 +108,15 @@ MAIN_ENV_FILE="$(resolve_main_env_file)"
 
 ensure_launchctl_cache
 
-MAIN_COLLECT="$(collect_stack_status "$MAIN_PORT" "$CLI_HOME_DIR" "com.happy.stacks" "$HAPPY_HOME_DIR")"
+if [[ -z "$MAIN_ENV_FILE" ]]; then
+  MAIN_ENV_FILE="$(resolve_stack_env_file main)"
+fi
+HAPPY_HOME_DIR="$(resolve_stack_base_dir main "$MAIN_ENV_FILE")"
+CLI_HOME_DIR="$(resolve_stack_cli_home_dir main "$MAIN_ENV_FILE")"
+LOGS_DIR="$HAPPY_HOME_DIR/logs"
+MAIN_LABEL="$(resolve_stack_label main)"
+
+MAIN_COLLECT="$(collect_stack_status "$MAIN_PORT" "$CLI_HOME_DIR" "$MAIN_LABEL" "$HAPPY_HOME_DIR")"
 IFS=$'\t' read -r MAIN_LEVEL MAIN_SERVER_STATUS MAIN_SERVER_PID MAIN_SERVER_METRICS MAIN_DAEMON_STATUS MAIN_DAEMON_PID MAIN_DAEMON_METRICS MAIN_DAEMON_UPTIME MAIN_LAST_HEARTBEAT MAIN_LAUNCHAGENT_STATUS MAIN_AUTOSTART_PID MAIN_AUTOSTART_METRICS <<<"$MAIN_COLLECT"
 for v in MAIN_SERVER_PID MAIN_SERVER_METRICS MAIN_DAEMON_PID MAIN_DAEMON_METRICS MAIN_DAEMON_UPTIME MAIN_LAST_HEARTBEAT MAIN_AUTOSTART_PID MAIN_AUTOSTART_METRICS; do
   if [[ "${!v}" == "-" ]]; then
@@ -149,10 +146,10 @@ echo "---"
 echo "Main stack"
 echo "---"
 export MAIN_LEVEL="$MAIN_LEVEL"
-render_stack_info "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$HAPPY_HOME_DIR" "$CLI_HOME_DIR" "com.happy.stacks" "$MAIN_ENV_FILE" "$TAILSCALE_URL"
-render_component_server "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$MAIN_SERVER_STATUS" "$MAIN_SERVER_PID" "$MAIN_SERVER_METRICS" "$TAILSCALE_URL" "com.happy.stacks"
+render_stack_info "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$HAPPY_HOME_DIR" "$CLI_HOME_DIR" "$MAIN_LABEL" "$MAIN_ENV_FILE" "$TAILSCALE_URL"
+render_component_server "" "main" "$MAIN_PORT" "$MAIN_SERVER_COMPONENT" "$MAIN_SERVER_STATUS" "$MAIN_SERVER_PID" "$MAIN_SERVER_METRICS" "$TAILSCALE_URL" "$MAIN_LABEL"
 render_component_daemon "" "$MAIN_DAEMON_STATUS" "$MAIN_DAEMON_PID" "$MAIN_DAEMON_METRICS" "$MAIN_DAEMON_UPTIME" "$MAIN_LAST_HEARTBEAT" "$CLI_HOME_DIR/daemon.state.json" "main"
-render_component_autostart "" "main" "com.happy.stacks" "$MAIN_LAUNCHAGENT_STATUS" "$MAIN_AUTOSTART_PID" "$MAIN_AUTOSTART_METRICS" "$LOGS_DIR"
+render_component_autostart "" "main" "$MAIN_LABEL" "$MAIN_LAUNCHAGENT_STATUS" "$MAIN_AUTOSTART_PID" "$MAIN_AUTOSTART_METRICS" "$LOGS_DIR"
 render_component_tailscale "" "main" "$TAILSCALE_URL"
 
 echo "---"
@@ -166,14 +163,20 @@ if [[ -n "$PNPM_BIN" ]]; then
   echo "---"
 fi
 
-STACKS_DIR="$HOME/.happy/stacks"
-if [[ -d "$STACKS_DIR" ]]; then
-  STACK_NAMES="$(ls -1 "$STACKS_DIR" 2>/dev/null || true)"
+STACKS_DIR="$(resolve_stacks_storage_root)"
+LEGACY_STACKS_DIR="$HOME/.happy/local/stacks"
+if [[ -d "$STACKS_DIR" ]] || [[ -d "$LEGACY_STACKS_DIR" ]]; then
+  STACK_NAMES="$(
+    {
+      ls -1 "$STACKS_DIR" 2>/dev/null || true
+      ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
+    } | sort -u
+  )"
   if [[ -z "$STACK_NAMES" ]]; then
     echo "No stacks found | color=$GRAY"
   fi
   for s in $STACK_NAMES; do
-    env_file="$STACKS_DIR/$s/env"
+    env_file="$(resolve_stack_env_file "$s")"
     [[ -f "$env_file" ]] || continue
 
     port="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
@@ -184,12 +187,9 @@ if [[ -d "$STACKS_DIR" ]]; then
     [[ -z "$server_component" ]] && server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
     [[ -n "$server_component" ]] || server_component="happy-server-light"
 
-    cli_home_dir="$(dotenv_get "$env_file" "HAPPY_STACKS_CLI_HOME_DIR")"
-    [[ -z "$cli_home_dir" ]] && cli_home_dir="$(dotenv_get "$env_file" "HAPPY_LOCAL_CLI_HOME_DIR")"
-    [[ -n "$cli_home_dir" ]] || cli_home_dir="$STACKS_DIR/$s/cli"
-
-    base_dir="$STACKS_DIR/$s"
-    label="com.happy.stacks.$s"
+    base_dir="$(resolve_stack_base_dir "$s" "$env_file")"
+    cli_home_dir="$(resolve_stack_cli_home_dir "$s" "$env_file")"
+    label="$(resolve_stack_label "$s")"
 
     COLLECT="$(collect_stack_status "$port" "$cli_home_dir" "$label" "$base_dir")"
     IFS=$'\t' read -r LEVEL SERVER_STATUS SERVER_PID SERVER_METRICS DAEMON_STATUS DAEMON_PID DAEMON_METRICS DAEMON_UPTIME LAST_HEARTBEAT LAUNCHAGENT_STATUS AUTOSTART_PID AUTOSTART_METRICS <<<"$COLLECT"
@@ -209,7 +209,7 @@ if [[ -d "$STACKS_DIR" ]]; then
     render_components_menu "--" "stack" "$s" "$env_file"
   done
 else
-  echo "No stacks dir found at ~/.happy/stacks | color=$GRAY"
+  echo "No stacks dir found at: $(shorten_path "$STACKS_DIR" 52) | color=$GRAY"
 fi
 
 echo "---"

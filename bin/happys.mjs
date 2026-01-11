@@ -13,12 +13,82 @@ function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
-function resolveHomeDir() {
-  const fromEnv = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim();
-  if (fromEnv) {
-    return fromEnv.replace(/^~(?=\/)/, homedir());
+function expandHome(p) {
+  return String(p ?? '').replace(/^~(?=\/)/, homedir());
+}
+
+function dotenvGetQuick(envPath, key) {
+  try {
+    if (!envPath || !existsSync(envPath)) return '';
+    const lines = readFileSync(envPath, 'utf-8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      if (!trimmed.startsWith(`${key}=`)) continue;
+      let v = trimmed.slice(`${key}=`.length).trim();
+      if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+      if (v.startsWith("'") && v.endsWith("'")) v = v.slice(1, -1);
+      return v;
+    }
+  } catch {
+    // ignore
   }
-  return join(homedir(), '.happy-stacks');
+  return '';
+}
+
+function resolveCliRootDir() {
+  const fromEnv = (
+    process.env.HAPPY_STACKS_CLI_ROOT_DIR ??
+    process.env.HAPPY_LOCAL_CLI_ROOT_DIR ??
+    process.env.HAPPY_STACKS_DEV_CLI_ROOT_DIR ??
+    process.env.HAPPY_LOCAL_DEV_CLI_ROOT_DIR ??
+    ''
+  ).trim();
+  if (fromEnv) return expandHome(fromEnv);
+
+  // Stable pointer file: even if the real home dir is elsewhere, `happys init` writes the pointer here.
+  const canonicalEnv = join(homedir(), '.happy-stacks', '.env');
+  const v =
+    dotenvGetQuick(canonicalEnv, 'HAPPY_STACKS_CLI_ROOT_DIR') ||
+    dotenvGetQuick(canonicalEnv, 'HAPPY_LOCAL_CLI_ROOT_DIR') ||
+    dotenvGetQuick(canonicalEnv, 'HAPPY_STACKS_DEV_CLI_ROOT_DIR') ||
+    dotenvGetQuick(canonicalEnv, 'HAPPY_LOCAL_DEV_CLI_ROOT_DIR') ||
+    '';
+  return v ? expandHome(v) : '';
+}
+
+function maybeReexecToCliRoot(cliRootDir) {
+  if ((process.env.HAPPY_STACKS_CLI_REEXEC ?? process.env.HAPPY_STACKS_DEV_REEXEC ?? '') === '1') return;
+  if ((process.env.HAPPY_STACKS_CLI_ROOT_DISABLE ?? process.env.HAPPY_STACKS_DEV_CLI_DISABLE ?? '') === '1') return;
+
+  const cliRoot = resolveCliRootDir();
+  if (!cliRoot) return;
+  if (cliRoot === cliRootDir) return;
+
+  const cliBin = join(cliRoot, 'bin', 'happys.mjs');
+  if (!existsSync(cliBin)) return;
+
+  const argv = process.argv.slice(2);
+  const res = spawnSync(process.execPath, [cliBin, ...argv], {
+    stdio: 'inherit',
+    cwd: cliRoot,
+    env: {
+      ...process.env,
+      HAPPY_STACKS_CLI_REEXEC: '1',
+      HAPPY_STACKS_CLI_ROOT_DIR: cliRoot,
+    },
+  });
+  process.exit(res.status ?? 1);
+}
+
+function resolveHomeDir() {
+  const fromEnv = (process.env.HAPPY_STACKS_HOME_DIR ?? process.env.HAPPY_LOCAL_HOME_DIR ?? '').trim();
+  if (fromEnv) return expandHome(fromEnv);
+
+  // Stable pointer file: even if the real home dir is elsewhere, `happys init` writes the pointer here.
+  const canonicalEnv = join(homedir(), '.happy-stacks', '.env');
+  const v = dotenvGetQuick(canonicalEnv, 'HAPPY_STACKS_HOME_DIR') || dotenvGetQuick(canonicalEnv, 'HAPPY_LOCAL_HOME_DIR') || '';
+  return v ? expandHome(v) : join(homedir(), '.happy-stacks');
 }
 
 function maybeAutoUpdateNotice(cliRootDir, cmd) {
@@ -123,6 +193,7 @@ function runNodeScript(cliRootDir, scriptRelPath, args) {
 
 function main() {
   const cliRootDir = getCliRootDir();
+  maybeReexecToCliRoot(cliRootDir);
   const argv = process.argv.slice(2);
 
   const cmd = argv.find((a) => !a.startsWith('--')) ?? 'help';

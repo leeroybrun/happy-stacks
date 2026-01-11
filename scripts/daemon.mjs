@@ -61,6 +61,52 @@ export function cleanupStaleDaemonState(homeDir) {
   try { unlinkSync(statePath); } catch { /* ignore */ }
 }
 
+export function checkDaemonState(cliHomeDir) {
+  const statePath = join(cliHomeDir, 'daemon.state.json');
+  const lockPath = join(cliHomeDir, 'daemon.state.json.lock');
+
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (existsSync(statePath)) {
+    try {
+      const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+      const pid = Number(state?.pid);
+      if (Number.isFinite(pid) && pid > 0) {
+        return alive(pid) ? { status: 'running', pid } : { status: 'stale_state', pid };
+      }
+      return { status: 'bad_state', pid: null };
+    } catch {
+      return { status: 'bad_state', pid: null };
+    }
+  }
+
+  if (existsSync(lockPath)) {
+    try {
+      const pid = Number(readFileSync(lockPath, 'utf-8').trim());
+      if (Number.isFinite(pid) && pid > 0) {
+        return alive(pid) ? { status: 'starting', pid } : { status: 'stale_lock', pid };
+      }
+      return { status: 'bad_lock', pid: null };
+    } catch {
+      return { status: 'bad_lock', pid: null };
+    }
+  }
+
+  return { status: 'stopped', pid: null };
+}
+
+export function isDaemonRunning(cliHomeDir) {
+  const s = checkDaemonState(cliHomeDir);
+  return s.status === 'running' || s.status === 'starting';
+}
+
 function getLatestDaemonLogPath(homeDir) {
   try {
     const logsDir = join(homeDir, 'logs');
@@ -247,7 +293,9 @@ export async function startLocalDaemonWithAuth({
   internalServerUrl,
   publicServerUrl,
   isShuttingDown,
+  forceRestart = false,
 }) {
+  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
   const baseEnv = { ...process.env };
   const daemonEnv = getDaemonEnv({ baseEnv, cliHomeDir, internalServerUrl, publicServerUrl });
 
@@ -255,16 +303,14 @@ export async function startLocalDaemonWithAuth({
   // to avoid requiring an interactive auth flow under launchd.
   await seedCredentialsIfMissing({ cliHomeDir });
 
-  // Stop any existing daemon (best-effort) in both legacy and local home dirs.
-  const legacyEnv = { ...daemonEnv, HAPPY_HOME_DIR: join(homedir(), '.happy') };
-  try {
-    await new Promise((resolve) => {
-      const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], legacyEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
-      proc.on('exit', () => resolve());
-    });
-  } catch {
-    // ignore
+  const existing = checkDaemonState(cliHomeDir);
+  if (!forceRestart && (existing.status === 'running' || existing.status === 'starting')) {
+    // eslint-disable-next-line no-console
+    console.log(`[local] daemon already running for stack home (pid=${existing.pid})`);
+    return;
   }
+
+  // Stop any existing daemon for THIS stack home dir.
   try {
     await new Promise((resolve) => {
       const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -274,12 +320,26 @@ export async function startLocalDaemonWithAuth({
     // ignore
   }
 
+  // Best-effort: for the main stack, also stop the legacy global daemon home (~/.happy) to prevent legacy overlap.
+  if (stackName === 'main') {
+    const legacyEnv = { ...daemonEnv, HAPPY_HOME_DIR: join(homedir(), '.happy') };
+    try {
+      await new Promise((resolve) => {
+        const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], legacyEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
+        proc.on('exit', () => resolve());
+      });
+    } catch {
+      // ignore
+    }
+    // If state is missing and stop couldn't find it, force-stop the lock PID (otherwise repeated restarts accumulate daemons).
+    await killDaemonFromLockFile({ cliHomeDir: join(homedir(), '.happy') });
+    cleanupStaleDaemonState(join(homedir(), '.happy'));
+  }
+
   // If state is missing and stop couldn't find it, force-stop the lock PID (otherwise repeated restarts accumulate daemons).
-  await killDaemonFromLockFile({ cliHomeDir: join(homedir(), '.happy') });
   await killDaemonFromLockFile({ cliHomeDir });
 
   // Clean up stale lock/state files that can block daemon start.
-  cleanupStaleDaemonState(join(homedir(), '.happy'));
   cleanupStaleDaemonState(cliHomeDir);
 
   const credentialsPath = join(cliHomeDir, 'access.key');

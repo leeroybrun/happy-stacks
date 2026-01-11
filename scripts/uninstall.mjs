@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
+import { getHappyStacksHomeDir, getRootDir, getStacksStorageRoot } from './utils/paths.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
 
 function expandHome(p) {
@@ -148,7 +148,7 @@ async function main() {
 
   // 5) Optionally remove stacks data.
   if (removeStacks) {
-    const stacksRoot = join(homedir(), '.happy', 'stacks');
+    const stacksRoot = getStacksStorageRoot();
     if (existsSync(stacksRoot)) {
       if (!dryRun) {
         await rm(stacksRoot, { recursive: true, force: true });
@@ -177,7 +177,7 @@ async function main() {
       `[uninstall] removed: ${removedPaths.length ? removedPaths.join(', ') : '(nothing)'}`,
       menubar?.pluginsDir ? `[uninstall] SwiftBar plugins dir: ${menubar.pluginsDir}` : null,
       removeWorkspace ? `[uninstall] workspace removed: ${workspaceDir}` : `[uninstall] workspace kept: ${workspaceDir}`,
-      removeStacks ? `[uninstall] stacks removed: ~/.happy/stacks` : `[uninstall] stacks kept: ~/.happy/stacks`,
+      removeStacks ? `[uninstall] stacks removed: ${getStacksStorageRoot()}` : `[uninstall] stacks kept: ${getStacksStorageRoot()}`,
     ]
       .filter(Boolean)
       .join('\n'),

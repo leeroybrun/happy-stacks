@@ -1,18 +1,19 @@
 import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { pathExists } from './utils/fs.mjs';
-import { killProcessTree, runCapture } from './utils/proc.mjs';
+import { killProcessTree, runCapture, spawnProc } from './utils/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
 import { killPortListeners } from './utils/ports.mjs';
-import { getServerComponentName, waitForServerReady } from './utils/server.mjs';
-import { pmSpawnScript, requireDir } from './utils/pm.mjs';
+import { getServerComponentName, isHappyServerRunning, waitForServerReady } from './utils/server.mjs';
+import { ensureDepsInstalled, pmExecBin, pmSpawnScript, requireDir } from './utils/pm.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { maybeResetTailscaleServe, resolvePublicServerUrl } from './tailscale.mjs';
-import { startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
+import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { assertServerComponentDirMatches } from './utils/validate.mjs';
+import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
+import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -30,10 +31,10 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon'], json: true },
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart'], json: true },
       text: [
         '[start] usage:',
-        '  happys start [--server=happy-server|happy-server-light] [--json]',
+        '  happys start [--server=happy-server|happy-server-light] [--restart] [--json]',
         '  (legacy in a cloned repo): pnpm start [-- --server=happy-server|happy-server-light] [--json]',
         '  note: --json prints the resolved config (dry-run) and exits.',
       ].join('\n'),
@@ -62,11 +63,12 @@ async function main() {
 
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
   const serveUiWanted = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
-  const serveUi = serveUiWanted && serverComponentName === 'happy-server-light';
+  const serveUi = serveUiWanted;
   const uiPrefix = process.env.HAPPY_LOCAL_UI_PREFIX?.trim() ? process.env.HAPPY_LOCAL_UI_PREFIX.trim() : '/';
+  const autostart = getDefaultAutostartPaths();
   const uiBuildDir = process.env.HAPPY_LOCAL_UI_BUILD_DIR?.trim()
     ? process.env.HAPPY_LOCAL_UI_BUILD_DIR.trim()
-    : join(getDefaultAutostartPaths().baseDir, 'ui');
+    : join(autostart.baseDir, 'ui');
 
   const enableTailscaleServe = (process.env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0') === '1';
 
@@ -74,6 +76,7 @@ async function main() {
   const cliDir = getComponentDir(rootDir, 'happy-cli');
 
   assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
+  assertServerPrismaProviderMatches({ serverComponentName, serverDir });
 
   await requireDir(serverComponentName, serverDir);
   await requireDir('happy-cli', cliDir);
@@ -82,7 +85,8 @@ async function main() {
 
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
-    : join(getDefaultAutostartPaths().baseDir, 'cli');
+    : join(autostart.baseDir, 'cli');
+  const restart = flags.has('--restart');
 
   if (json) {
     printResult({
@@ -105,17 +109,20 @@ async function main() {
     return;
   }
 
-  if (serveUiWanted && !serveUi) {
-    console.log(`[local] ui serving disabled (requires happy-server-light; you are using ${serverComponentName})`);
-  }
-
   if (serveUi && !(await pathExists(uiBuildDir))) {
-    throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: happys build (legacy in a cloned repo: pnpm build)`);
+    if (serverComponentName === 'happy-server-light') {
+      throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: happys build (legacy in a cloned repo: pnpm build)`);
+    }
+    // For happy-server, UI serving is optional via the UI gateway.
+    console.log(`[local] UI build directory not found at ${uiBuildDir}; UI gateway will be disabled`);
   }
 
   const children = [];
   let shuttingDown = false;
   const baseEnv = { ...process.env };
+
+  // Ensure server deps exist before any Prisma/docker work.
+  await ensureDepsInstalled(serverDir, serverComponentName);
 
   // Public URL automation: auto-prefer https://*.ts.net on every start.
   const resolved = await resolvePublicServerUrl({
@@ -126,9 +133,18 @@ async function main() {
   });
   publicServerUrl = resolved.publicServerUrl;
 
+  const serverAlreadyRunning = await isHappyServerRunning(internalServerUrl);
+  const daemonAlreadyRunning = startDaemon ? isDaemonRunning(cliHomeDir) : false;
+  if (!restart && serverAlreadyRunning && (!startDaemon || daemonAlreadyRunning)) {
+    console.log(`[local] start: stack already running (server=${internalServerUrl}${startDaemon ? ` daemon=${daemonAlreadyRunning ? 'running' : 'stopped'}` : ''})`);
+    return;
+  }
+
   // Server
   // If a previous run left a server behind, free the port first (prevents false "ready" checks).
-  await killPortListeners(serverPort, { label: 'server' });
+  if (!serverAlreadyRunning || restart) {
+    await killPortListeners(serverPort, { label: 'server' });
+  }
 
   const serverEnv = {
     ...baseEnv,
@@ -138,19 +154,94 @@ async function main() {
     // Avoid noisy failures if a previous run left the metrics port busy.
     // You can override with METRICS_ENABLED=true if you want it.
     METRICS_ENABLED: baseEnv.METRICS_ENABLED ?? 'false',
-    ...(serveUi
+    ...(serveUi && serverComponentName === 'happy-server-light'
       ? {
           HAPPY_SERVER_LIGHT_UI_DIR: uiBuildDir,
           HAPPY_SERVER_LIGHT_UI_PREFIX: uiPrefix,
         }
       : {}),
   };
+  if (serverComponentName === 'happy-server-light') {
+    const dataDir = baseEnv.HAPPY_SERVER_LIGHT_DATA_DIR?.trim()
+      ? baseEnv.HAPPY_SERVER_LIGHT_DATA_DIR.trim()
+      : join(autostart.baseDir, 'server-light');
+    serverEnv.HAPPY_SERVER_LIGHT_DATA_DIR = dataDir;
+    serverEnv.HAPPY_SERVER_LIGHT_FILES_DIR = baseEnv.HAPPY_SERVER_LIGHT_FILES_DIR?.trim()
+      ? baseEnv.HAPPY_SERVER_LIGHT_FILES_DIR.trim()
+      : join(dataDir, 'files');
+    serverEnv.DATABASE_URL = baseEnv.DATABASE_URL?.trim()
+      ? baseEnv.DATABASE_URL.trim()
+      : `file:${join(dataDir, 'happy-server-light.sqlite')}`;
 
-  const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'dev', env: serverEnv });
-  children.push(server);
+    // Optional: update SQLite schema on interactive start only.
+    // We intentionally do NOT run this under launchd KeepAlive (no TTY) to avoid restart loops.
+    const prismaPushOnStart = (baseEnv.HAPPY_STACKS_PRISMA_PUSH ?? baseEnv.HAPPY_LOCAL_PRISMA_PUSH ?? '').trim() === '1';
+    if (prismaPushOnStart && process.stdout.isTTY) {
+      await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['db', 'push'], env: serverEnv });
+    }
+  }
+  let effectiveInternalServerUrl = internalServerUrl;
+  if (serverComponentName === 'happy-server') {
+    const managed = (baseEnv.HAPPY_STACKS_MANAGED_INFRA ?? baseEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1') !== '0';
+    if (managed) {
+      const envPath = baseEnv.HAPPY_STACKS_ENV_FILE ?? baseEnv.HAPPY_LOCAL_ENV_FILE ?? '';
+      const infra = await ensureHappyServerManagedInfra({
+        stackName: autostart.stackName,
+        baseDir: autostart.baseDir,
+        serverPort,
+        publicServerUrl,
+        envPath,
+        env: baseEnv,
+      });
 
-  await waitForServerReady(internalServerUrl);
-  console.log(`[local] server ready at ${internalServerUrl}`);
+      // Backend runs on a separate port; gateway owns the public port.
+      const backendPortRaw = (baseEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? baseEnv.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT ?? '').trim();
+      const backendPort = backendPortRaw ? Number(backendPortRaw) : serverPort + 10;
+      const backendUrl = `http://127.0.0.1:${backendPort}`;
+      await killPortListeners(backendPort, { label: 'happy-server-backend' });
+
+      const backendEnv = { ...serverEnv, ...infra.env, PORT: String(backendPort) };
+      const autoMigrate = (baseEnv.HAPPY_STACKS_PRISMA_MIGRATE ?? baseEnv.HAPPY_LOCAL_PRISMA_MIGRATE ?? '1') !== '0';
+      if (autoMigrate) {
+        await applyHappyServerMigrations({ serverDir, env: backendEnv });
+      }
+
+      const backend = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'start', env: backendEnv });
+      children.push(backend);
+      await waitForServerReady(backendUrl);
+
+      const gatewayArgs = [
+        join(rootDir, 'scripts', 'ui_gateway.mjs'),
+        `--port=${serverPort}`,
+        `--backend-url=${backendUrl}`,
+        `--minio-port=${infra.env.S3_PORT}`,
+        `--bucket=${infra.env.S3_BUCKET}`,
+      ];
+      if (serveUi && (await pathExists(uiBuildDir))) {
+        gatewayArgs.push(`--ui-dir=${uiBuildDir}`);
+      } else {
+        gatewayArgs.push('--no-ui');
+      }
+
+      const gateway = spawnProc('ui', process.execPath, gatewayArgs, { ...backendEnv, PORT: String(serverPort) }, { cwd: rootDir });
+      children.push(gateway);
+      await waitForServerReady(internalServerUrl);
+      effectiveInternalServerUrl = internalServerUrl;
+
+      // Skip default server spawn below
+    }
+  }
+
+  // Default server start (happy-server-light, or happy-server without managed infra).
+  if (!(serverComponentName === 'happy-server' && (baseEnv.HAPPY_STACKS_MANAGED_INFRA ?? baseEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1') !== '0')) {
+    if (!serverAlreadyRunning || restart) {
+      const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'start', env: serverEnv });
+      children.push(server);
+      await waitForServerReady(internalServerUrl);
+    } else {
+      console.log(`[local] server already running at ${internalServerUrl}`);
+    }
+  }
 
   if (enableTailscaleServe) {
     try {
@@ -167,9 +258,9 @@ async function main() {
   }
 
   if (serveUi) {
-    const localUi = internalServerUrl.replace(/\/+$/, '') + '/';
+    const localUi = effectiveInternalServerUrl.replace(/\/+$/, '') + '/';
     console.log(`[local] ui served locally at ${localUi}`);
-    if (publicServerUrl && publicServerUrl !== internalServerUrl && publicServerUrl !== localUi && publicServerUrl !== defaultPublicUrl) {
+    if (publicServerUrl && publicServerUrl !== effectiveInternalServerUrl && publicServerUrl !== localUi && publicServerUrl !== defaultPublicUrl) {
       const pubUi = publicServerUrl.replace(/\/+$/, '') + '/';
       console.log(`[local] public url: ${pubUi}`);
     }
@@ -179,7 +270,7 @@ async function main() {
 
     console.log(
       `[local] tip: to run 'happy' from your terminal *against this local server* (and have sessions show up in the UI), use:\n` +
-      `export HAPPY_SERVER_URL=\"${internalServerUrl}\"\n` +
+      `export HAPPY_SERVER_URL=\"${effectiveInternalServerUrl}\"\n` +
       `export HAPPY_HOME_DIR=\"${cliHomeDir}\"\n` +
       `export HAPPY_WEBAPP_URL=\"${publicServerUrl}\"\n`
     );
@@ -190,9 +281,10 @@ async function main() {
     await startLocalDaemonWithAuth({
       cliBin,
       cliHomeDir,
-      internalServerUrl,
+      internalServerUrl: effectiveInternalServerUrl,
       publicServerUrl,
       isShuttingDown: () => shuttingDown,
+      forceRestart: restart,
     });
   }
 
@@ -204,7 +296,7 @@ async function main() {
     console.log('\n[local] shutting down...');
 
     if (startDaemon) {
-      await stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir });
+        await stopLocalDaemon({ cliBin, internalServerUrl: effectiveInternalServerUrl, cliHomeDir });
     }
 
     for (const child of children) {

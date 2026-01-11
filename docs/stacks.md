@@ -7,6 +7,7 @@ A “stack” is just:
 - a dedicated **server port**
 - isolated directories for **UI build output**, **CLI home**, and **logs**
 - optional per-component overrides (point at specific worktrees)
+- (when using `happy-server`) isolated **infra** (Postgres/Redis/Minio) managed per-stack
 
 Stacks are configured via a plain env file stored under:
 
@@ -51,6 +52,15 @@ The wizard lets you:
 - pick the server type (`happy-server-light` or `happy-server`)
 - pick or create worktrees for `happy`, `happy-cli`, and the chosen server component
 - choose which Git remote to base newly-created worktrees on (defaults to `upstream`)
+
+When creating `--server=happy-server` stacks, happy-stacks will also reserve additional ports and persist
+the stack-scoped infra config in the stack env file (so restarts are stable):
+
+- `HAPPY_STACKS_PG_PORT`
+- `HAPPY_STACKS_REDIS_PORT`
+- `HAPPY_STACKS_MINIO_PORT`
+- `HAPPY_STACKS_MINIO_CONSOLE_PORT`
+- `DATABASE_URL`, `REDIS_URL`, `S3_*`
 
 ## Run a stack
 
@@ -128,9 +138,9 @@ Global/non-stack commands:
 - `happys bootstrap` (sets up shared component repos)
 - `happys cli:link` (installs `happy` shim under `~/.happy-stacks/bin/`)
 
-## Services (macOS LaunchAgents)
+## Services (autostart)
 
-Each stack can have its own LaunchAgent (so multiple stacks can start at login).
+Each stack can have its own autostart service (so multiple stacks can start at login).
 
 ```bash
 happys stack service exp1 install
@@ -141,10 +151,12 @@ happys stack service exp1 logs
 
 Implementation notes:
 
-- Service label is stack-scoped:
+- Service name/label is stack-scoped:
   - `main` → `com.happy.stacks` (legacy: `com.happy.local`)
   - `exp1` → `com.happy.stacks.exp1` (legacy: `com.happy.local.exp1`)
-- The LaunchAgent persists `HAPPY_STACKS_ENV_FILE` (and legacy `HAPPY_LOCAL_ENV_FILE`), so you can edit the stack env file without reinstalling.
+- macOS: implemented via **launchd LaunchAgents**
+- Linux: implemented via **systemd user services** (if available)
+- The service persists `HAPPY_STACKS_ENV_FILE` (and legacy `HAPPY_LOCAL_ENV_FILE`), so you can edit the stack env file without reinstalling.
 
 ## Component/worktree selection per stack
 

@@ -45,6 +45,38 @@ function extractHttpsUrl(serveStatusText) {
   return m ? m[0] : null;
 }
 
+function tailscaleStatusMatchesInternalServerUrl(status, internalServerUrl) {
+  const raw = (internalServerUrl ?? '').trim();
+  if (!raw) return true;
+
+  // Fast path.
+  if (status.includes(raw)) return true;
+
+  // Tailscale typically prints proxy targets like:
+  //   |-- / proxy http://127.0.0.1:3005
+  let port = '';
+  try {
+    port = new URL(raw).port;
+  } catch {
+    port = '';
+  }
+  if (!port) return false;
+
+  const re = new RegExp(String.raw`\\bproxy\\s+https?:\\/\\/(?:127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0):${port}\\b`, 'i');
+  return re.test(status);
+}
+
+export async function tailscaleServeHttpsUrlForInternalServerUrl(internalServerUrl) {
+  try {
+    const status = await tailscaleServeStatus();
+    const https = extractHttpsUrl(status);
+    if (!https) return null;
+    return tailscaleStatusMatchesInternalServerUrl(status, internalServerUrl) ? https : null;
+  } catch {
+    return null;
+  }
+}
+
 function extractServeEnableUrl(text) {
   const m = String(text ?? '').match(/https:\/\/login\.tailscale\.com\/f\/serve\?node=\S+/i);
   return m ? m[0] : null;
@@ -246,7 +278,7 @@ export async function resolvePublicServerUrl({
   }
 
   // If serve is already configured, use its HTTPS URL if present.
-  const existing = await tailscaleServeHttpsUrl();
+  const existing = await tailscaleServeHttpsUrlForInternalServerUrl(internalServerUrl);
   if (existing) {
     return { publicServerUrl: existing, source: 'tailscale-status' };
   }
@@ -271,7 +303,7 @@ export async function resolvePublicServerUrl({
     : 15000;
   const deadline = Date.now() + (Number.isFinite(waitMs) ? waitMs : 15000);
   while (Date.now() < deadline) {
-    const url = await tailscaleServeHttpsUrl();
+    const url = await tailscaleServeHttpsUrlForInternalServerUrl(internalServerUrl);
     if (url) {
       return { publicServerUrl: url, source: 'tailscale-wait' };
     }

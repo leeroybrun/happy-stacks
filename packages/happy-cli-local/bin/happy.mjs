@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// Ensure we honor the canonical pointer file at ~/.happy-stacks/.env and match happys scripts
+// precedence (home config when present, otherwise repo config + stack env overlay).
+import '../../../scripts/utils/env.mjs';
+
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';

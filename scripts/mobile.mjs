@@ -1,10 +1,11 @@
 import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
-import { killPortListeners } from './utils/ports.mjs';
+import { killPortListeners, pickNextFreeTcpPort } from './utils/ports.mjs';
 import { run, runCapture, spawnProc } from './utils/proc.mjs';
-import { getComponentDir, getRootDir } from './utils/paths.mjs';
-import { ensureDepsInstalled, requireDir } from './utils/pm.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -25,6 +26,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
+  const restart = flags.has('--restart');
 
   if (wantsHelp(argv, { flags })) {
     printResult({
@@ -40,6 +42,7 @@ async function main() {
           '--prebuild [--platform=ios|all] [--clean]',
           '--run-ios [--device=<id-or-name>] [--configuration=Debug|Release]',
           '--metro / --no-metro',
+          '--restart',
           '--no-signing-fix',
         ],
         json: true,
@@ -47,6 +50,7 @@ async function main() {
       text: [
         '[mobile] usage:',
         '  happys mobile [--host=lan|localhost|tunnel] [--port=8081] [--scheme=...] [--json]',
+        '  happys mobile --restart   # force-restart Metro for this stack/worktree',
         '  happys mobile --run-ios [--device=...] [--configuration=Debug|Release]',
         '  happys mobile --prebuild [--platform=ios|all] [--clean]',
         '  happys mobile --no-metro   # just build/install (if --run-ios) without starting Metro',
@@ -107,7 +111,7 @@ async function main() {
     process.env.HAPPY_LOCAL_MOBILE_SCHEME ??
     iosBundleId;
   const host = kv.get('--host') ?? process.env.HAPPY_STACKS_MOBILE_HOST ?? process.env.HAPPY_LOCAL_MOBILE_HOST ?? 'lan';
-  const port = kv.get('--port') ?? process.env.HAPPY_STACKS_MOBILE_PORT ?? process.env.HAPPY_LOCAL_MOBILE_PORT ?? '8081';
+  const portRaw = kv.get('--port') ?? process.env.HAPPY_STACKS_MOBILE_PORT ?? process.env.HAPPY_LOCAL_MOBILE_PORT ?? '8081';
   // Default behavior:
   // - `happys mobile` starts Metro and keeps running.
   // - `happys mobile --run-ios` / `happys mobile:ios` just builds/installs and exits (unless --metro is provided).
@@ -119,6 +123,20 @@ async function main() {
     ...process.env,
     APP_ENV: appEnv,
   };
+
+  const autostart = getDefaultAutostartPaths();
+  const mobilePaths = getExpoStatePaths({
+    baseDir: autostart.baseDir,
+    kind: 'mobile-dev',
+    projectDir: uiDir,
+    stateFileName: 'mobile.state.json',
+  });
+  await ensureExpoIsolationEnv({
+    env,
+    stateDir: mobilePaths.stateDir,
+    expoHomeDir: mobilePaths.expoHomeDir,
+    tmpDir: mobilePaths.tmpDir,
+  });
 
   // Allow happy-stacks to define the default server URL baked into the app bundle.
   // This is read by the app via `process.env.EXPO_PUBLIC_HAPPY_SERVER_URL`.
@@ -139,7 +157,7 @@ async function main() {
         iosBundleId,
         scheme,
         host,
-        port,
+        port: portRaw,
         shouldPrebuild: flags.has('--prebuild'),
         shouldRunIos: flags.has('--run-ios'),
         shouldStartMetro,
@@ -155,11 +173,11 @@ async function main() {
     const shouldClean = flags.has('--clean');
     // Prebuild can fail during `pod install` if deployment target mismatches.
     // We skip installs, patch deployment target + RN build mode, then run `pod install` ourselves.
-    const prebuildArgs = ['expo', 'prebuild', '--no-install', '--platform', platform];
+    const prebuildArgs = ['prebuild', '--no-install', '--platform', platform];
     if (shouldClean) {
       prebuildArgs.push('--clean');
     }
-    await run('npx', prebuildArgs, { cwd: uiDir, env });
+    await pmExecBin({ dir: uiDir, bin: 'expo', args: prebuildArgs, env });
 
     // Always patch iOS props if iOS was generated.
     if (platform === 'ios' || platform === 'all') {
@@ -266,35 +284,49 @@ async function main() {
     }
 
     const configuration = kv.get('--configuration') ?? 'Debug';
-    const args = ['expo', 'run:ios', '--no-bundler', '--no-build-cache', '--configuration', configuration];
+    const args = ['run:ios', '--no-bundler', '--no-build-cache', '--configuration', configuration];
     if (device) {
       args.push('-d', device);
     }
     // Ensure CocoaPods doesn't crash due to locale issues.
     env.LANG = env.LANG ?? 'en_US.UTF-8';
     env.LC_ALL = env.LC_ALL ?? 'en_US.UTF-8';
-    await run('npx', args, { cwd: uiDir, env });
+    await pmExecBin({ dir: uiDir, bin: 'expo', args, env });
   }
 
   if (!shouldStartMetro) {
     return;
   }
 
-  const portNumber = Number.parseInt(port, 10);
-  if (Number.isFinite(portNumber) && portNumber > 0) {
-    await killPortListeners(portNumber, { label: 'expo' });
+  const running = await isStateProcessRunning(mobilePaths.statePath);
+  if (!restart && running.running) {
+    // eslint-disable-next-line no-console
+    console.log(`[mobile] Metro already running for this stack/worktree (pid=${running.state.pid}, port=${running.state.port})`);
+    return;
   }
+  if (restart && running.state?.pid) {
+    const prevPid = Number(running.state.pid);
+    const prevPort = Number(running.state.port);
+    if (Number.isFinite(prevPort) && prevPort > 0) {
+      await killPortListeners(prevPort, { label: 'expo' });
+    }
+    await killPid(prevPid);
+  }
+
+  const requestedPort = Number.parseInt(String(portRaw), 10);
+  const startPort = Number.isFinite(requestedPort) && requestedPort > 0 ? requestedPort : 8081;
+  const portNumber = await pickNextFreeTcpPort(startPort);
+  env.RCT_METRO_PORT = String(portNumber);
 
   // Start Metro for a dev client.
   // The critical part is --scheme: without it, Expo defaults to `exp+<slug>` (here `exp+happy`)
   // which the App Store app also registers, so iOS can open the wrong app.
-  spawnProc(
-    'mobile',
-    'npx',
-    ['expo', 'start', '--dev-client', '--host', host, '--port', port, '--scheme', scheme],
-    env,
-    { cwd: uiDir }
-  );
+  const args = ['start', '--dev-client', '--host', host, '--port', String(portNumber), '--scheme', scheme];
+  if (wantsExpoClearCache({ env })) {
+    args.push('--clear');
+  }
+  const child = await pmSpawnBin({ label: 'mobile', dir: uiDir, bin: 'expo', args, env });
+  await writePidState(mobilePaths.statePath, { pid: child.pid, port: portNumber, uiDir, startedAt: new Date().toISOString() });
 
   await new Promise(() => {});
 }

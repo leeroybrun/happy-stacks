@@ -198,7 +198,8 @@ get_tailscale_url() {
   # Preferred: use happys (respects our own timeouts/env handling).
   local happys_sh="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
   if [[ -x "$happys_sh" ]]; then
-    url="$("$happys_sh" tailscale:url 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+    # Keep SwiftBar responsive: use a tight timeout for this periodic probe.
+    url="$("$happys_sh" tailscale:url --timeout-ms=2500 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
     if [[ "$url" == https://* ]]; then
       echo "$url"
       return

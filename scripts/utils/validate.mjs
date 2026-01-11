@@ -1,4 +1,5 @@
-import { resolve, sep } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import { getComponentsDir } from './paths.mjs';
 
 function isInside(path, dir) {
@@ -43,5 +44,45 @@ export function assertServerComponentDirMatches({ rootDir, serverComponentName, 
       `- path: ${mismatch.serverDir}\n` +
       `${hint}`
   );
+}
+
+function detectPrismaProvider(schemaText) {
+  // Best-effort parse of:
+  // datasource db { provider = "sqlite" ... }
+  const m = schemaText.match(/datasource\s+db\s*\{[\s\S]*?\bprovider\s*=\s*\"([a-zA-Z0-9_-]+)\"/m);
+  return m?.[1] ?? '';
+}
+
+export function assertServerPrismaProviderMatches({ serverComponentName, serverDir }) {
+  const schemaPath = join(serverDir, 'prisma', 'schema.prisma');
+  let schemaText = '';
+  try {
+    schemaText = readFileSync(schemaPath, 'utf-8');
+  } catch {
+    // If it doesn't exist, skip validation; not every server component necessarily uses Prisma.
+    return;
+  }
+
+  const provider = detectPrismaProvider(schemaText);
+  if (!provider) {
+    return;
+  }
+
+  if (serverComponentName === 'happy-server-light' && provider !== 'sqlite') {
+    throw new Error(
+      `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${provider}\" in:\n` +
+        `- ${schemaPath}\n` +
+        `This usually means you're pointing happy-server-light at an upstream happy-server checkout/PR (Postgres).\n` +
+        `Fix: either switch server flavor to happy-server, or point happy-server-light at a fork checkout that keeps sqlite support.`
+    );
+  }
+
+  if (serverComponentName === 'happy-server' && provider === 'sqlite') {
+    throw new Error(
+      `[server] happy-server expects Prisma datasource provider \"postgresql\", but found \"sqlite\" in:\n` +
+        `- ${schemaPath}\n` +
+        `Fix: either switch server flavor to happy-server-light, or point happy-server at the full-server checkout.`
+    );
+  }
 }
 

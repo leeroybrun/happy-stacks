@@ -39,6 +39,151 @@ The main components managed by happy-stacks:
 - Avoid “fork-only hacks” that permanently diverge unless explicitly intended.
 - Prefer feature flags, clean commits, and PR-ready changes.
 
+---
+
+### Non-negotiables for agents (read this first)
+
+These rules are strict on purpose. They exist so we can iterate quickly, test safely, and produce clean PRs for both `slopus/*` (upstream) and `leeroybrun/*` (our forks).
+
+#### **Command discipline (CRITICAL: only use `happys ...`)**
+
+**If you are an LLM agent:** you must treat `happys` as the *only* supported entrypoint for running anything. Happy Stacks relies on stack-scoped env, isolation, and managed infra; bypassing it causes “half-stacks”, cross-stack interference, and hard-to-debug auth/machine issues.
+
+- **Allowed (use these)**
+  - `happys start` / `happys dev`
+  - `happys typecheck [component...]` (stack-aware typechecks)
+  - `happys stack new <name>` (creates stack env + isolated dirs; copies auth from `main` by default)
+  - `happys stack start <name>` / `happys stack dev <name>` / `happys stack doctor <name>`
+  - `happys stack typecheck <name> [component...]` (typecheck under a stack env file)
+  - `happys srv use ...` / `happys stack srv <name> -- use ...`
+  - `happys wt ...` / `happys stack wt <name> -- ...`
+  - `happys tailscale ...` / `happys stack tailscale:... <name>`
+  - `happys service ...` / `happys stack service <name> ...`
+
+- **Forbidden (do NOT run these directly)**
+  - **Expo/UI**: `expo ...`, `pnpm dev`, `yarn dev`, `npm run dev` inside `components/happy`
+  - **Servers**: `yarn dev/start` inside `components/happy-server*`, running Fastify/Vite/Next/etc directly
+  - **Infra**: `docker compose ...` or `docker ...` to start Postgres/Redis/Minio manually for stacks
+  - **Worktrees**: raw `git worktree ...` (use `happys wt ...`)
+  - **“One-off” partial actions**: starting only the daemon, only the server, or only the UI without `happys` wrappers
+
+If you’re tempted to run a low-level command, stop and route it through `happys` (or add a `happys` subcommand if missing).
+
+---
+
+### Code validation (typecheck + build)
+
+**When you change code, you must validate using `happys` commands (not raw `yarn`, `pnpm`, `expo`, or `tsc`).**
+
+- **Typecheck (active checkouts)**:
+  - `happys typecheck`
+  - `happys typecheck happy`
+  - `happys typecheck happy happy-cli`
+
+- **Typecheck (stack-scoped)**:
+  - `happys stack typecheck <stack> [component...]`
+
+- **Build the web UI bundle** (what server-light serves):
+  - `happys build`
+  - (stack-scoped) `happys stack build <stack>`
+
+Notes:
+- `happys typecheck` runs against the **active checkout** for each component (it respects any `HAPPY_STACKS_COMPONENT_DIR_*` overrides set via `happys wt use ...` or `happys stack wt ...`).
+- It does **not** currently typecheck *every* worktree automatically; to typecheck a specific worktree, switch it active first (via `happys wt use ...` / `happys stack wt ...`) then run `happys typecheck <component>`.
+
+#### **Worktree targeting (stack + one-shot)**
+
+If you want to validate a specific worktree **without** changing the stack’s env permanently, you can pass one-shot component overrides:
+
+- `happys stack typecheck <stack> --happy=<owner/branch|/abs/path> [component...]`
+- `happys stack build <stack> --happy=<owner/branch|/abs/path>`
+
+Examples:
+
+- `happys stack typecheck exp1 --happy=slopus/pr/my-branch happy`
+- `happys stack build exp1 --happy=/absolute/path/to/checkout`
+
+---
+
+### Main stack safety (do not repoint by accident)
+
+The default stack (`main`) is meant to stay stable. By default, **`happys wt use` refuses to repoint main’s component directories to a worktree/path** and will instruct you to use a new stack instead.
+
+- **Recommended**: create a new stack and switch that stack’s components:
+  - `happys stack new exp1 --interactive`
+  - `happys stack wt exp1 -- use happy slopus/pr/my-branch`
+
+- **Override** (only if you really mean it): pass `--force`:
+  - `happys wt use happy slopus/pr/my-branch --force`
+
+#### **Env templates (safe for agents)**
+
+- **Preferred**: edit `.env.example` (canonical template).
+- **If blocked**: if your tool refuses to read/edit `.env.example` due to safety restrictions, **do not create/edit an `env.example` workaround**. Instead, tell the user what to change and ask them to apply it manually.
+- **Do not read/edit**: `.env`, `env.local`, or any `.env.*.local` files (these may contain secrets and are intentionally ignored by LLM tooling).
+
+#### **You must develop in worktrees only**
+
+- **Do not develop directly inside `components/<component>`** (the default checkouts under this repo).
+  - Treat `components/<component>` as **read-only** “launcher defaults”.
+  - **Never create feature branches or commits** on those default checkouts, especially not on `main`.
+- **All changes must happen inside `components/.worktrees/<component>/...`** created/managed by `happys wt ...`.
+- **Do not use raw `git worktree`**. Use `happys wt` tooling so the repo stays consistent.
+
+#### **You must test changes inside isolated stacks**
+
+- When testing a feature/PR, use an isolated stack (or a dedicated “exp” stack).
+- Point the stack at your worktrees using `happys stack wt <stack> -- use ...`.
+- Avoid editing `env.local` by hand; prefer stack-scoped env via the stack env file.
+
+#### **Auth + secrets (stacks)**
+
+- **Default behavior**: `happys stack new <name>` will **copy auth from `main`** by default so new stacks typically **do not require re-login**.
+  - This copies the stack’s master secret and CLI credentials into the new stack’s directories.
+- **Opt out**: pass **`--no-copy-auth`** (or `--fresh-auth`) to force a fresh login / new machine identity.
+- **If auth is required**:
+  - main: `happys auth login`
+  - stack: `happys stack auth <name> login`
+
+#### **Upstream PRs must remain clean**
+
+- If it should go to `slopus/*`, the branch must be based on `upstream/main` (or the upstream base branch) and contain **only** the upstream-worthy commits.
+- **Upstream-first policy**: start implementation work on an **upstream-based** worktree/branch.
+  - After the feature is complete, **validate it against our fork** by doing a **test-merge in a temporary fork branch/worktree**.
+  - If the test-merge is clean: open a PR to the `leeroybrun/*` fork from that temp branch.
+  - If it conflicts: create a dedicated fork PR branch/worktree (based on the fork’s target branch) and **cherry-pick** the upstream commits, resolving conflicts there.
+
+#### **Commit messages (Conventional Commits)**
+
+Use the **Conventional Commits** spec for all commits (and for the final **squash** commit message when squashing). This is the most widely adopted modern standard for readable history and tooling like changelogs/release automation.
+
+Spec: [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)
+
+Format:
+
+```text
+<type>[optional scope][!]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+- **type**: one of `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`, `ci`, `perf`, `revert`
+- **scope (optional)**: short, lowercase area name (examples: `scripts`, `wt`, `stack`, `srv`, `env`, `docs`)
+- **description**: imperative mood, present tense, no trailing period (example: “add”, “fix”, “remove”)
+- **breaking changes**: add `!` (preferred) and/or a footer `BREAKING CHANGE: ...`
+- **issue references (optional)**: add in footers (example: `Refs #123`, `Closes #123`)
+
+Examples:
+
+```text
+feat(wt): add --stash option to update-all
+fix(ports): avoid collisions when multiple stacks start
+docs(agents): document Conventional Commits
+refactor(stack): split env loading into helpers
+```
+
 #### **Document fork additions**
 
 When you add a feature/fix/infra change in any fork under `components/*`:
@@ -51,6 +196,9 @@ When you add a feature/fix/infra change in any fork under `components/*`:
 #### **Our fork’s `main` is a “distribution” branch**
 
 We maintain fork-specific changes so people can use our fork directly.
+
+- Treat fork `main` (and default `components/<component>` checkouts) as **read-only**.
+- Never develop directly on fork `main`. Use worktrees/branches and PRs.
 
 #### **Upstream PRs must be clean**
 
@@ -69,8 +217,10 @@ The tooling below exists so you don’t have to manually re-copy changes between
 
 Each component repo under `components/<component>` should typically have:
 
-- `origin`: our fork (often `leeroybrun/*`)
 - `upstream`: upstream repo (often `slopus/*`)
+- `origin` (or `fork`): our fork (often `leeroybrun/*`)
+  - Some component checkouts (notably `happy-server` / `happy-server-light`) use the Git remote name `fork` instead of `origin`.
+  - `happys wt ...` treats `origin` and `fork` as interchangeable; raw `git ...` commands should use whichever remote name exists in that repo (`git remote -v`).
 
 #### **Branch naming**
 
@@ -117,6 +267,39 @@ Legacy aliases still work:
 - `HAPPY_LOCAL_COMPONENT_DIR_*`
 
 Use `happys wt use ...` instead of editing env files by hand. (Legacy in a cloned repo: `pnpm wt use ...`.)
+
+---
+
+### One worktree vs two worktrees (slopus vs leeroybrun divergence)
+
+We often want the *same* change on both upstream and our fork, but sometimes our forks have diverged enough that we need separate implementations.
+
+#### **Default: start with one worktree**
+
+Use **one** worktree when:
+
+- the change is intended to be upstreamed eventually, and
+- the diff can apply cleanly to both upstream and our fork (or needs only small, mechanical adjustments).
+
+In this case, develop in an **upstream-based** worktree (clean history). Once it’s complete:
+
+- **Upstream PR**: open a PR to `slopus/*`.
+- **Fork PR**: do a **test-merge in a temporary fork branch/worktree**; if it’s clean, open a PR to `leeroybrun/*`. If it conflicts, fall back to a fork PR branch with cherry-picks (see workflows below).
+
+#### **Use two worktrees when needed**
+
+Use **two** worktrees when:
+
+- upstream (`slopus/*`) and our fork (`leeroybrun/*`) need materially different behavior, OR
+- our fork has extra features/patches that require a fork-only variant, OR
+- upstream is moving slowly and we need a fork-only patch now but still want a clean upstream PR later.
+
+Pattern:
+
+- **Upstream implementation worktree**: `--from=upstream` (clean, upstream-acceptable commits)
+- **Fork integration worktree**: based on the fork’s target branch (often `origin/main`), used to test-merge / cherry-pick and carry any fork-only adaptations
+
+Keep them in sync by **cherry-picking** shared commits from the upstream branch into the fork branch, and then layering any fork-only changes on top in the fork integration worktree.
 
 ---
 
@@ -328,14 +511,36 @@ Notes:
 - This worktree lives under `components/.worktrees/happy/slopus/pr/my-feature` (owner inferred from `upstream`).
 - Keep this branch clean: **only** the upstream-worthy change(s).
 
-#### **2) Create a fork-only patch worktree (based on `origin/main`)**
+#### **2) Validate and ship the change to our fork (test-merge → cherry-pick fallback)**
 
-Example: you want a change that stays in our fork distribution branch, not upstream.
+Example: you implemented a change on an upstream-based worktree and now want a clean PR to `leeroybrun/*` without developing on fork `main`.
 
 ```bash
-happys wt new happy local/my-fork-only-patch --from=origin --use
+# (recommended) ensure our mirror branches are up to date
+happys wt sync-all
+
+# Create a temporary fork integration worktree based on our fork target branch
+happys wt new happy tmp/merge-pr-my-feature --from=origin --use
+
+# Attempt a test-merge of the upstream branch into this fork branch
+# (run git merge/cherry-pick inside the worktree; exact refs vary by repo setup)
+happys wt git happy active -- merge --no-ff <upstream-branch-or-commit>
+
+# If the merge is clean: push and open a PR to our fork
 happys wt push happy active --remote=origin
 ```
+
+If the test-merge conflicts:
+
+- Abort the merge, then create a dedicated fork PR branch/worktree (based on the fork target branch).
+- Cherry-pick the upstream commits onto it, resolve conflicts, then push and open the fork PR.
+
+#### **2b) Fork-only change (still upstream-first by default)**
+
+If a change is *not* intended for upstream, we still prefer starting from an upstream-based worktree so we don’t accidentally bake fork divergence into the implementation.
+
+- Implement on an upstream-based worktree (but don’t open an upstream PR).
+- Then use the workflow above (**test-merge → cherry-pick fallback**) to create the fork PR branch.
 
 #### **3) Check out a GitHub PR as a worktree**
 
@@ -404,6 +609,24 @@ happys stack wt exp1 -- use happy slopus/pr/123-fix-thing
 happys stack dev exp1
 ```
 
+#### **6b) Test upstream vs fork variants side-by-side (two stacks)**
+
+Example: compare behavior between an upstream-based worktree and a fork integration worktree without cross-contaminating env/ports.
+
+```bash
+# Stack A points at upstream worktree
+happys stack new pr-upstream --interactive
+happys stack wt pr-upstream -- use happy slopus/pr/my-feature
+
+# Stack B points at fork worktree
+happys stack new pr-fork --interactive
+happys stack wt pr-fork -- use happy leeroybrun/tmp/merge-pr-my-feature
+
+# Run independently
+happys stack dev pr-upstream
+happys stack dev pr-fork
+```
+
 #### **7) Update everything (sync mirror branches + update active worktrees)**
 
 ```bash
@@ -423,10 +646,13 @@ happys wt update-all --stash
 
 #### **Preferred workflow**
 
-- Keep our fork’s `main` as the day-to-day distribution branch.
-- For upstream PRs, use **worktrees** so you get clean branches based on upstream:
-  - create PR worktree with `happys wt pr ...`
-  - or create a new branch from upstream with `happys wt new ... --from=upstream`
+- **Always start from upstream**: do implementation work on an **upstream-based** worktree (`--from=upstream`), not on fork `main` and not in `components/<component>`.
+- Keep upstream PR branches clean and upstream-acceptable.
+- Once the change is complete, **validate it on our fork** using the **test-merge → cherry-pick fallback** workflow:
+  - Create a temporary fork integration worktree (`--from=origin`)
+  - Test-merge the upstream branch/commit(s)
+  - If clean: push and open a PR to `leeroybrun/*`
+  - If conflicts: create a dedicated fork PR worktree/branch and cherry-pick the upstream commits, resolving conflicts there
 
 #### **When upstream merges a change you also carried locally**
 
@@ -438,18 +664,37 @@ Git reconciles changes based on content/patches, not commit IDs. If the same lin
 
 Conceptually they are “two flavors of the same upstream server codebase”:
 
-- upstream lives under the `slopus/happy-server` repo
-- `happy-server-light` is a lightweight branch/flavor intended for local use
+- **Upstream** lives under the `slopus/happy-server` repo.
+- In happy-stacks we keep **two local components** so you can switch server flavor easily:
+  - `components/happy-server` (full server)
+  - `components/happy-server-light` (lightweight server)
 
-In happy-stacks we keep them as two separate components so you can switch easily:
+#### **Fork topology (important)**
 
-- `components/happy-server-light`
-- `components/happy-server`
+Both of our forks are branches of a single fork repo:
 
-Expectations:
+- **Fork repo**: `leeroybrun/happy-server-light`
+- **`happy-server` fork “main”**: branch `happy-server`
+- **`happy-server-light` fork “main”**: branch `happy-server-light`
+- **Remote naming**: in these server repos, our fork remote is typically named `fork` (not `origin`).
 
-- keep both compatible with upstream branches
-- when you implement changes that should go upstream, do it in an upstream-based worktree (e.g. `slopus/pr/...`) and open a PR
+So you should expect to open **two fork PRs** (or one PR per target branch) when a server change needs to land in both flavors.
+
+#### **How to implement server changes**
+
+- **If the change is the same for both `happy-server` and `happy-server-light`**:
+  - Implement once on an **upstream-based** worktree/branch (from `slopus/happy-server` `upstream/main`) and open a PR to `slopus/happy-server`.
+  - Then validate/ship to our fork by doing the **test-merge → cherry-pick fallback** flow **twice**:
+    - once targeting fork branch `happy-server`
+    - once targeting fork branch `happy-server-light`
+  - Result: PR(s) to `leeroybrun/happy-server-light` that land the same commits into both branches.
+
+- **If the change must differ between `happy-server` and `happy-server-light`**:
+  - Implement the upstream-acceptable portion on an upstream-based worktree and open the upstream PR if applicable.
+  - For the fork:
+    - create a worktree/branch targeting fork branch **`happy-server`** and land the full-server variant
+    - create a separate worktree/branch targeting fork branch **`happy-server-light`** and land the light-server variant
+  - Keep shared commits shared (cherry-pick), and isolate flavor-specific behavior into separate commits per branch.
 
 ---
 
@@ -480,8 +725,9 @@ happys stack service exp1 status
 
 ### Agent guidelines (LLM-specific)
 
-- **Don’t edit component repos in-place on `components/<component>` unless that’s the intended “main/default” checkout.**
-  - Prefer creating a worktree for any change that should become a PR.
+- **Do not edit component repos in-place on `components/<component>` (the default checkouts).**
+  - Treat them as read-only launcher defaults.
+  - Create a worktree for **every** change, no matter how small.
 - **Always pick a target upstream** (usually `slopus`) and keep PR branches clean.
 - **Use `happys wt` / `happys stack` commands instead of raw `git worktree` / manual env edits** whenever possible.
 - **Respect env precedence**: stack env file overrides everything; don’t “hardcode” paths in scripts.

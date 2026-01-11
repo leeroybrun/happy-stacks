@@ -56,6 +56,17 @@ node ./bin/happys.mjs bootstrap --interactive
 Notes:
 
 - In a cloned repo, `pnpm <script>` still works, but `happys <command>` is now the recommended UX (same underlying scripts).
+- To make the installed `~/.happy-stacks/bin/happys` shim (LaunchAgents / SwiftBar) run your local checkout without publishing to npm, set:
+
+  ```bash
+  echo 'HAPPY_STACKS_CLI_ROOT_DIR=/path/to/your/happy-stacks-checkout' >> ~/.happy-stacks/.env
+  ```
+
+  Or (recommended) persist it via init:
+
+  ```bash
+  happys init --cli-root-dir=/path/to/your/happy-stacks-checkout
+  ```
 
 ### Step 2: Run the main stack
 
@@ -145,9 +156,10 @@ Diagram:
                    v
            local machine (this repo)
      +--------------------------------+
-     | happy-server(-light)           |
+     | happy-server-light OR          |
+     | happy-server (via UI gateway)  |
      |  - listens on :PORT            |
-     |  - serves UI (server-light)    |
+     |  - serves UI at /              |
      +--------------------------------+
                    ^
                    | internal loopback
@@ -203,7 +215,8 @@ Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 ### Server flavor (server-light vs full server)
 
 - Use `happy-server-light` for a light local stack (no Redis, no Postgres, no Docker), and UI serving via server-light.
-- Use `happy-server` when you need some production-ready server (eg. to distribute and host multiple users) or develop server changes for upstream.
+- Use `happy-server` when you need a more production-like server (Postgres + Redis + S3-compatible storage) or want to develop server changes for upstream.
+  - Happy Stacks can **manage the required infra automatically per stack** (via Docker Compose) and runs a **UI gateway** so you still get a single `https://...ts.net` URL that serves the UI + proxies API/websockets/files.
 
 Switch globally:
 
@@ -312,5 +325,8 @@ Notes:
 
 - Canonical env prefix is `HAPPY_STACKS_*` (legacy `HAPPY_LOCAL_*` still works).
 - Canonical stack storage is `~/.happy/stacks` (legacy `~/.happy/local` is still supported).
+- **Repo env templates**:
+  - **Use `.env.example` as the canonical template** (copy it to `.env` if you’re running this repo directly).
+  - If an LLM tool refuses to read/edit `.env.example` due to safety restrictions, **do not create an `env.example` workaround**—instead, ask the user to apply the change manually.
 
 For contributor/LLM workflow expectations: `[AGENTS.md](AGENTS.md)`.
