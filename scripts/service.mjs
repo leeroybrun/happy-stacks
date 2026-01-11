@@ -403,7 +403,8 @@ async function postStartDiagnostics() {
 async function stopLaunchAgent({ persistent }) {
   const { plistPath } = getDefaultAutostartPaths();
   if (!existsSync(plistPath)) {
-    throw new Error(`[local] LaunchAgent plist not found at ${plistPath}. Run: happys service:install (or happys bootstrap -- --autostart)`);
+    // Service isn't installed for this stack (common for ad-hoc stacks). Treat as a no-op.
+    return;
   }
 
   const { label } = getDefaultAutostartPaths();

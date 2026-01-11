@@ -61,7 +61,7 @@ export function getHappysRegistry() {
       name: 'stop',
       kind: 'node',
       scriptRelPath: 'scripts/stop.mjs',
-      rootUsage: 'happys stop [--except-stacks=main,exp1] [--yes] [--no-docker] [--no-service] [--json]',
+      rootUsage: 'happys stop [--except-stacks=main,exp1] [--yes] [--aggressive] [--no-docker] [--no-service] [--json]',
       description: 'Stop stacks and related local processes',
     },
     {

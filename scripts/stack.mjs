@@ -7,17 +7,14 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { parseArgs } from './utils/args.mjs';
-import { run } from './utils/proc.mjs';
+import { run, runCapture } from './utils/proc.mjs';
 import { getComponentDir, getComponentsDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
 import { createWorktree, resolveComponentSpecToDir } from './utils/worktrees.mjs';
 import { isTty, prompt, promptWorktreeSource, withRl } from './utils/wizard.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvFileUpdated } from './utils/env_file.mjs';
-import { killPortListeners } from './utils/ports.mjs';
-import { isPidAlive, killPid, readPidState } from './utils/expo.mjs';
-import { stopLocalDaemon } from './daemon.mjs';
-import { stopHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
+import { stopStackWithEnv } from './utils/stack_stop.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -819,135 +816,6 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
   });
 }
 
-function parseIntOrNull(raw) {
-  const s = String(raw ?? '').trim();
-  if (!s) return null;
-  const n = Number(s);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function resolveServerComponentFromStackEnv(env) {
-  const v =
-    (env.HAPPY_STACKS_SERVER_COMPONENT ?? env.HAPPY_LOCAL_SERVER_COMPONENT ?? '').toString().trim() || 'happy-server-light';
-  return v === 'happy-server' ? 'happy-server' : 'happy-server-light';
-}
-
-async function stopExpoStateDir({ rootDir, stackName, baseDir, kind, stateFileName, json }) {
-  const root = join(baseDir, kind);
-  let entries = [];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-
-  const killed = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    const statePath = join(root, e.name, stateFileName);
-    // eslint-disable-next-line no-await-in-loop
-    const state = await readPidState(statePath);
-    if (!state) continue;
-    const pid = Number(state.pid);
-    const port = parseIntOrNull(state.port);
-
-    if (!Number.isFinite(pid) || pid <= 1) continue;
-    if (!isPidAlive(pid)) continue;
-
-    if (!json) {
-      // eslint-disable-next-line no-console
-      console.log(`[stack] stopping ${kind} (pid=${pid}${port ? ` port=${port}` : ''}) for ${stackName}`);
-    }
-    if (port) {
-      // eslint-disable-next-line no-await-in-loop
-      await killPortListeners(port, { label: `${stackName} ${kind}` });
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await killPid(pid);
-    killed.push({ pid, port, statePath });
-  }
-  return killed;
-}
-
-async function stopStackNow({ rootDir, stackName, json, noDocker = false }) {
-  const baseDir = getStackDir(stackName);
-
-  const actions = {
-    stackName,
-    baseDir,
-    daemonStopped: false,
-    killedPorts: [],
-    uiDev: [],
-    mobile: [],
-    infra: null,
-    errors: [],
-  };
-
-  await withStackEnv({
-    stackName,
-    fn: async ({ env }) => {
-      const serverComponent = resolveServerComponentFromStackEnv(env);
-      const port = parseIntOrNull(env.HAPPY_STACKS_SERVER_PORT ?? env.HAPPY_LOCAL_SERVER_PORT);
-      const backendPort = parseIntOrNull(env.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? env.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT);
-      const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? join(baseDir, 'cli')).toString();
-      const cliBin = join(getComponentDir(rootDir, 'happy-cli'), 'bin', 'happy.mjs');
-
-      // Stop daemon first (best-effort)
-      try {
-        const internalServerUrl = port ? `http://127.0.0.1:${port}` : 'http://127.0.0.1:3005';
-        await stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir });
-        actions.daemonStopped = true;
-      } catch (e) {
-        actions.errors.push({ step: 'daemon', error: e instanceof Error ? e.message : String(e) });
-      }
-
-      // Stop Expo dev servers (best-effort; worktree-scoped)
-      try {
-        actions.uiDev = await stopExpoStateDir({ rootDir, stackName, baseDir, kind: 'ui-dev', stateFileName: 'ui.state.json', json });
-      } catch (e) {
-        actions.errors.push({ step: 'expo-ui', error: e instanceof Error ? e.message : String(e) });
-      }
-      try {
-        actions.mobile = await stopExpoStateDir({ rootDir, stackName, baseDir, kind: 'mobile', stateFileName: 'expo.state.json', json });
-      } catch (e) {
-        actions.errors.push({ step: 'expo-mobile', error: e instanceof Error ? e.message : String(e) });
-      }
-
-      // Stop server/proxy ports (best-effort)
-      if (backendPort) {
-        try {
-          const pids = await killPortListeners(backendPort, { label: `${stackName} happy-server-backend` });
-          actions.killedPorts.push({ port: backendPort, pids, label: 'happy-server-backend' });
-        } catch (e) {
-          actions.errors.push({ step: 'backend-port', error: e instanceof Error ? e.message : String(e) });
-        }
-      }
-      if (port) {
-        try {
-          const pids = await killPortListeners(port, { label: `${stackName} server` });
-          actions.killedPorts.push({ port, pids, label: 'server' });
-        } catch (e) {
-          actions.errors.push({ step: 'server-port', error: e instanceof Error ? e.message : String(e) });
-        }
-      }
-
-      // Stop docker-managed infra (happy-server only)
-      const managed = (env.HAPPY_STACKS_MANAGED_INFRA ?? env.HAPPY_LOCAL_MANAGED_INFRA ?? '1').toString().trim() !== '0';
-      if (!noDocker && serverComponent === 'happy-server' && managed) {
-        try {
-          actions.infra = await stopHappyServerManagedInfra({ stackName, baseDir, removeVolumes: false });
-        } catch (e) {
-          actions.errors.push({ step: 'infra', error: e instanceof Error ? e.message : String(e) });
-        }
-      } else {
-        actions.infra = { ok: true, skipped: true, reason: noDocker ? 'no_docker' : 'not_managed_or_not_happy_server' };
-      }
-    },
-  });
-
-  return actions;
-}
-
 function resolveTransientComponentOverrides({ rootDir, kv }) {
   const overrides = {};
   const specs = [
@@ -1380,7 +1248,7 @@ async function main() {
         '  happys stack typecheck <name> [component...] [--json]',
         '  happys stack doctor <name> [-- ...]',
         '  happys stack mobile <name> [-- ...]',
-        '  happys stack stop <name> [--no-docker] [--json]',
+        '  happys stack stop <name> [--aggressive] [--no-docker] [--json]',
         '  happys stack srv <name> -- status|use ...',
         '  happys stack wt <name> -- <wt args...>',
         '  happys stack tailscale:status|enable|disable|url <name> [-- ...]',
@@ -1521,10 +1389,15 @@ async function main() {
   if (cmd === 'stop') {
     const { flags: stopFlags } = parseArgs(passthrough);
     const noDocker = stopFlags.has('--no-docker');
-    const out = await stopStackNow({ rootDir, stackName, json, noDocker });
-    if (json) {
-      printResult({ json, data: { ok: true, stopped: out } });
-    }
+    const aggressive = stopFlags.has('--aggressive');
+    const baseDir = getStackDir(stackName);
+    const out = await withStackEnv({
+      stackName,
+      fn: async ({ env }) => {
+        return await stopStackWithEnv({ rootDir, stackName, baseDir, env, json, noDocker, aggressive });
+      },
+    });
+    if (json) printResult({ json, data: { ok: true, stopped: out } });
     return;
   }
 
