@@ -150,6 +150,7 @@ async function ensureWorktreeExclude(worktreeDir, patterns) {
   const want = patterns.map((p) => p.trim()).filter(Boolean).filter((p) => !existingLines.has(p));
   if (!want.length) return;
   const next = (existing ? existing.replace(/\s*$/, '') + '\n' : '') + want.join('\n') + '\n';
+  await mkdir(dirname(excludePath), { recursive: true });
   await writeFile(excludePath, next, 'utf-8');
 }
 
