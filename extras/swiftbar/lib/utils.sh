@@ -155,6 +155,18 @@ resolve_main_env_file() {
     echo "$main"
     return
   fi
+  # Legacy stacks location (pre-migration).
+  local legacy="$HOME/.happy/local/stacks/main/env"
+  if [[ -f "$legacy" ]]; then
+    echo "$legacy"
+    return
+  fi
+  # Very old single-stack location (best-effort).
+  local legacy_single="$HOME/.happy/local/env"
+  if [[ -f "$legacy_single" ]]; then
+    echo "$legacy_single"
+    return
+  fi
   echo ""
 }
 

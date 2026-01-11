@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { ensureHomeEnvUpdated } from './utils/config.mjs';
+import { ensureCanonicalHomeEnvUpdated, ensureHomeEnvUpdated } from './utils/config.mjs';
 
 function expandHome(p) {
   return p.replace(/^~(?=\/)/, homedir());
@@ -121,14 +121,18 @@ async function main() {
   await mkdir(runtimeDir, { recursive: true });
   await mkdir(join(homeDir, 'bin'), { recursive: true });
 
-  await ensureHomeEnvUpdated({
-    updates: [
-      { key: 'HAPPY_STACKS_HOME_DIR', value: homeDir },
-      { key: 'HAPPY_STACKS_WORKSPACE_DIR', value: workspaceDir },
-      { key: 'HAPPY_STACKS_RUNTIME_DIR', value: runtimeDir },
-      { key: 'HAPPY_STACKS_NODE', value: nodePath },
-    ],
-  });
+  const pointerUpdates = [
+    { key: 'HAPPY_STACKS_HOME_DIR', value: homeDir },
+    { key: 'HAPPY_STACKS_WORKSPACE_DIR', value: workspaceDir },
+    { key: 'HAPPY_STACKS_RUNTIME_DIR', value: runtimeDir },
+    { key: 'HAPPY_STACKS_NODE', value: nodePath },
+  ];
+
+  // Write the "real" home env (used by runtime + scripts), AND a stable pointer at ~/.happy-stacks/.env.
+  // The pointer file allows launchd/SwiftBar/minimal shells to discover the actual install location
+  // even when no env vars are exported.
+  await ensureHomeEnvUpdated({ updates: pointerUpdates });
+  await ensureCanonicalHomeEnvUpdated({ updates: pointerUpdates });
 
   const installRuntime = !argv.includes('--no-runtime');
   if (installRuntime) {
@@ -154,10 +158,33 @@ async function main() {
   const shim = [
     '#!/bin/bash',
     'set -euo pipefail',
+    'CANONICAL_ENV="$HOME/.happy-stacks/.env"',
+    '',
+    '# Best-effort: if env vars are not exported (common under launchd/SwiftBar),',
+    '# read the stable pointer file at ~/.happy-stacks/.env to discover the real dirs.',
+    'if [[ -f "$CANONICAL_ENV" ]]; then',
+    '  if [[ -z "${HAPPY_STACKS_HOME_DIR:-}" ]]; then',
+    '    HAPPY_STACKS_HOME_DIR="$(grep -E \'^HAPPY_STACKS_HOME_DIR=\' "$CANONICAL_ENV" | head -n 1 | sed \'s/^HAPPY_STACKS_HOME_DIR=//\')" || true',
+    '    export HAPPY_STACKS_HOME_DIR',
+    '  fi',
+    '  if [[ -z "${HAPPY_STACKS_WORKSPACE_DIR:-}" ]]; then',
+    '    HAPPY_STACKS_WORKSPACE_DIR="$(grep -E \'^HAPPY_STACKS_WORKSPACE_DIR=\' "$CANONICAL_ENV" | head -n 1 | sed \'s/^HAPPY_STACKS_WORKSPACE_DIR=//\')" || true',
+    '    export HAPPY_STACKS_WORKSPACE_DIR',
+    '  fi',
+    '  if [[ -z "${HAPPY_STACKS_RUNTIME_DIR:-}" ]]; then',
+    '    HAPPY_STACKS_RUNTIME_DIR="$(grep -E \'^HAPPY_STACKS_RUNTIME_DIR=\' "$CANONICAL_ENV" | head -n 1 | sed \'s/^HAPPY_STACKS_RUNTIME_DIR=//\')" || true',
+    '    export HAPPY_STACKS_RUNTIME_DIR',
+    '  fi',
+    '  if [[ -z "${HAPPY_STACKS_NODE:-}" ]]; then',
+    '    HAPPY_STACKS_NODE="$(grep -E \'^HAPPY_STACKS_NODE=\' "$CANONICAL_ENV" | head -n 1 | sed \'s/^HAPPY_STACKS_NODE=//\')" || true',
+    '    export HAPPY_STACKS_NODE',
+    '  fi',
+    'fi',
+    '',
     'HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"',
     'ENV_FILE="$HOME_DIR/.env"',
-    'NODE_BIN=""',
-    'if [[ -f "$ENV_FILE" ]]; then',
+    'NODE_BIN="${HAPPY_STACKS_NODE:-}"',
+    'if [[ -z "$NODE_BIN" && -f "$ENV_FILE" ]]; then',
     '  NODE_BIN="$(grep -E \'^HAPPY_STACKS_NODE=\' "$ENV_FILE" | head -n 1 | sed \'s/^HAPPY_STACKS_NODE=//\')"',
     'fi',
     'if [[ -z "$NODE_BIN" ]]; then',

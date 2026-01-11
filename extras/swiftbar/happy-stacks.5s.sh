@@ -17,7 +17,44 @@
 # Configuration
 # ============================================================================
 
-HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+# SwiftBar runs with a minimal environment, so users often won't have
+# HAPPY_STACKS_HOME_DIR / HAPPY_STACKS_WORKSPACE_DIR exported.
+# Treat ~/.happy-stacks/.env as the canonical pointer file (written by `happys init`).
+CANONICAL_ENV_FILE="$HOME/.happy-stacks/.env"
+
+_dotenv_get_quick() {
+  # Usage: _dotenv_get_quick /path/to/env KEY
+  local file="$1"
+  local key="$2"
+  [[ -n "$file" && -n "$key" && -f "$file" ]] || return 0
+  local line
+  line="$(grep -E "^${key}=" "$file" 2>/dev/null | head -n 1 || true)"
+  [[ -n "$line" ]] || return 0
+  local v="${line#*=}"
+  v="${v%$'\r'}"
+  # Strip simple surrounding quotes.
+  if [[ "$v" == \"*\" && "$v" == *\" ]]; then v="${v#\"}"; v="${v%\"}"; fi
+  if [[ "$v" == \'*\' && "$v" == *\' ]]; then v="${v#\'}"; v="${v%\'}"; fi
+  echo "$v"
+}
+
+_expand_home_quick() {
+  local p="$1"
+  if [[ "$p" == "~/"* ]]; then
+    echo "$HOME/${p#~/}"
+  else
+    echo "$p"
+  fi
+}
+
+_home_from_canonical=""
+if [[ -f "$CANONICAL_ENV_FILE" ]]; then
+  _home_from_canonical="$(_dotenv_get_quick "$CANONICAL_ENV_FILE" "HAPPY_STACKS_HOME_DIR")"
+  [[ -z "$_home_from_canonical" ]] && _home_from_canonical="$(_dotenv_get_quick "$CANONICAL_ENV_FILE" "HAPPY_LOCAL_HOME_DIR")"
+fi
+_home_from_canonical="$(_expand_home_quick "${_home_from_canonical:-}")"
+
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-${_home_from_canonical:-$HOME/.happy-stacks}}"
 HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 HAPPY_LOCAL_PORT="${HAPPY_LOCAL_PORT:-3005}"
 
@@ -139,13 +176,16 @@ if [[ -d "$STACKS_DIR" ]]; then
     env_file="$STACKS_DIR/$s/env"
     [[ -f "$env_file" ]] || continue
 
-    port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
+    port="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
+    [[ -z "$port" ]] && port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
     [[ -n "$port" ]] || continue
 
-    server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
+    server_component="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_COMPONENT")"
+    [[ -z "$server_component" ]] && server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
     [[ -n "$server_component" ]] || server_component="happy-server-light"
 
-    cli_home_dir="$(dotenv_get "$env_file" "HAPPY_LOCAL_CLI_HOME_DIR")"
+    cli_home_dir="$(dotenv_get "$env_file" "HAPPY_STACKS_CLI_HOME_DIR")"
+    [[ -z "$cli_home_dir" ]] && cli_home_dir="$(dotenv_get "$env_file" "HAPPY_LOCAL_CLI_HOME_DIR")"
     [[ -n "$cli_home_dir" ]] || cli_home_dir="$STACKS_DIR/$s/cli"
 
     base_dir="$STACKS_DIR/$s"
@@ -173,7 +213,7 @@ else
 fi
 
 echo "---"
-render_components_menu "" "main" "main" ""
+render_components_menu "" "main" "main" "$MAIN_ENV_FILE"
 
 echo "Worktrees | sfimage=arrow.triangle.branch"
 if [[ -z "$PNPM_BIN" ]]; then

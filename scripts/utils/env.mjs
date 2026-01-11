@@ -65,6 +65,17 @@ function applyStacksPrefixMapping() {
   }
 }
 
+// If HAPPY_STACKS_HOME_DIR isn't set, try the canonical pointer file at ~/.happy-stacks/.env first.
+//
+// This allows installs where the "real" home/workspace/runtime are elsewhere, while still
+// giving us a stable discovery location for launchd/SwiftBar/minimal shells.
+const canonicalEnvPath = join(homedir(), '.happy-stacks', '.env');
+if (!(process.env.HAPPY_STACKS_HOME_DIR ?? '').trim() && existsSync(canonicalEnvPath)) {
+  await loadEnvFile(canonicalEnvPath, { override: false });
+  await loadEnvFile(canonicalEnvPath, { override: true, overridePrefix: 'HAPPY_STACKS_' });
+  await loadEnvFile(canonicalEnvPath, { override: true, overridePrefix: 'HAPPY_LOCAL_' });
+}
+
 const __homeDir = resolveHomeDir();
 process.env.HAPPY_STACKS_HOME_DIR = process.env.HAPPY_STACKS_HOME_DIR ?? __homeDir;
 

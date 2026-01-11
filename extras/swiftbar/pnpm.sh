@@ -7,4 +7,4 @@ set -euo pipefail
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
 HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 
-exec "$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh" "$@"
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/happys.sh" "$@"

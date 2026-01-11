@@ -211,7 +211,8 @@ render_component_daemon() {
         # For stacks, best-effort use the stack's configured port if available (fallback to main port).
         local env_file="$HOME/.happy/stacks/$stack_name/env"
         local port
-        port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
+        port="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
+        [[ -z "$port" ]] && port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
         [[ -z "$port" ]] && port="$(resolve_main_port)"
         server_url="http://127.0.0.1:${port}"
         webapp_url="$(get_tailscale_url)"
@@ -360,7 +361,8 @@ render_component_repo() {
   local env_file="$5"
 
   local active_dir=""
-  if [[ "$context" == "stack" && -n "$env_file" ]]; then
+  # If we have an env file for the current context, prefer it (stack env is authoritative).
+  if [[ -n "$env_file" && -f "$env_file" ]]; then
     active_dir="$(resolve_component_dir_from_env_file "$env_file" "$component")"
   else
     active_dir="$(resolve_component_dir_from_env "$component")"
@@ -472,8 +474,8 @@ render_component_repo() {
     fi
   fi
 
-  local wt_count
-  wt_count="$(git_worktree_count "$active_dir")"
+    local wt_count
+    wt_count="$(git_worktree_count "$active_dir")"
 
   # Quick actions
   print_sep "$p2"
@@ -537,7 +539,11 @@ render_component_repo() {
     if [[ -z "$tsv" ]]; then
       print_item "$p3" "No worktrees found | color=$GRAY"
     else
-      local root="$(resolve_components_dir)/.worktrees/$component/"
+      # Worktrees live alongside the component checkout at: <componentsRoot>/.worktrees/<component>/...
+      local components_root default_path root
+      components_root="$(dirname "$active_dir")"
+      default_path="$components_root/$component"
+      root="$components_root/.worktrees/$component/"
       local shown=0
       while IFS=$'\t' read -r wt_path wt_branchref; do
         [[ -n "$wt_path" ]] || continue
@@ -549,11 +555,13 @@ render_component_repo() {
 
         local label=""
         local spec=""
-        if [[ "$wt_path" == "$root"* ]]; then
+        if [[ "$wt_path" == "$default_path" ]]; then
+          spec="default"
+          label="default"
+        elif [[ "$wt_path" == "$root"* ]]; then
           spec="${wt_path#"$root"}"
           label="$spec"
         else
-          spec="$wt_path"
           label="$(shorten_path "$wt_path" 52)"
         fi
 
@@ -564,18 +572,24 @@ render_component_repo() {
           label="(active) $label"
         fi
 
-        if [[ "$context" == "stack" && -n "$stack_name" ]]; then
-          print_item "$p3" "$label"
-          print_item "${p3}--" "Use in stack | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-          print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=shell param6=$component param7=$spec param8=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
-          print_item "${p3}--" "Open in VS Code | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=code param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
-          print_item "${p3}--" "Open in Cursor | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=cursor param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+        print_item "$p3" "$label"
+
+        # Only show "use" actions when we can express the worktree as a spec (default or under .worktrees).
+        # Some git worktrees can exist outside our managed tree; for those we only offer open/shell actions.
+        if [[ -n "$spec" ]]; then
+          if [[ "$context" == "stack" && -n "$stack_name" ]]; then
+            print_item "${p3}--" "Use in stack | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+            print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=shell param6=$component param7=$spec param8=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
+            print_item "${p3}--" "Open in VS Code | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=code param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+            print_item "${p3}--" "Open in Cursor | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=cursor param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+          else
+            print_item "${p3}--" "Use (main) | bash=$PNPM_BIN param1=wt param2=use param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+            print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=wt param2=shell param3=$component param4=$spec param5=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
+            print_item "${p3}--" "Open in VS Code | bash=$PNPM_BIN param1=wt param2=code param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+            print_item "${p3}--" "Open in Cursor | bash=$PNPM_BIN param1=wt param2=cursor param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+          fi
         else
-          print_item "$p3" "$label"
-          print_item "${p3}--" "Use (main) | bash=$PNPM_BIN param1=wt param2=use param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-          print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=wt param2=shell param3=$component param4=$spec param5=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
-          print_item "${p3}--" "Open in VS Code | bash=$PNPM_BIN param1=wt param2=code param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
-          print_item "${p3}--" "Open in Cursor | bash=$PNPM_BIN param1=wt param2=cursor param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+          print_item "${p3}--" "Open folder | bash=/usr/bin/open param1='$wt_path' terminal=false"
         fi
       done <<<"$tsv"
     fi
@@ -591,24 +605,12 @@ render_components_menu() {
 
   print_item "$prefix" "Components | sfimage=cube"
   local p2="${prefix}--"
-  local components_dir
-  components_dir="$(resolve_components_dir)"
-  if [[ ! -d "$components_dir" ]]; then
-    print_item "$p2" "Missing components dir: $(shorten_path "$components_dir" 52) | color=$GRAY"
-    return
-  fi
-
-  local any="0"
+  # Always render the known components using the resolved component dirs (env file → env.local/.env → fallback),
+  # instead of assuming they live under `~/.happy-stacks/workspace/components`.
   for c in happy happy-cli happy-server-light happy-server; do
-    if [[ -d "$components_dir/$c" ]]; then
-      any="1"
-      render_component_repo "$p2" "$c" "$context" "$stack_name" "$env_file"
-      print_sep "$p2"
-    fi
+    render_component_repo "$p2" "$c" "$context" "$stack_name" "$env_file"
+    print_sep "$p2"
   done
-  if [[ "$any" == "0" ]]; then
-    print_item "$p2" "No components found under components/ | color=$GRAY"
-  fi
 }
 
 render_stack_overview_item() {

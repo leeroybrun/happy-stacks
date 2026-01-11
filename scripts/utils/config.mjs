@@ -1,9 +1,14 @@
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { ensureEnvFileUpdated } from './env_file.mjs';
 import { getHappyStacksHomeDir, resolveStackEnvPath } from './paths.mjs';
 
 export function getHomeEnvPath() {
   return join(getHappyStacksHomeDir(), '.env');
+}
+
+export function getCanonicalHomeEnvPath() {
+  return join(homedir(), '.happy-stacks', '.env');
 }
 
 export function getHomeEnvLocalPath() {
@@ -28,6 +33,10 @@ export async function ensureHomeEnvUpdated({ updates }) {
   await ensureEnvFileUpdated({ envPath: getHomeEnvPath(), updates });
 }
 
+export async function ensureCanonicalHomeEnvUpdated({ updates }) {
+  await ensureEnvFileUpdated({ envPath: getCanonicalHomeEnvPath(), updates });
+}
+
 export async function ensureHomeEnvLocalUpdated({ updates }) {
   await ensureEnvFileUpdated({ envPath: getHomeEnvLocalPath(), updates });
 }
@@ -37,4 +46,3 @@ export async function ensureUserConfigEnvUpdated({ cliRootDir, updates }) {
   await ensureEnvFileUpdated({ envPath, updates });
   return envPath;
 }
-

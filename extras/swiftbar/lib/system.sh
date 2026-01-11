@@ -195,6 +195,17 @@ get_tailscale_url() {
   # Try multiple methods to get the Tailscale URL (best-effort).
   local url=""
 
+  # Preferred: use happys (respects our own timeouts/env handling).
+  local happys_sh="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
+  if [[ -x "$happys_sh" ]]; then
+    url="$("$happys_sh" tailscale:url 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+    if [[ "$url" == https://* ]]; then
+      echo "$url"
+      return
+    fi
+    url=""
+  fi
+
   if command -v tailscale &>/dev/null; then
     url="$(tailscale serve status 2>/dev/null | grep -oE 'https://[^ ]+' | head -1 || true)"
   fi
