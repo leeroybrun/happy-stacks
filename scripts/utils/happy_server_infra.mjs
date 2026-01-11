@@ -84,6 +84,31 @@ function composeProjectName(stackName) {
   return sanitizeDnsLabel(`happy-stacks-${stackName}-happy-server`, { fallback: 'happy-stacks-happy-server' });
 }
 
+export async function stopHappyServerManagedInfra({ stackName, baseDir, removeVolumes = false }) {
+  const infraDir = join(baseDir, 'happy-server', 'infra');
+  const composePath = join(infraDir, 'docker-compose.yml');
+  if (!existsSync(composePath)) {
+    return { ok: true, skipped: true, reason: 'missing_compose', composePath };
+  }
+
+  try {
+    await ensureDockerCompose();
+  } catch (e) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'docker_unavailable',
+      error: e instanceof Error ? e.message : String(e),
+      composePath,
+    };
+  }
+
+  const projectName = composeProjectName(stackName);
+  const args = ['down', '--remove-orphans', ...(removeVolumes ? ['--volumes'] : [])];
+  await dockerCompose({ composePath, projectName, args, options: { cwd: baseDir } });
+  return { ok: true, skipped: false, projectName, composePath };
+}
+
 function buildComposeYaml({
   infraDir,
   pgPort,
