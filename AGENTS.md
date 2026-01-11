@@ -116,6 +116,21 @@ The default stack (`main`) is meant to stay stable. By default, **`happys wt use
 - **Override** (only if you really mean it): pass `--force`:
   - `happys wt use happy slopus/pr/my-branch --force`
 
+---
+
+### Multi-stack daemons (expected behavior)
+
+Each stack is isolated (ports + CLI home dir). That means **running multiple stacks can legitimately result in multiple daemons** (one per stack).
+
+- **Do NOT “fix” issues by killing all daemons**. That will break other stacks.
+- **Diagnose per stack**:
+  - `happys stack doctor <stack>`
+  - `happys stack auth <stack> status`
+- **Start/stop per stack**:
+  - `happys stack dev <stack>` (dev, includes UI by default)
+  - `happys stack start <stack>` (prod-like)
+  - If you need to start a stack without a daemon (rare): `happys stack dev <stack> -- --no-daemon`
+
 #### **Env templates (safe for agents)**
 
 - **Preferred**: edit `.env.example` (canonical template).
