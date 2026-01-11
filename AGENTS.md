@@ -141,6 +141,9 @@ The default stack (`main`) is meant to stay stable. By default, **`happys wt use
 - **Default behavior**: `happys stack new <name>` will **copy auth from `main`** by default so new stacks typically **do not require re-login**.
   - This copies the stack’s master secret and CLI credentials into the new stack’s directories.
 - **Opt out**: pass **`--no-copy-auth`** (or `--fresh-auth`) to force a fresh login / new machine identity.
+- **If you already have a stack and it’s missing auth** (common when it was created with `--no-copy-auth`, created before this behavior existed, or its `cli/` dir was cleaned):
+  - Copy from main (no re-login, non-interactive): `happys stack auth <name> copy-from main`
+  - Note: this copies **CLI credentials + master secret** and will also **seed the target DB** by copying **Account rows** from main into the stack DB. This avoids FK errors like Prisma `P2003` without copying large DB files.
 - **If auth is required**:
   - main: `happys auth login`
   - stack: `happys stack auth <name> login`

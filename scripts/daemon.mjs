@@ -141,6 +141,11 @@ function authLoginHint() {
   return stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
 }
 
+function authCopyFromMainHint() {
+  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+  return stackName === 'main' ? null : `happys stack auth ${stackName} copy-from main`;
+}
+
 async function seedCredentialsIfMissing({ cliHomeDir }) {
   const sources = [
     // Legacy happy-local storage root (most common for existing users).
@@ -368,11 +373,13 @@ export async function startLocalDaemonWithAuth({
     }
 
     if (excerptIndicatesMissingAuth(first.excerpt)) {
+      const copyHint = authCopyFromMainHint();
       console.error(
         `[local] daemon is not authenticated yet (expected on first run).\n` +
         `[local] Keeping the server running so you can login.\n` +
         `[local] In another terminal, run:\n` +
         `${authLoginHint()}\n` +
+        (copyHint ? `[local] Or (recommended if main is already logged in):\n${copyHint}\n` : '') +
         `[local] Waiting for credentials at ${credentialsPath}...`
       );
 

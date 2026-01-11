@@ -1,12 +1,16 @@
 import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName } from './utils/paths.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
+import { parseDotenv } from './utils/dotenv.mjs';
 
 function getInternalServerUrl() {
   const portRaw = (process.env.HAPPY_LOCAL_SERVER_PORT ?? process.env.HAPPY_STACKS_SERVER_PORT ?? '').trim();
@@ -17,6 +21,104 @@ function getInternalServerUrl() {
 
 function expandTilde(p) {
   return p.replace(/^~(?=\/)/, homedir());
+}
+
+async function ensureDir(p) {
+  await mkdir(p, { recursive: true });
+}
+
+async function readTextIfExists(path) {
+  try {
+    if (!existsSync(path)) return null;
+    const raw = await readFile(path, 'utf-8');
+    const t = raw.trim();
+    return t ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeSecretFileIfMissing({ path, secret }) {
+  if (existsSync(path)) return false;
+  await ensureDir(dirname(path));
+  await writeFile(path, secret, { encoding: 'utf-8', mode: 0o600 });
+  return true;
+}
+
+async function copyFileIfMissing({ from, to, mode }) {
+  if (existsSync(to)) return false;
+  if (!existsSync(from)) return false;
+  await ensureDir(dirname(to));
+  await copyFile(from, to);
+  if (mode) {
+    await chmod(to, mode).catch(() => {});
+  }
+  return true;
+}
+
+function parseEnvToObject(raw) {
+  const parsed = parseDotenv(raw);
+  return Object.fromEntries(parsed.entries());
+}
+
+function getStackDir(stackName) {
+  return resolveStackEnvPath(stackName).baseDir;
+}
+
+function getStackEnvPath(stackName) {
+  return resolveStackEnvPath(stackName).envPath;
+}
+
+function stackExistsSync(stackName) {
+  if (stackName === 'main') return true;
+  const envPath = getStackEnvPath(stackName);
+  return existsSync(envPath);
+}
+
+function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {
+  const fromEnv = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').trim();
+  return fromEnv || join(stackBaseDir, 'cli');
+}
+
+function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
+  const fromEnv = (env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim();
+  return fromEnv || join(stackBaseDir, 'server-light');
+}
+
+async function resolveHandyMasterSecretFromStack({ stackName, requireStackExists }) {
+  if (requireStackExists && !stackExistsSync(stackName)) {
+    throw new Error(`[auth] cannot copy auth: source stack "${stackName}" does not exist`);
+  }
+
+  const sourceBaseDir = getStackDir(stackName);
+  const sourceEnvPath = getStackEnvPath(stackName);
+  const raw = await readTextIfExists(sourceEnvPath);
+  const env = raw ? parseEnvToObject(raw) : {};
+
+  const inline = (env.HANDY_MASTER_SECRET ?? '').trim();
+  if (inline) {
+    return { secret: inline, source: `${sourceEnvPath} (HANDY_MASTER_SECRET)` };
+  }
+
+  const secretFile = (env.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim();
+  if (secretFile) {
+    const secret = await readTextIfExists(secretFile);
+    if (secret) return { secret, source: secretFile };
+  }
+
+  const dataDir = getServerLightDataDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env });
+  const secretPath = join(dataDir, 'handy-master-secret.txt');
+  const secret = await readTextIfExists(secretPath);
+  if (secret) return { secret, source: secretPath };
+
+  // Last-resort legacy: if main has never been migrated to stack dirs.
+  if (stackName === 'main') {
+    const legacy = join(homedir(), '.happy', 'server-light', 'handy-master-secret.txt');
+    const legacySecret = await readTextIfExists(legacy);
+    if (legacySecret) return { secret: legacySecret, source: legacy };
+  }
+
+  return { secret: null, source: null };
 }
 
 function resolveCliHomeDir() {
@@ -94,6 +196,261 @@ function authLoginSuggestion(stackName) {
   return stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
 }
 
+function authCopyFromMainSuggestion(stackName) {
+  if (stackName === 'main') return null;
+  return `happys stack auth ${stackName} copy-from main`;
+}
+
+function resolveServerComponentForCurrentStack() {
+  return (
+    (process.env.HAPPY_STACKS_SERVER_COMPONENT ?? process.env.HAPPY_LOCAL_SERVER_COMPONENT ?? 'happy-server-light').trim() ||
+    'happy-server-light'
+  );
+}
+
+async function runNodeCapture({ cwd, env, args, stdin }) {
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => {
+      stdout += String(d);
+    });
+    child.stderr.on('data', (d) => {
+      stderr += String(d);
+    });
+    child.on('error', (err) => rejectPromise(err));
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolvePromise({ stdout, stderr });
+        return;
+      }
+      rejectPromise(new Error(`node exited with ${code}${stderr.trim() ? `: ${stderr.trim()}` : ''}`));
+    });
+    if (stdin != null) {
+      child.stdin.write(String(stdin));
+    }
+    child.stdin.end();
+  });
+}
+
+function resolveServerComponentFromEnv(env) {
+  const v = (env.HAPPY_STACKS_SERVER_COMPONENT ?? env.HAPPY_LOCAL_SERVER_COMPONENT ?? 'happy-server-light').trim() || 'happy-server-light';
+  return v === 'happy-server' ? 'happy-server' : 'happy-server-light';
+}
+
+function resolveDatabaseUrlFromEnvOrThrow(env, { label }) {
+  const v = (env.DATABASE_URL ?? '').trim();
+  if (!v) throw new Error(`[auth] missing DATABASE_URL for ${label}`);
+  return v;
+}
+
+function resolveServerComponentDir({ rootDir, serverComponent }) {
+  return getComponentDir(rootDir, serverComponent === 'happy-server' ? 'happy-server' : 'happy-server-light');
+}
+
+async function seedAccountsFromSourceDbToTargetDb({
+  rootDir,
+  fromStackName,
+  fromServerComponent,
+  fromDatabaseUrl,
+  targetStackName,
+  targetServerComponent,
+  targetDatabaseUrl,
+}) {
+  const sourceCwd = resolveServerComponentDir({ rootDir, serverComponent: fromServerComponent });
+  const targetCwd = resolveServerComponentDir({ rootDir, serverComponent: targetServerComponent });
+
+  const listScript = `
+process.on('uncaughtException', (e) => {
+  console.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => {
+  console.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+});
+import { PrismaClient } from '@prisma/client';
+const db = new PrismaClient();
+try {
+  const accounts = await db.account.findMany({ select: { id: true, publicKey: true } });
+  console.log(JSON.stringify(accounts));
+} finally {
+  await db.$disconnect();
+}
+`.trim();
+
+  const insertScript = `
+process.on('uncaughtException', (e) => {
+  console.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => {
+  console.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+});
+import { PrismaClient } from '@prisma/client';
+import fs from 'node:fs';
+const raw = fs.readFileSync(0, 'utf8').trim();
+const accounts = raw ? JSON.parse(raw) : [];
+const db = new PrismaClient();
+try {
+  let insertedCount = 0;
+  for (const a of accounts) {
+    // eslint-disable-next-line no-await-in-loop
+    try {
+      await db.account.create({ data: { id: a.id, publicKey: a.publicKey } });
+      insertedCount += 1;
+    } catch (e) {
+      // Prisma unique constraint violation
+      if (e && typeof e === 'object' && 'code' in e && e.code === 'P2002') {
+        continue;
+      }
+      throw e;
+    }
+  }
+  console.log(JSON.stringify({ sourceCount: accounts.length, insertedCount }));
+} finally {
+  await db.$disconnect();
+}
+`.trim();
+
+  const { stdout: srcOut } = await runNodeCapture({
+    cwd: sourceCwd,
+    env: { ...process.env, DATABASE_URL: fromDatabaseUrl },
+    args: ['--input-type=module', '-e', listScript],
+  });
+  const accounts = srcOut.trim() ? JSON.parse(srcOut.trim()) : [];
+
+  const { stdout: insOut } = await runNodeCapture({
+    cwd: targetCwd,
+    env: { ...process.env, DATABASE_URL: targetDatabaseUrl },
+    args: ['--input-type=module', '-e', insertScript],
+    stdin: JSON.stringify(accounts),
+  });
+  const res = insOut.trim() ? JSON.parse(insOut.trim()) : { sourceCount: accounts.length, insertedCount: 0 };
+
+  return {
+    ok: true,
+    fromStackName,
+    targetStackName,
+    sourceCount: Number(res.sourceCount ?? accounts.length) || 0,
+    insertedCount: Number(res.insertedCount ?? 0) || 0,
+  };
+}
+
+async function cmdCopyFrom({ argv, json }) {
+  const rootDir = getRootDir(import.meta.url);
+  const stackName = getStackName();
+  if (stackName === 'main') {
+    throw new Error('[auth] copy-from is intended for stack-scoped usage (e.g. happys stack auth <name> copy-from main)');
+  }
+
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const fromStackName = (positionals[1] ?? '').trim();
+  if (!fromStackName) {
+    throw new Error('[auth] usage: happys stack auth <name> copy-from <sourceStack> [--json]');
+  }
+
+  const serverComponent = resolveServerComponentForCurrentStack();
+  const targetBaseDir = getDefaultAutostartPaths().baseDir;
+  const targetCli = resolveCliHomeDir();
+  const targetServerLightDataDir =
+    (process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim() || join(targetBaseDir, 'server-light');
+  const targetSecretFile =
+    (process.env.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim() || join(targetBaseDir, 'happy-server', 'handy-master-secret.txt');
+
+  const { secret, source } = await resolveHandyMasterSecretFromStack({ stackName: fromStackName, requireStackExists: true });
+
+  const copied = {
+    secret: false,
+    accessKey: false,
+    settings: false,
+    db: false,
+    dbAccounts: null,
+    dbError: null,
+    sourceStack: fromStackName,
+    stackName,
+  };
+
+  if (secret) {
+    if (serverComponent === 'happy-server-light') {
+      copied.secret = await writeSecretFileIfMissing({ path: join(targetServerLightDataDir, 'handy-master-secret.txt'), secret });
+    } else if (serverComponent === 'happy-server') {
+      copied.secret = await writeSecretFileIfMissing({ path: targetSecretFile, secret });
+    }
+  }
+
+  const sourceBaseDir = getStackDir(fromStackName);
+  const sourceEnvRaw = await readTextIfExists(getStackEnvPath(fromStackName));
+  const sourceEnv = sourceEnvRaw ? parseEnvToObject(sourceEnvRaw) : {};
+  const sourceCli = getCliHomeDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env: sourceEnv });
+
+  copied.accessKey = await copyFileIfMissing({
+    from: join(sourceCli, 'access.key'),
+    to: join(targetCli, 'access.key'),
+    mode: 0o600,
+  });
+  copied.settings = await copyFileIfMissing({
+    from: join(sourceCli, 'settings.json'),
+    to: join(targetCli, 'settings.json'),
+    mode: 0o600,
+  });
+
+  // Best-effort DB seeding: copy Account rows from source stack DB to target stack DB.
+  // This avoids FK failures (e.g., Prisma P2003) when the target DB is fresh but the copied token
+  // refers to an account ID that does not exist there yet.
+  try {
+    const fromServerComponent = resolveServerComponentFromEnv(sourceEnv);
+    const fromDatabaseUrl = resolveDatabaseUrlFromEnvOrThrow(sourceEnv, { label: `source stack "${fromStackName}"` });
+    const targetEnv = process.env;
+    const targetServerComponent = resolveServerComponentFromEnv(targetEnv);
+    const targetDatabaseUrl = resolveDatabaseUrlFromEnvOrThrow(targetEnv, { label: `target stack "${stackName}"` });
+
+    const seeded = await seedAccountsFromSourceDbToTargetDb({
+      rootDir,
+      fromStackName,
+      fromServerComponent,
+      fromDatabaseUrl,
+      targetStackName: stackName,
+      targetServerComponent,
+      targetDatabaseUrl,
+    });
+    copied.dbAccounts = { sourceCount: seeded.sourceCount, insertedCount: seeded.insertedCount };
+    copied.db = true;
+  } catch (err) {
+    copied.db = false;
+    copied.dbAccounts = null;
+    copied.dbError = err instanceof Error ? err.message : String(err);
+    if (!json) {
+      console.warn(`[auth] db seed skipped: ${copied.dbError}`);
+    }
+  }
+
+  if (json) {
+    printResult({ json, data: { ok: true, copied } });
+    return;
+  }
+
+  const any = copied.secret || copied.accessKey || copied.settings || copied.db;
+  if (!any) {
+    console.log(`[auth] nothing to copy (target already has auth files)`);
+    return;
+  }
+
+  console.log(`[auth] copied auth from "${fromStackName}" into "${stackName}" (no re-login needed)`);
+  if (copied.secret) console.log(`  - master secret: copied (${source || 'unknown source'})`);
+  if (copied.dbAccounts) {
+    console.log(`  - db: seeded Account rows (inserted=${copied.dbAccounts.insertedCount}/${copied.dbAccounts.sourceCount})`);
+  }
+  if (copied.accessKey) console.log(`  - cli: copied access.key`);
+  if (copied.settings) console.log(`  - cli: copied settings.json`);
+}
+
 async function cmdStatus({ json }) {
   const rootDir = getRootDir(import.meta.url);
   const stackName = getStackName();
@@ -162,11 +519,20 @@ async function cmdStatus({ json }) {
   console.log(authLine);
   if (!auth.ok) {
     console.log(`  ↪ run: ${authLoginSuggestion(stackName)}`);
+    const copyFromMain = authCopyFromMainSuggestion(stackName);
+    if (copyFromMain) {
+      console.log(`  ↪ or (recommended if main is already logged in): ${copyFromMain}`);
+    }
   }
   console.log(daemonLine);
   console.log(serverLine);
+  if (!health.ok) {
+    const startHint = stackName === 'main' ? 'happys dev' : `happys stack dev ${stackName}`;
+    console.log(`  ↪ this stack does not appear to be running. Start it with: ${startHint}`);
+    return;
+  }
   if (auth.ok && daemon.status !== 'running') {
-    console.log(`  ↪ auth is OK; this looks like a daemon/runtime issue. Try: happys doctor`);
+    console.log(`  ↪ daemon is not running for this stack. If you expected it to be running, try: happys doctor`);
   }
 }
 
@@ -240,7 +606,7 @@ async function main() {
   if (wantsHelp(argv, { flags }) || cmd === 'help') {
     printResult({
       json,
-      data: { commands: ['status', 'login'], stackScoped: 'happys stack auth <name> status|login' },
+      data: { commands: ['status', 'login', 'copy-from'], stackScoped: 'happys stack auth <name> status|login|copy-from' },
       text: [
         '[auth] usage:',
         '  happys auth status [--json]',
@@ -249,6 +615,7 @@ async function main() {
         'stack-scoped:',
         '  happys stack auth <name> status [--json]',
         '  happys stack auth <name> login [--force] [--print] [--json]',
+        '  happys stack auth <name> copy-from <sourceStack> [--json]',
       ].join('\n'),
     });
     return;
@@ -260,6 +627,10 @@ async function main() {
   }
   if (cmd === 'login') {
     await cmdLogin({ argv, json });
+    return;
+  }
+  if (cmd === 'copy-from') {
+    await cmdCopyFrom({ argv, json });
     return;
   }
 
