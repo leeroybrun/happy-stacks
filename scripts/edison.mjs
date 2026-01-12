@@ -815,7 +815,7 @@ async function main() {
   // Best-effort: if `edison` is not installed, print a helpful message.
   try {
     // eslint-disable-next-line no-console
-    if (stackName) console.log(`[edison] stack=${stackName}`);
+    if (stackName && !json) console.log(`[edison] stack=${stackName}`);
     if (!(await pathExists(rootDir))) {
       throw new Error(`[edison] missing repo root: ${rootDir}`);
     }

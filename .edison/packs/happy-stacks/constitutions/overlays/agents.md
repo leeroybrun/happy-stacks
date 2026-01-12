@@ -18,7 +18,7 @@
   - **Never claim/finish the parent task**; claim a track or component task instead.
 
 - **Only run project commands via `happys ...`**.
-  - Do **not** run `pnpm/yarn/npm/expo/tsc/docker compose` directly inside component repos.
+  - Do **not** run `pnpm/yarn/npm/npx/expo/tsc/docker compose` directly inside component repos.
   - Route everything through `happys` so stacks/env/worktrees/ports stay isolated.
   - Do **not** run `edison ...` directly in this repo:
     - Use `happys edison -- <edison args...>`

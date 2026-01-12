@@ -18,20 +18,24 @@ validation:
 
     fast:
       name: fast
-      description: "Typecheck + build + lint (stack-scoped)"
+      description: "Typecheck + build + lint (stack-scoped) + browser UI validation"
       required_evidence:
         - command-type-check.txt
         - command-build.txt
         - command-lint.txt
+      validators:
+        - browser-e2e
 
     standard:
       name: standard
-      description: "Fast + tests (stack-scoped)"
+      description: "Fast + tests (stack-scoped) + browser UI validation"
       required_evidence:
         - command-type-check.txt
         - command-build.txt
         - command-lint.txt
         - command-test.txt
+      validators:
+        - browser-e2e
 
   presetInference:
     rules:
@@ -61,20 +65,31 @@ validation:
   #
   # IMPORTANT:
   # - These profiles rely on running Edison via `happys edison --stack=<name> -- ...`
-  #   so the stack env (including HAPPY_LOCAL_SERVER_PORT) is loaded into the process env.
+  #   so the stack env (including HAPPY_LOCAL_SERVER_PORT / HAPPY_STACKS_SERVER_PORT) is loaded.
   web_servers:
-    happy-stack:
-      # Expand via env var (Edison web_server config supports $VAR/${VAR} expansion).
-      url: "http://127.0.0.1:${HAPPY_STACKS_SERVER_PORT}"
-      healthcheck_url: "http://127.0.0.1:${HAPPY_STACKS_SERVER_PORT}/health"
+    happy-stack: &happy_stack
+      url: "http://127.0.0.1:${HAPPY_LOCAL_SERVER_PORT}"
+      healthcheck_url: "http://127.0.0.1:${HAPPY_LOCAL_SERVER_PORT}/health"
       ensure_running: true
       stop_after: true
       start:
-        # Start the stack in prod-like mode for validation. This stays running as a background process
-        # managed by Edison’s web_server lifecycle and is stopped only if started by Edison.
         command: "node ./bin/happys.mjs stack start \"$HAPPY_STACKS_STACK\""
       stop:
-        # Only stop when Edison started the process (avoid stopping a stack someone started manually).
-        run_even_if_no_process: false
+        # Stop only when Edison started the stack.
+        #
+        # NOTE: `edison` tracks `started_by_us` separately from `process_pid`.
+        # `happys stack start` may exit after launching background processes; we still
+        # want to run stop when `started_by_us=true`.
+        run_even_if_no_process: true
         command: "node ./bin/happys.mjs stack stop \"$HAPPY_STACKS_STACK\" --yes"
 
+    # Alias for the `e2e-web` pack's expected profile name.
+    browser-e2e:
+      <<: *happy_stack
+
+  validators:
+    # Happy-local wiring: bind browser-e2e to the Happy Stacks web server profile.
+    # Prompt comes from the `e2e-web` pack (MCP-only) plus `.edison/validators/overlays/browser-e2e.md`.
+    browser-e2e:
+      web_server:
+        ref: browser-e2e
