@@ -72,12 +72,33 @@ export function getHappysRegistry() {
       description: 'Build UI bundle',
     },
     {
+      name: 'lint',
+      kind: 'node',
+      scriptRelPath: 'scripts/lint.mjs',
+      rootUsage: 'happys lint [component...] [--json]',
+      description: 'Run linters for components',
+    },
+    {
       name: 'typecheck',
       aliases: ['type-check', 'check-types'],
       kind: 'node',
       scriptRelPath: 'scripts/typecheck.mjs',
       rootUsage: 'happys typecheck [component...] [--json]',
       description: 'Run TypeScript typechecks for components',
+    },
+    {
+      name: 'test',
+      kind: 'node',
+      scriptRelPath: 'scripts/test.mjs',
+      rootUsage: 'happys test [component...] [--json]',
+      description: 'Run tests for components',
+    },
+    {
+      name: 'edison',
+      kind: 'node',
+      scriptRelPath: 'scripts/edison.mjs',
+      rootUsage: 'happys edison [--stack=<name>] -- <edison args...>',
+      description: 'Run Edison with Happy Stacks integration',
     },
     {
       name: 'migrate',
