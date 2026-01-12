@@ -24,8 +24,11 @@ if [[ "$FLAVOR" != "happy-server" && "$FLAVOR" != "happy-server-light" ]]; then
   exit 2
 fi
 
-HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_HOME_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 
 HAPPYS_BIN="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
 if [[ ! -x "$HAPPYS_BIN" ]]; then

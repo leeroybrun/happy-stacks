@@ -14,9 +14,7 @@ get_process_metrics() {
     return
   fi
   local cpu rss etime
-  cpu="$(echo "$line" | awk '{print $1}')"
-  rss="$(echo "$line" | awk '{print $2}')" # KB
-  etime="$(echo "$line" | awk '{print $3}')"
+  IFS=' ' read -r cpu rss etime <<<"$line"
   local mem_mb
   mem_mb="$(awk -v rss="$rss" 'BEGIN { printf "%.0f", (rss/1024.0) }')"
   echo "$cpu|$mem_mb|$etime"
@@ -43,7 +41,11 @@ ensure_launchctl_cache() {
     return
   fi
   if command -v launchctl >/dev/null 2>&1; then
+    local t0 t1
+    t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
     LAUNCHCTL_LIST_CACHE="$(launchctl list 2>/dev/null || true)"
+    t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+    swiftbar_profile_log "time" "label=launchctl_list" "ms=$((t1 - t0))"
   fi
 }
 
@@ -56,7 +58,8 @@ check_launchagent_status() {
   fi
 
   ensure_launchctl_cache
-  if echo "$LAUNCHCTL_LIST_CACHE" | grep -q "$label"; then
+  # Match the label column exactly (avoid substring false positives).
+  if echo "$LAUNCHCTL_LIST_CACHE" | awk -v lbl="$label" '$3==lbl{found=1} END{exit found?0:1}'; then
     echo "loaded"
     return
   fi
@@ -88,7 +91,11 @@ check_server_health() {
   fi
   local response
   # Tight timeouts to keep menus snappy even with many stacks.
+  local t0 t1
+  t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
   response="$(curl -s --connect-timeout 0.2 --max-time 0.6 "http://127.0.0.1:${port}/health" 2>/dev/null || true)"
+  t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+  swiftbar_profile_log "time" "label=curl_health" "port=${port}" "ms=$((t1 - t0))" "bytes=${#response}"
   if [[ "$response" == *"ok"* ]] || [[ "$response" == *"Welcome"* ]]; then
     echo "running"
     return
@@ -99,6 +106,8 @@ check_server_health() {
 check_daemon_status() {
   local cli_home_dir="$1"
   local state_file="$cli_home_dir/daemon.state.json"
+  local t0 t1
+  t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
   if [[ -z "$cli_home_dir" ]] || [[ ! -f "$state_file" ]]; then
     # If the daemon is starting but hasn't written daemon.state.json yet, we can still detect it
     # via the lock file PID.
@@ -153,13 +162,19 @@ check_daemon_status() {
   # Best-effort: confirm the control server is responding (tight timeouts).
   if [[ -n "$httpPort" ]] && [[ "$httpPort" =~ ^[0-9]+$ ]]; then
     if curl -s --connect-timeout 0.2 --max-time 0.5 -X POST -H 'content-type: application/json' -d '{}' "http://127.0.0.1:${httpPort}/list" >/dev/null 2>&1; then
+      t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+      swiftbar_profile_log "time" "label=daemon_status" "ms=$((t1 - t0))" "httpProbe=ok"
       echo "running:$pid"
       return
     fi
+    t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+    swiftbar_profile_log "time" "label=daemon_status" "ms=$((t1 - t0))" "httpProbe=fail"
     echo "running-no-http:$pid"
     return
   fi
 
+  t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+  swiftbar_profile_log "time" "label=daemon_status" "ms=$((t1 - t0))" "httpProbe=skip"
   echo "running:$pid"
 }
 
@@ -199,7 +214,11 @@ get_tailscale_url() {
   local happys_sh="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
   if [[ -x "$happys_sh" ]]; then
     # Keep SwiftBar responsive: use a tight timeout for this periodic probe.
+    local t0 t1
+    t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
     url="$("$happys_sh" tailscale:url --timeout-ms=2500 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+    t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+    swiftbar_profile_log "time" "label=tailscale_url_happys" "ms=$((t1 - t0))" "ok=$([[ "$url" == https://* ]] && echo 1 || echo 0)"
     if [[ "$url" == https://* ]]; then
       echo "$url"
       return
@@ -208,7 +227,11 @@ get_tailscale_url() {
   fi
 
   if command -v tailscale &>/dev/null; then
+    local t0 t1
+    t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
     url="$(tailscale serve status 2>/dev/null | grep -oE 'https://[^ ]+' | head -1 || true)"
+    t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+    swiftbar_profile_log "time" "label=tailscale_url_cli" "ms=$((t1 - t0))" "ok=$([[ -n "$url" ]] && echo 1 || echo 0)"
   fi
   if [[ -z "$url" ]] && [[ -x "/Applications/Tailscale.app/Contents/MacOS/tailscale" ]]; then
     url="$(/Applications/Tailscale.app/Contents/MacOS/tailscale serve status 2>/dev/null | grep -oE 'https://[^ ]+' | head -1 || true)"

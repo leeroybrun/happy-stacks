@@ -79,7 +79,11 @@ render_component_server() {
 
   local p2="${prefix}--"
   print_item "$p2" "Status: $server_status"
-  print_item "$p2" "Internal: http://127.0.0.1:${port}"
+  if [[ -n "$port" ]]; then
+    print_item "$p2" "Internal: http://127.0.0.1:${port}"
+  else
+    print_item "$p2" "Port: ephemeral (allocated at start time)"
+  fi
   if [[ -n "$server_pid" ]]; then
     if [[ -n "$server_metrics" ]]; then
       local cpu mem etime
@@ -91,8 +95,10 @@ render_component_server() {
       print_item "$p2" "PID: ${server_pid}"
     fi
   fi
-  print_item "$p2" "Open UI (local) | href=http://localhost:${port}/"
-  print_item "$p2" "Open Health | href=http://127.0.0.1:${port}/health"
+  if [[ -n "$port" ]]; then
+    print_item "$p2" "Open UI (local) | href=http://localhost:${port}/"
+    print_item "$p2" "Open Health | href=http://127.0.0.1:${port}/health"
+  fi
   if [[ -n "$tailscale_url" ]]; then
     print_item "$p2" "Open UI (Tailscale) | href=$tailscale_url"
   fi
@@ -206,7 +212,7 @@ render_component_daemon() {
       webapp_url="$(get_tailscale_url)"
       [[ -z "$webapp_url" ]] && webapp_url="http://localhost:$(resolve_main_port)"
       if [[ "$stack_name" == "main" ]]; then
-        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=main param2=$server_url param3=$webapp_url dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
+        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=main dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
       else
         # For stacks, best-effort use the stack's configured port if available (fallback to main port).
         local env_file
@@ -218,7 +224,7 @@ render_component_daemon() {
         server_url="http://127.0.0.1:${port}"
         webapp_url="$(get_tailscale_url)"
         [[ -z "$webapp_url" ]] && webapp_url="http://localhost:${port}"
-        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=$stack_name param2=$server_url param3=$webapp_url dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
+        print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
       fi
       print_sep "$p2"
     fi
@@ -361,6 +367,9 @@ render_component_repo() {
   local stack_name="$4"
   local env_file="$5"
 
+  local t0 t1
+  t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+
   local active_dir=""
   # If we have an env file for the current context, prefer it (stack env is authoritative).
   if [[ -n "$env_file" && -f "$env_file" ]]; then
@@ -371,24 +380,50 @@ render_component_repo() {
 
   local level="red"
   local detail="missing"
-  if is_git_repo "$active_dir"; then
-    local dirty
-    dirty="$(git_dirty_flag "$active_dir")"
-    local ab
-    ab="$(git_ahead_behind "$active_dir")"
-    local ahead="" behind=""
-    if [[ -n "$ab" ]]; then
-      ahead="$(echo "$ab" | cut -d'|' -f1)"
-      behind="$(echo "$ab" | cut -d'|' -f2)"
-    fi
 
+  local git_mode
+  git_mode="$(git_cache_mode)"
+
+  local stale="0"
+  local meta="" info="" wts=""
+  if [[ "$git_mode" == "cached" ]]; then
+    # Never refresh synchronously during menu render.
+    IFS=$'\t' read -r meta info wts stale <<<"$(git_cache_load_or_refresh "$context" "$stack_name" "$component" "$active_dir" "0")"
+  fi
+
+  local status="missing"
+  local dirty="" ahead="" behind="" wt_count=""
+  local branch="" head="" upstream=""
+  local main_branch="" main_upstream="" main_ahead="" main_behind=""
+  local oref="" o_ahead="" o_behind="" uref="" u_ahead="" u_behind=""
+
+  if [[ "$git_mode" == "cached" && -f "$info" ]]; then
+    IFS=$'\t' read -r status _ad branch head upstream dirty ahead behind main_branch main_upstream main_ahead main_behind oref o_ahead o_behind uref u_ahead u_behind wt_count <"$info" || true
+  elif [[ "$git_mode" == "live" ]]; then
+    # live mode only: do git work on every refresh
+    if is_git_repo "$active_dir"; then
+      status="ok"
+      dirty="$(git_dirty_flag "$active_dir")"
+      local ab
+      ab="$(git_ahead_behind "$active_dir")"
+      if [[ -n "$ab" ]]; then
+        ahead="$(echo "$ab" | cut -d'|' -f1)"
+        behind="$(echo "$ab" | cut -d'|' -f2)"
+      fi
+    fi
+  fi
+
+  if [[ "$status" == "ok" ]]; then
+    detail="ok"
     if [[ "$dirty" == "dirty" ]] || [[ -n "$behind" && "$behind" != "0" ]]; then
       level="orange"
     else
       level="green"
     fi
-    detail="ok"
   fi
+
+  t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+  swiftbar_profile_log "time" "label=render_component_repo" "component=${component}" "context=${context}" "ms=$((t1 - t0))" "detail=${detail}"
 
   local sf color
   sf="$(sf_for_level "$level")"
@@ -398,7 +433,20 @@ render_component_repo() {
   local p2="${prefix}--"
   print_item "$p2" "Dir: $(shorten_path "$active_dir" 52)"
   if [[ "$detail" != "ok" ]]; then
-    print_item "$p2" "Status: not a git repo / missing"
+    if [[ "$git_mode" == "cached" ]]; then
+      print_item "$p2" "Status: git cache missing (or not a git repo)"
+      local refresh="$HAPPY_LOCAL_DIR/extras/swiftbar/git-cache-refresh.sh"
+      if [[ -x "$refresh" ]]; then
+        print_sep "$p2"
+        if [[ "$context" == "stack" && -n "$stack_name" ]]; then
+          print_item "$p2" "Refresh Git cache (this stack) | bash=$refresh param1=stack param2=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+        else
+          print_item "$p2" "Refresh Git cache (main) | bash=$refresh param1=main dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+        fi
+      fi
+    else
+      print_item "$p2" "Status: not a git repo / missing"
+    fi
     if [[ -n "$PNPM_BIN" ]]; then
       print_sep "$p2"
       local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
@@ -407,22 +455,28 @@ render_component_repo() {
     return
   fi
 
-  local branch head upstream
-  branch="$(git_head_branch "$active_dir")"
-  head="$(git_head_short "$active_dir")"
-  upstream="$(git_upstream_short "$active_dir")"
-
-  local dirty
-  dirty="$(git_dirty_flag "$active_dir")"
-  local ab ahead behind
-  ab="$(git_ahead_behind "$active_dir")"
-  ahead=""
-  behind=""
-  if [[ -n "$ab" ]]; then
-    ahead="$(echo "$ab" | cut -d'|' -f1)"
-    behind="$(echo "$ab" | cut -d'|' -f2)"
+  # Cache status + refresh actions
+  if [[ "$git_mode" == "cached" ]]; then
+    local age=""
+    age="$(git_cache_age_sec "$meta")"
+    if [[ -n "$age" ]]; then
+      if [[ "$stale" == "1" ]]; then
+        print_item "$p2" "Git cache: stale (${age}s old) | color=$YELLOW"
+      else
+        print_item "$p2" "Git cache: fresh (${age}s old) | color=$GRAY"
+      fi
+    fi
+    local refresh="$HAPPY_LOCAL_DIR/extras/swiftbar/git-cache-refresh.sh"
+    if [[ -x "$refresh" ]]; then
+      print_sep "$p2"
+      print_item "$p2" "Refresh Git cache (this component) | bash=$refresh param1=component param2=$context param3=$stack_name param4=$component dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      if [[ "$context" == "stack" && -n "$stack_name" ]]; then
+        print_item "$p2" "Refresh Git cache (this stack) | bash=$refresh param1=stack param2=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      fi
+    fi
   fi
 
+  print_sep "$p2"
   print_item "$p2" "HEAD: ${branch:-"(unknown)"} ${head:+($head)}"
   print_item "$p2" "Upstream: ${upstream:-"(none)"}"
   if [[ -n "$ahead" && -n "$behind" ]]; then
@@ -430,31 +484,22 @@ render_component_repo() {
   fi
   print_item "$p2" "Working tree: ${dirty}"
 
-  local main_branch main_upstream main_ab
-  main_branch="$(git_main_branch_name "$active_dir")"
   if [[ -n "$main_branch" ]]; then
-    main_upstream="$(git_branch_upstream_short "$active_dir" "$main_branch")"
-    main_ab="$(git_branch_ahead_behind "$active_dir" "$main_branch")"
     if [[ -n "$main_upstream" ]]; then
       print_item "$p2" "Main: ${main_branch} → ${main_upstream}"
     else
       print_item "$p2" "Main: ${main_branch} → (no upstream)"
     fi
-    if [[ -n "$main_ab" ]]; then
-      print_item "$p2" "Main ahead/behind: $(echo "$main_ab" | cut -d'|' -f1)/$(echo "$main_ab" | cut -d'|' -f2)"
+    if [[ -n "$main_ahead" && -n "$main_behind" ]]; then
+      print_item "$p2" "Main ahead/behind: ${main_ahead}/${main_behind}"
     fi
 
     # Always show comparisons against origin/* and upstream/* when those remote refs exist.
     # (These reflect your last fetch; we do not auto-fetch in the menu.)
-    local oref uref
-    oref="$(git_remote_main_ref "$active_dir" "origin")"
-    uref="$(git_remote_main_ref "$active_dir" "upstream")"
     if [[ -n "$oref" ]]; then
       local oref_short="${oref#refs/remotes/}"
-      local oab
-      oab="$(git_ahead_behind_refs "$active_dir" "$oref" "$main_branch")"
-      if [[ -n "$oab" ]]; then
-        print_item "$p2" "Origin: ${oref_short} ahead/behind: $(echo "$oab" | cut -d'|' -f1)/$(echo "$oab" | cut -d'|' -f2)"
+      if [[ -n "$o_ahead" && -n "$o_behind" ]]; then
+        print_item "$p2" "Origin: ${oref_short} ahead/behind: ${o_ahead}/${o_behind}"
       else
         print_item "$p2" "Origin: ${oref_short}"
       fi
@@ -463,10 +508,8 @@ render_component_repo() {
     fi
     if [[ -n "$uref" ]]; then
       local uref_short="${uref#refs/remotes/}"
-      local uab
-      uab="$(git_ahead_behind_refs "$active_dir" "$uref" "$main_branch")"
-      if [[ -n "$uab" ]]; then
-        print_item "$p2" "Upstream: ${uref_short} ahead/behind: $(echo "$uab" | cut -d'|' -f1)/$(echo "$uab" | cut -d'|' -f2)"
+      if [[ -n "$u_ahead" && -n "$u_behind" ]]; then
+        print_item "$p2" "Upstream: ${uref_short} ahead/behind: ${u_ahead}/${u_behind}"
       else
         print_item "$p2" "Upstream: ${uref_short}"
       fi
@@ -476,7 +519,8 @@ render_component_repo() {
   fi
 
     local wt_count
-    wt_count="$(git_worktree_count "$active_dir")"
+    # If cache didn't populate wt_count, fall back to empty string.
+    wt_count="${wt_count:-}"
 
   # Quick actions
   print_sep "$p2"
@@ -536,7 +580,11 @@ render_component_repo() {
     print_item "$p2" "$wt_label"
     local p3="${p2}--"
     local tsv
-    tsv="$(git_worktrees_tsv "$active_dir" 2>/dev/null || true)"
+    if [[ "$git_mode" == "cached" && -f "$wts" ]]; then
+      tsv="$(cat "$wts" 2>/dev/null || true)"
+    else
+      tsv="$(git_worktrees_tsv "$active_dir" 2>/dev/null || true)"
+    fi
     if [[ -z "$tsv" ]]; then
       print_item "$p3" "No worktrees found | color=$GRAY"
     else
@@ -604,14 +652,55 @@ render_components_menu() {
   local stack_name="$3"
   local env_file="$4"
 
+  local t0 t1
+  t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+
   print_item "$prefix" "Components | sfimage=cube"
   local p2="${prefix}--"
+
+  # Background auto-refresh: keep menu refresh snappy but update git cache when TTL expires.
+  if [[ "$(git_cache_mode)" == "cached" ]]; then
+    local scope
+    scope="$(git_cache_auto_refresh_scope)"
+    local refresh="$HAPPY_LOCAL_DIR/extras/swiftbar/git-cache-refresh.sh"
+    if [[ -x "$refresh" ]]; then
+      if [[ "$scope" == "all" ]]; then
+        git_cache_maybe_refresh_async "all" "$refresh" all
+      elif [[ "$scope" == "main" && "$context" == "main" ]]; then
+        git_cache_maybe_refresh_async "main" "$refresh" main
+      fi
+    fi
+  fi
+
+  # Git cache controls (to keep the menu refresh fast while retaining rich inline worktrees UI).
+  local refresh="$HAPPY_LOCAL_DIR/extras/swiftbar/git-cache-refresh.sh"
+  if [[ -f "$refresh" ]]; then
+    local mode ttl
+    mode="$(git_cache_mode)"
+    ttl="$(git_cache_ttl_sec)"
+    print_item "$p2" "Git cache | sfimage=arrow.triangle.2.circlepath"
+    local p3="${p2}--"
+    print_item "$p3" "Mode: ${mode} (default: cached)"
+    print_item "$p3" "TTL: ${ttl}s (set HAPPY_STACKS_SWIFTBAR_GIT_TTL_SEC)"
+    print_sep "$p3"
+    if [[ "$context" == "main" ]]; then
+      print_item "$p3" "Refresh now (main components) | bash=$refresh param1=main dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      print_item "$p3" "Refresh now (all stacks/components) | bash=$refresh param1=all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    else
+      print_item "$p3" "Refresh now (this stack) | bash=$refresh param1=stack param2=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    fi
+    print_sep "$p2"
+  fi
+
   # Always render the known components using the resolved component dirs (env file → env.local/.env → fallback),
   # instead of assuming they live under `~/.happy-stacks/workspace/components`.
   for c in happy happy-cli happy-server-light happy-server; do
     render_component_repo "$p2" "$c" "$context" "$stack_name" "$env_file"
     print_sep "$p2"
   done
+
+  t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+  swiftbar_profile_log "time" "label=render_components_menu" "context=${context}" "stack=${stack_name}" "ms=$((t1 - t0))"
 }
 
 render_stack_overview_item() {
@@ -709,7 +798,18 @@ render_stack_info() {
   print_item "$prefix" "Stack details | sfimage=server.rack"
   local p2="${prefix}--"
   print_item "$p2" "Server component: ${server_component}"
-  print_item "$p2" "Port: ${port}"
+  local pinned_port=""
+  if [[ -n "$env_file" && -f "$env_file" ]]; then
+    pinned_port="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
+    [[ -z "$pinned_port" ]] && pinned_port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
+  fi
+  local port_display="$port"
+  if [[ -z "$port_display" ]]; then
+    port_display="ephemeral (not running)"
+  elif [[ -z "$pinned_port" ]]; then
+    port_display="${port_display} (ephemeral)"
+  fi
+  print_item "$p2" "Port: ${port_display}"
   print_item "$p2" "Label: ${label}"
   [[ -n "$env_file" ]] && print_item "$p2" "Env: $(shorten_path "$env_file" 52)"
   [[ -n "$tailscale_url" ]] && print_item "$p2" "Tailscale: $(shorten_text "$tailscale_url" 52)"

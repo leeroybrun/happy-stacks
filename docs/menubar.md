@@ -32,6 +32,7 @@ SwiftBar runs a script on an interval and renders its output as native macOS men
   - Each component includes a **Worktrees** submenu listing all worktrees, with actions to switch/open
   - Quick actions: `wt status/sync/update`, PR worktree prompt, open shells/editors (`wt shell/code/cursor`)
   - Shows **origin** and **upstream** comparisons for the component repo’s main branch (based on your last `git fetch`)
+  - Uses a **Git cache** by default so SwiftBar refresh stays fast even with many stacks/worktrees
 
 ## Stacks (multiple instances)
 
@@ -124,6 +125,31 @@ The plugin defaults to a slower interval (recommended), and also sets:
 - `refreshOnOpen=false` (recommended) to avoid surprise refreshes while you’re navigating the menu.
 
 You can also change the interval directly from the menu via **Refresh interval** (it renames the plugin file and restarts SwiftBar).
+
+## Git cache (important for performance)
+
+Git/worktree inspection is the most expensive part of the menu when you have many stacks.
+By default, the plugin runs in **cached mode**:
+
+- It renders git/worktree info from an on-disk cache under `~/.happy-stacks/cache/swiftbar/git`.
+- Normal menu refreshes do **not** run git commands (so refresh stays snappy).
+- The cache is refreshed explicitly (via menu actions), and can optionally refresh on TTL expiry.
+
+Controls and settings:
+
+- **Refresh now**: open **Components → Git cache** and run:
+  - “Refresh now (main components)”
+  - “Refresh now (all stacks/components)”
+  - or “Refresh now (this stack)” from a stack’s Components menu
+- **TTL**: `HAPPY_STACKS_SWIFTBAR_GIT_TTL_SEC` (default `3600` seconds)
+- **TTL**: `HAPPY_STACKS_SWIFTBAR_GIT_TTL_SEC` (default `21600` seconds = 6 hours)
+- **Mode**: `HAPPY_STACKS_SWIFTBAR_GIT_MODE=cached|live` (default `cached`)
+- (Optional) **Background auto-refresh**: `HAPPY_STACKS_SWIFTBAR_GIT_AUTO_REFRESH_SCOPE=main|all|off` (default `main`)
+
+Notes:
+
+- Cached git info can be stale; it’s meant for at-a-glance signal.
+- Actions like worktree switching/build/dev are always live (they use `happys`); only *displayed git status* is cached.
 
 ## Terminal preference for interactive actions
 

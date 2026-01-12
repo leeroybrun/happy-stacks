@@ -11,46 +11,22 @@ set -euo pipefail
 # - iTerm / Terminal: we run the command automatically via AppleScript.
 # - Ghostty: best-effort; if we can't run the command, we open Ghostty in the dir and copy the command to clipboard.
 
-CANONICAL_ENV_FILE="$HOME/.happy-stacks/.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_HOME_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-dotenv_get_quick() {
-  local file="$1"
-  local key="$2"
-  [[ -n "$file" && -n "$key" && -f "$file" ]] || return 0
-  local line
-  line="$(grep -E "^${key}=" "$file" 2>/dev/null | head -n 1 || true)"
-  [[ -n "$line" ]] || return 0
-  local v="${line#*=}"
-  v="${v%$'\r'}"
-  if [[ "$v" == \"*\" && "$v" == *\" ]]; then v="${v#\"}"; v="${v%\"}"; fi
-  if [[ "$v" == \'*\' && "$v" == *\' ]]; then v="${v#\'}"; v="${v%\'}"; fi
-  echo "$v"
-}
+# Prefer explicit env vars, but default to the install location inferred from this script path.
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 
-expand_home_quick() {
-  local p="$1"
-  if [[ "$p" == "~/"* ]]; then
-    echo "$HOME/${p#~/}"
-  else
-    echo "$p"
-  fi
-}
-
-home_from_canonical=""
-ws_from_canonical=""
-if [[ -f "$CANONICAL_ENV_FILE" ]]; then
-  home_from_canonical="$(dotenv_get_quick "$CANONICAL_ENV_FILE" "HAPPY_STACKS_HOME_DIR")"
-  [[ -z "$home_from_canonical" ]] && home_from_canonical="$(dotenv_get_quick "$CANONICAL_ENV_FILE" "HAPPY_LOCAL_HOME_DIR")"
-  ws_from_canonical="$(dotenv_get_quick "$CANONICAL_ENV_FILE" "HAPPY_STACKS_WORKSPACE_DIR")"
-  [[ -z "$ws_from_canonical" ]] && ws_from_canonical="$(dotenv_get_quick "$CANONICAL_ENV_FILE" "HAPPY_LOCAL_WORKSPACE_DIR")"
+# Use shared resolver for workspace dir (respects HAPPY_STACKS_WORKSPACE_DIR and ~/.happy-stacks/.env).
+LIB_DIR="$HAPPY_LOCAL_DIR/extras/swiftbar/lib"
+if [[ -f "$LIB_DIR/utils.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$LIB_DIR/utils.sh"
 fi
-home_from_canonical="$(expand_home_quick "${home_from_canonical:-}")"
-ws_from_canonical="$(expand_home_quick "${ws_from_canonical:-}")"
 
-HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-${home_from_canonical:-$HOME/.happy-stacks}}"
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
-
-WORKDIR="${HAPPY_STACKS_WORKSPACE_DIR:-${ws_from_canonical:-$HAPPY_STACKS_HOME_DIR/workspace}}"
+WORKDIR="${HAPPY_STACKS_WORKSPACE_DIR:-$(resolve_workspace_dir 2>/dev/null || true)}"
+[[ -z "$WORKDIR" ]] && WORKDIR="$HAPPY_STACKS_HOME_DIR/workspace"
 if [[ ! -d "$WORKDIR" ]]; then
   WORKDIR="$HOME"
 fi

@@ -155,6 +155,12 @@ else
     echo -e "${GREEN}✓ Plugin installed${NC}"
 fi
 
+#
+# Ensure helper scripts are executable (SwiftBar menu actions rely on this).
+# The repo usually tracks +x, but home installs can lose mode bits depending on how assets are copied.
+#
+chmod +x "$SCRIPT_DIR"/*.sh 2>/dev/null || true
+
 echo ""
 
 # Step 4: Launch SwiftBar if not running

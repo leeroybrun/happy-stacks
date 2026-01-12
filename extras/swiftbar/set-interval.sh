@@ -27,8 +27,11 @@ fi
 mkdir -p "$PLUGIN_DIR"
 
 TARGET="$PLUGIN_DIR/happy-stacks.${INTERVAL}.sh"
-HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_HOME_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 SOURCE="${HAPPY_LOCAL_DIR}/extras/swiftbar/happy-stacks.5s.sh"
 
 # If a happy-stacks plugin already exists, rename it into place; otherwise copy from repo source.

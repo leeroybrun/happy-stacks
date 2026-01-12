@@ -17,6 +17,141 @@ shorten_path() {
   shorten_text "$pretty" "$max"
 }
 
+swiftbar_profile_enabled() {
+  [[ "${HAPPY_STACKS_SWIFTBAR_PROFILE:-}" == "1" || "${HAPPY_LOCAL_SWIFTBAR_PROFILE:-}" == "1" ]]
+}
+
+swiftbar_now_ms() {
+  # macOS `date` doesn't support %N, so use Time::HiRes when available.
+  if command -v perl >/dev/null 2>&1; then
+    perl -MTime::HiRes=time -e 'printf("%.0f\n", time()*1000)'
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import time; print(int(time.time()*1000))'
+    return
+  fi
+  # Fallback: seconds granularity.
+  echo $(( $(date +%s 2>/dev/null || echo 0) * 1000 ))
+}
+
+swiftbar_profile_log_file() {
+  # Keep logs in the home install by default (stable across repos/worktrees).
+  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$HOME/.happy-stacks}}"
+  echo "${home}/cache/swiftbar/profile.log"
+}
+
+swiftbar_profile_log() {
+  # Usage: swiftbar_profile_log "event" "k=v" "k2=v2" ...
+  swiftbar_profile_enabled || return 0
+
+  local log_file
+  log_file="$(swiftbar_profile_log_file)"
+  mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
+
+  local ts
+  ts="$(swiftbar_now_ms)"
+  {
+    printf '%s\t%s' "$ts" "$1"
+    shift || true
+    for kv in "$@"; do
+      printf '\t%s' "$kv"
+    done
+    printf '\n'
+  } >>"$log_file" 2>/dev/null || true
+}
+
+swiftbar_profile_time() {
+  # Usage: swiftbar_profile_time <label> -- <command...>
+  swiftbar_profile_enabled || { shift; [[ "${1:-}" == "--" ]] && shift; "$@"; return $?; }
+  local label="$1"
+  shift
+  [[ "${1:-}" == "--" ]] && shift
+
+  local t0 t1 rc
+  t0="$(swiftbar_now_ms)"
+  "$@"
+  rc=$?
+  t1="$(swiftbar_now_ms)"
+  swiftbar_profile_log "time" "label=${label}" "ms=$((t1 - t0))" "rc=${rc}"
+  return $rc
+}
+
+swiftbar_cache_hash12() {
+  # Usage: swiftbar_cache_hash12 "string"
+  local s="$1"
+  if command -v md5 >/dev/null 2>&1; then
+    md5 -q -s "$s" 2>/dev/null | head -c 12
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$s" | shasum -a 256 2>/dev/null | awk '{print substr($1,1,12)}'
+    return
+  fi
+  # Last resort (not cryptographic): length + a sanitized prefix.
+  printf '%s' "${#s}-$(echo "$s" | tr -cd '[:alnum:]' | head -c 10)"
+}
+
+swiftbar_hash() {
+  # Usage: swiftbar_hash "string"
+  local s="$1"
+  if command -v md5 >/dev/null 2>&1; then
+    md5 -q -s "$s" 2>/dev/null || true
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$s" | shasum -a 256 2>/dev/null | awk '{print $1}'
+    return
+  fi
+  printf '%s' "$(swiftbar_cache_hash12 "$s")"
+}
+
+swiftbar_run_cache_dir() {
+  # Per-process (per-refresh) cache. Avoid persisting across SwiftBar refreshes.
+  local base="${TMPDIR:-/tmp}"
+  local dir="${base%/}/happy-stacks-swiftbar-cache-${UID:-0}-$$"
+  mkdir -p "$dir" 2>/dev/null || true
+  echo "$dir"
+}
+
+swiftbar_cache_file_for_key() {
+  local key="$1"
+  local dir
+  dir="$(swiftbar_run_cache_dir)"
+  echo "${dir}/$(swiftbar_cache_hash12 "$key").cache"
+}
+
+swiftbar_cache_get() {
+  # Usage: swiftbar_cache_get <key>
+  # Output: cached stdout (may be empty). Exit status: cached rc.
+  local key="$1"
+  local f
+  f="$(swiftbar_cache_file_for_key "$key")"
+  # Important: return a distinct code on cache-miss so callers can distinguish from cached rc=1.
+  [[ -f "$f" ]] || return 111
+  local rc_line rc
+  rc_line="$(head -n 1 "$f" 2>/dev/null || true)"
+  rc="${rc_line#rc:}"
+  tail -n +2 "$f" 2>/dev/null || true
+  [[ "$rc" =~ ^[0-9]+$ ]] || rc=0
+  return "$rc"
+}
+
+swiftbar_cache_set() {
+  # Usage: swiftbar_cache_set <key> <rc> <stdout>
+  local key="$1"
+  local rc="$2"
+  local out="${3:-}"
+  local f
+  f="$(swiftbar_cache_file_for_key "$key")"
+  {
+    printf 'rc:%s\n' "${rc:-0}"
+    printf '%s' "$out"
+    # Keep files line-friendly.
+    [[ "$out" == *$'\n' ]] || printf '\n'
+  } >"$f" 2>/dev/null || true
+}
+
 dotenv_get() {
   # Usage: dotenv_get /path/to/env KEY
   # Notes:
@@ -302,7 +437,8 @@ resolve_main_port() {
   # 2) main stack env
   # 3) home env.local
   # 4) home .env
-  # 4) fallback to HAPPY_LOCAL_PORT / 3005
+  # 5) runtime state (ephemeral stacks)
+  # 6) fallback to HAPPY_LOCAL_PORT / 3005
   if [[ -n "${HAPPY_LOCAL_SERVER_PORT:-}" ]]; then
     echo "$HAPPY_LOCAL_SERVER_PORT"
     return
@@ -338,7 +474,96 @@ resolve_main_port() {
     return
   fi
 
+  # Runtime-only port overlay (ephemeral stacks): best-effort.
+  local base_dir state_file
+  base_dir="$(resolve_stack_base_dir main "$env_file")"
+  state_file="${base_dir}/stack.runtime.json"
+  p="$(resolve_runtime_server_port_from_state_file "$state_file")"
+  if [[ -n "$p" ]]; then
+    echo "$p"
+    return
+  fi
+
   echo "${HAPPY_LOCAL_PORT:-3005}"
+}
+
+resolve_runtime_server_port_from_state_file() {
+  # Reads stack.runtime.json and returns ports.server, but only if ownerPid is alive.
+  # Output: port number or empty.
+  local state_file="$1"
+  [[ -n "$state_file" && -f "$state_file" ]] || return 0
+
+  local owner="" port=""
+
+  # Fast-path: parse our own JSON shape without spawning node (best-effort).
+  if command -v grep >/dev/null 2>&1; then
+    owner="$(grep -oE '"ownerPid"[[:space:]]*:[[:space:]]*[0-9]+' "$state_file" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)"
+    port="$(grep -oE '"server"[[:space:]]*:[[:space:]]*[0-9]+' "$state_file" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)"
+  fi
+
+  if [[ -z "$owner" || -z "$port" ]]; then
+    local node_bin
+    node_bin="$(resolve_node_bin)"
+    if [[ -n "$node_bin" && -x "$node_bin" ]]; then
+      local out
+      out="$(
+        "$node_bin" -e '
+          const fs=require("fs");
+          try {
+            const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+            const owner=String(s?.ownerPid ?? "");
+            const port=String(s?.ports?.server ?? "");
+            process.stdout.write(owner + "\t" + port);
+          } catch { process.stdout.write("\t"); }
+        ' "$state_file" 2>/dev/null || true
+      )"
+      IFS=$'\t' read -r owner port <<<"$out"
+    elif command -v python3 >/dev/null 2>&1; then
+      local out
+      out="$(
+        python3 -c 'import json,sys; 
+try:
+  s=json.load(open(sys.argv[1],"r"))
+  owner=str(s.get("ownerPid",""))
+  port=str((s.get("ports") or {}).get("server",""))
+  print(owner+"\\t"+port,end="")
+except Exception:
+  print("\\t",end="")' "$state_file" 2>/dev/null || true
+      )"
+      IFS=$'\t' read -r owner port <<<"$out"
+    fi
+  fi
+
+  [[ "$owner" =~ ^[0-9]+$ ]] || owner=""
+  [[ "$port" =~ ^[0-9]+$ ]] || port=""
+  if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
+    echo "$port"
+  fi
+}
+
+resolve_stack_server_port() {
+  # Usage: resolve_stack_server_port <stack_name> <env_file>
+  # Priority:
+  # - pinned port in env file
+  # - runtime port in stack.runtime.json (only if ownerPid alive)
+  local stack_name="${1:-main}"
+  local env_file="${2:-}"
+
+  local p=""
+  if [[ -n "$env_file" && -f "$env_file" ]]; then
+    p="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
+    [[ -z "$p" ]] && p="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
+  fi
+  if [[ -n "$p" ]]; then
+    echo "$p"
+    return
+  fi
+
+  local base_dir state_file
+  base_dir="$(resolve_stack_base_dir "$stack_name" "$env_file")"
+  state_file="${base_dir}/stack.runtime.json"
+  p="$(resolve_runtime_server_port_from_state_file "$state_file")"
+  echo "$p"
 }
 
 resolve_main_server_component() {

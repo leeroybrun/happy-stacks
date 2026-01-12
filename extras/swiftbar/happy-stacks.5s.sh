@@ -153,14 +153,14 @@ render_component_autostart "" "main" "$MAIN_LABEL" "$MAIN_LAUNCHAGENT_STATUS" "$
 render_component_tailscale "" "main" "$TAILSCALE_URL"
 
 echo "---"
-echo "Stacks"
-echo "---"
+echo "Stacks | sfimage=server.rack"
+STACKS_PREFIX="--"
 
 if [[ -n "$PNPM_BIN" ]]; then
   HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
-  echo "New stack (interactive) | bash=$HAPPYS_TERM param1=stack param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "List stacks | bash=$HAPPYS_TERM param1=stack param2=list dir=$HAPPY_LOCAL_DIR terminal=false"
-  echo "---"
+  echo "${STACKS_PREFIX}New stack (interactive) | bash=$HAPPYS_TERM param1=stack param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  echo "${STACKS_PREFIX}List stacks | bash=$HAPPYS_TERM param1=stack param2=list dir=$HAPPY_LOCAL_DIR terminal=false"
+  print_sep "$STACKS_PREFIX"
 fi
 
 STACKS_DIR="$(resolve_stacks_storage_root)"
@@ -173,15 +173,14 @@ if [[ -d "$STACKS_DIR" ]] || [[ -d "$LEGACY_STACKS_DIR" ]]; then
     } | sort -u
   )"
   if [[ -z "$STACK_NAMES" ]]; then
-    echo "No stacks found | color=$GRAY"
+    echo "${STACKS_PREFIX}No stacks found | color=$GRAY"
   fi
   for s in $STACK_NAMES; do
     env_file="$(resolve_stack_env_file "$s")"
     [[ -f "$env_file" ]] || continue
 
-    port="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_PORT")"
-    [[ -z "$port" ]] && port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
-    [[ -n "$port" ]] || continue
+    # Ports may be ephemeral (runtime-only). Do not skip stacks if the env file does not pin a port.
+    port="$(resolve_stack_server_port "$s" "$env_file")"
 
     server_component="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_COMPONENT")"
     [[ -z "$server_component" ]] && server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
@@ -199,17 +198,17 @@ if [[ -d "$STACKS_DIR" ]] || [[ -d "$LEGACY_STACKS_DIR" ]]; then
       fi
     done
 
-    render_stack_overview_item "Stack: $s" "$LEVEL" ""
+    render_stack_overview_item "Stack: $s" "$LEVEL" "$STACKS_PREFIX"
     export STACK_LEVEL="$LEVEL"
-    render_stack_info "--" "$s" "$port" "$server_component" "$base_dir" "$cli_home_dir" "$label" "$env_file" ""
-    render_component_server "--" "$s" "$port" "$server_component" "$SERVER_STATUS" "$SERVER_PID" "$SERVER_METRICS" "" "$label"
-    render_component_daemon "--" "$DAEMON_STATUS" "$DAEMON_PID" "$DAEMON_METRICS" "$DAEMON_UPTIME" "$LAST_HEARTBEAT" "$cli_home_dir/daemon.state.json" "$s"
-    render_component_autostart "--" "$s" "$label" "$LAUNCHAGENT_STATUS" "$AUTOSTART_PID" "$AUTOSTART_METRICS" "$base_dir/logs"
-    render_component_tailscale "--" "$s" ""
-    render_components_menu "--" "stack" "$s" "$env_file"
+    render_stack_info "${STACKS_PREFIX}--" "$s" "$port" "$server_component" "$base_dir" "$cli_home_dir" "$label" "$env_file" ""
+    render_component_server "${STACKS_PREFIX}--" "$s" "$port" "$server_component" "$SERVER_STATUS" "$SERVER_PID" "$SERVER_METRICS" "" "$label"
+    render_component_daemon "${STACKS_PREFIX}--" "$DAEMON_STATUS" "$DAEMON_PID" "$DAEMON_METRICS" "$DAEMON_UPTIME" "$LAST_HEARTBEAT" "$cli_home_dir/daemon.state.json" "$s"
+    render_component_autostart "${STACKS_PREFIX}--" "$s" "$label" "$LAUNCHAGENT_STATUS" "$AUTOSTART_PID" "$AUTOSTART_METRICS" "$base_dir/logs"
+    render_component_tailscale "${STACKS_PREFIX}--" "$s" ""
+    render_components_menu "${STACKS_PREFIX}--" "stack" "$s" "$env_file"
   done
 else
-  echo "No stacks dir found at: $(shorten_path "$STACKS_DIR" 52) | color=$GRAY"
+  echo "${STACKS_PREFIX}No stacks dir found at: $(shorten_path "$STACKS_DIR" 52) | color=$GRAY"
 fi
 
 echo "---"

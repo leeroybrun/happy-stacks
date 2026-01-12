@@ -10,8 +10,8 @@ get_menu_icon_b64() {
   fi
 
   # Default: prefer a menu-bar friendly PNG icon (repo-local).
-  if [[ -z "$source" ]] && [[ -f "$HAPPY_LOCAL_DIR/extras/swiftbar/logo-white.png" ]]; then
-    source="$HAPPY_LOCAL_DIR/extras/swiftbar/logo-white.png"
+  if [[ -z "$source" ]] && [[ -f "$HAPPY_LOCAL_DIR/extras/swiftbar/icons/logo-white.png" ]]; then
+    source="$HAPPY_LOCAL_DIR/extras/swiftbar/icons/logo-white.png"
   fi
 
   # Fallback: use Happy's favicon if present.

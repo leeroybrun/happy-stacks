@@ -8,13 +8,320 @@ is_git_repo() {
   [[ -n "$dir" && -d "$dir" && ( -d "$dir/.git" || -f "$dir/.git" ) ]]
 }
 
+git_cache_dir() {
+  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$HOME/.happy-stacks}}"
+  local dir="${home}/cache/swiftbar/git"
+  mkdir -p "$dir" 2>/dev/null || true
+  echo "$dir"
+}
+
+git_cache_ttl_sec() {
+  # Default: 6 hours.
+  local v="${HAPPY_STACKS_SWIFTBAR_GIT_TTL_SEC:-${HAPPY_LOCAL_SWIFTBAR_GIT_TTL_SEC:-21600}}"
+  [[ "$v" =~ ^[0-9]+$ ]] || v=21600
+  echo "$v"
+}
+
+git_cache_refresh_on_stale() {
+  [[ "${HAPPY_STACKS_SWIFTBAR_GIT_REFRESH_ON_STALE:-${HAPPY_LOCAL_SWIFTBAR_GIT_REFRESH_ON_STALE:-0}}" == "1" ]]
+}
+
+git_cache_auto_refresh_scope() {
+  # off | main | all
+  local s="${HAPPY_STACKS_SWIFTBAR_GIT_AUTO_REFRESH_SCOPE:-${HAPPY_LOCAL_SWIFTBAR_GIT_AUTO_REFRESH_SCOPE:-main}}"
+  s="$(echo "$s" | tr '[:upper:]' '[:lower:]')"
+  case "$s" in
+    off|none|0) echo "off" ;;
+    all) echo "all" ;;
+    *) echo "main" ;;
+  esac
+}
+
+git_cache_last_refresh_file() {
+  local scope="${1:-main}" # main|all|stack:<name>
+  local dir
+  dir="$(git_cache_dir)"
+  local key="last_refresh|${scope}"
+  echo "${dir}/$(swiftbar_cache_hash12 "$key").last"
+}
+
+git_cache_background_refresh_lockdir() {
+  local scope="${1:-main}"
+  local dir
+  dir="$(git_cache_dir)"
+  local key="bg_refresh_lock|${scope}"
+  echo "${dir}/$(swiftbar_cache_hash12 "$key").lock"
+}
+
+git_cache_touch_last_refresh() {
+  local scope="${1:-main}"
+  local f
+  f="$(git_cache_last_refresh_file "$scope")"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null >"$f" || true
+  touch "$f" 2>/dev/null || true
+}
+
+git_cache_age_since_last_refresh_sec() {
+  local scope="${1:-main}"
+  local f
+  f="$(git_cache_last_refresh_file "$scope")"
+  [[ -f "$f" ]] || { echo ""; return; }
+  local mtime now
+  mtime="$(stat -f %m "$f" 2>/dev/null || echo 0)"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if [[ "$mtime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ && "$now" -ge "$mtime" ]]; then
+    echo $((now - mtime))
+  else
+    echo ""
+  fi
+}
+
+git_cache_maybe_refresh_async() {
+  # Non-blocking cache refresh.
+  # Usage: git_cache_maybe_refresh_async <scope> <refresh_cmd...>
+  local scope="$1"
+  shift
+
+  local ttl age
+  ttl="$(git_cache_ttl_sec)"
+  age="$(git_cache_age_since_last_refresh_sec "$scope")"
+
+  # If never refreshed, treat as stale and allow.
+  if [[ -n "$age" && "$age" =~ ^[0-9]+$ && "$age" -le "$ttl" ]]; then
+    return 0
+  fi
+
+  local lockdir
+  lockdir="$(git_cache_background_refresh_lockdir "$scope")"
+  if [[ -d "$lockdir" ]]; then
+    # If lock is too old, break it (e.g. crashed refresh).
+    local lock_age
+    lock_age="$(git_cache_age_sec "$lockdir" 2>/dev/null || true)"
+    if [[ -n "$lock_age" && "$lock_age" =~ ^[0-9]+$ && "$lock_age" -gt 3600 ]]; then
+      rm -rf "$lockdir" 2>/dev/null || true
+    else
+      return 0
+    fi
+  fi
+
+  mkdir "$lockdir" 2>/dev/null || return 0
+  echo "$$" >"${lockdir}/pid" 2>/dev/null || true
+  date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null >"${lockdir}/started_at" || true
+
+  # Run in the background; on success, update last-refresh marker.
+  (
+    "$@" >/dev/null 2>&1 || true
+    git_cache_touch_last_refresh "$scope"
+    rm -rf "$lockdir" >/dev/null 2>&1 || true
+  ) >/dev/null 2>&1 &
+}
+
+git_cache_mode() {
+  # cached (default) | live
+  local m="${HAPPY_STACKS_SWIFTBAR_GIT_MODE:-${HAPPY_LOCAL_SWIFTBAR_GIT_MODE:-cached}}"
+  m="$(echo "$m" | tr '[:upper:]' '[:lower:]')"
+  [[ "$m" == "live" ]] && echo "live" || echo "cached"
+}
+
+git_cache_key() {
+  # Include context+stack because stacks can point components at different worktrees/dirs.
+  local context="$1"
+  local stack="$2"
+  local component="$3"
+  local active_dir="$4"
+  echo "ctx=${context}|stack=${stack}|comp=${component}|dir=${active_dir}"
+}
+
+git_cache_paths() {
+  # Usage: git_cache_paths <key>
+  # Output: meta<TAB>info<TAB>worktrees
+  local key="$1"
+  local dir
+  dir="$(git_cache_dir)"
+  local h
+  h="$(swiftbar_hash "$key")"
+  echo -e "${dir}/${h}.meta\t${dir}/${h}.info.tsv\t${dir}/${h}.worktrees.tsv"
+}
+
+git_cache_age_sec() {
+  local meta="$1"
+  [[ -f "$meta" ]] || { echo ""; return; }
+  local mtime now
+  mtime="$(stat -f %m "$meta" 2>/dev/null || echo 0)"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if [[ "$mtime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ && "$now" -ge "$mtime" ]]; then
+    echo $((now - mtime))
+  else
+    echo ""
+  fi
+}
+
+git_cache_is_fresh() {
+  local meta="$1"
+  local ttl
+  ttl="$(git_cache_ttl_sec)"
+  local age
+  age="$(git_cache_age_sec "$meta")"
+  [[ -n "$age" && "$age" =~ ^[0-9]+$ && "$age" -le "$ttl" ]]
+}
+
+git_cache_write_meta() {
+  local meta="$1"
+  local key="$2"
+  mkdir -p "$(dirname "$meta")" 2>/dev/null || true
+  {
+    echo "key=$key"
+    echo "updated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)"
+  } >"$meta" 2>/dev/null || true
+  # touch to update mtime (age calculation uses mtime).
+  touch "$meta" 2>/dev/null || true
+}
+
+git_cache_refresh_one() {
+  # Computes and writes cached snapshot for one component context.
+  # Usage: git_cache_refresh_one <context> <stack> <component> <active_dir>
+  local context="$1"
+  local stack="$2"
+  local component="$3"
+  local active_dir="$4"
+
+  local key
+  key="$(git_cache_key "$context" "$stack" "$component" "$active_dir")"
+  local meta info wts
+  IFS=$'\t' read -r meta info wts <<<"$(git_cache_paths "$key")"
+
+  # Missing/non-repo: still write meta so we don't thrash.
+  if ! is_git_repo "$active_dir"; then
+    echo -e "missing\t${active_dir}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-" >"$info" 2>/dev/null || true
+    : >"$wts" 2>/dev/null || true
+    git_cache_write_meta "$meta" "$key"
+    return 0
+  fi
+
+  # Collect snapshot.
+  local branch head upstream dirty ab ahead behind
+  branch="$(git_head_branch "$active_dir")"
+  head="$(git_head_short "$active_dir")"
+  upstream="$(git_upstream_short "$active_dir")"
+  dirty="$(git_dirty_flag "$active_dir")"
+  ab="$(git_ahead_behind "$active_dir")"
+  ahead=""
+  behind=""
+  if [[ -n "$ab" ]]; then
+    ahead="$(echo "$ab" | cut -d'|' -f1)"
+    behind="$(echo "$ab" | cut -d'|' -f2)"
+  fi
+
+  local main_branch main_upstream main_ab main_ahead main_behind
+  main_branch="$(git_main_branch_name "$active_dir")"
+  main_upstream=""
+  main_ahead=""
+  main_behind=""
+  if [[ -n "$main_branch" ]]; then
+    main_upstream="$(git_branch_upstream_short "$active_dir" "$main_branch")"
+    main_ab="$(git_branch_ahead_behind "$active_dir" "$main_branch")"
+    if [[ -n "$main_ab" ]]; then
+      main_ahead="$(echo "$main_ab" | cut -d'|' -f1)"
+      main_behind="$(echo "$main_ab" | cut -d'|' -f2)"
+    fi
+  fi
+
+  local oref uref oab o_ahead o_behind uab u_ahead u_behind
+  oref="$(git_remote_main_ref "$active_dir" "origin")"
+  uref="$(git_remote_main_ref "$active_dir" "upstream")"
+  o_ahead=""; o_behind=""; u_ahead=""; u_behind=""
+  if [[ -n "$main_branch" && -n "$oref" ]]; then
+    oab="$(git_ahead_behind_refs "$active_dir" "$oref" "$main_branch")"
+    if [[ -n "$oab" ]]; then
+      o_ahead="$(echo "$oab" | cut -d'|' -f1)"
+      o_behind="$(echo "$oab" | cut -d'|' -f2)"
+    fi
+  fi
+  if [[ -n "$main_branch" && -n "$uref" ]]; then
+    uab="$(git_ahead_behind_refs "$active_dir" "$uref" "$main_branch")"
+    if [[ -n "$uab" ]]; then
+      u_ahead="$(echo "$uab" | cut -d'|' -f1)"
+      u_behind="$(echo "$uab" | cut -d'|' -f2)"
+    fi
+  fi
+
+  local wt_count
+  wt_count="$(git_worktree_count "$active_dir")"
+  git_worktrees_tsv "$active_dir" >"$wts" 2>/dev/null || true
+
+  # status active_dir branch head upstream dirty ahead behind main_branch main_upstream main_ahead main_behind oref o_ahead o_behind uref u_ahead u_behind wt_count
+  echo -e "ok\t${active_dir}\t${branch}\t${head}\t${upstream}\t${dirty}\t${ahead}\t${behind}\t${main_branch}\t${main_upstream}\t${main_ahead}\t${main_behind}\t${oref}\t${o_ahead}\t${o_behind}\t${uref}\t${u_ahead}\t${u_behind}\t${wt_count}" >"$info" 2>/dev/null || true
+  git_cache_write_meta "$meta" "$key"
+  return 0
+}
+
+git_cache_load_or_refresh() {
+  # Usage: git_cache_load_or_refresh <context> <stack> <component> <active_dir> <allow_refresh_on_miss:0|1>
+  # Output: meta<TAB>info<TAB>worktrees<TAB>stale(0|1)
+  local context="$1"
+  local stack="$2"
+  local component="$3"
+  local active_dir="$4"
+  local allow_refresh_on_miss="${5:-0}"
+
+  local key
+  key="$(git_cache_key "$context" "$stack" "$component" "$active_dir")"
+  local meta info wts
+  IFS=$'\t' read -r meta info wts <<<"$(git_cache_paths "$key")"
+
+  # If cache exists and is fresh, use it.
+  if [[ -f "$meta" && -f "$info" ]]; then
+    if git_cache_is_fresh "$meta"; then
+      echo -e "${meta}\t${info}\t${wts}\t0"
+      return 0
+    fi
+    # Stale: do not refresh synchronously during menu render. Background refresh is handled elsewhere.
+    echo -e "${meta}\t${info}\t${wts}\t1"
+    return 0
+  fi
+
+  # Missing: only refresh synchronously when allowed by caller.
+  if [[ "$allow_refresh_on_miss" == "1" ]]; then
+    git_cache_refresh_one "$context" "$stack" "$component" "$active_dir" >/dev/null 2>&1 || true
+    if [[ -f "$info" ]]; then
+      echo -e "${meta}\t${info}\t${wts}\t0"
+      return 0
+    fi
+  fi
+
+  # Still missing; report missing and stale=1 so callers can show "refresh" action.
+  echo -e "${meta}\t${info}\t${wts}\t1"
+  return 0
+}
+
 git_try() {
   local dir="$1"
   shift
   if ! command -v git >/dev/null 2>&1; then
     return 1
   fi
-  git -C "$dir" "$@" 2>/dev/null
+  local subcmd="${1:-}"
+
+  # Run-cache: many stacks render the same component git info; cache by repo path + args for this SwiftBar run.
+  local cache_key="git|${dir}|$*"
+  swiftbar_cache_get "$cache_key"
+  local cached_rc=$?
+  if [[ $cached_rc -ne 111 ]]; then
+    # Cache hit: swiftbar_cache_get already printed stdout. Preserve rc.
+    return $cached_rc
+  fi
+
+  local t0 t1 rc out
+  t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+  out="$(git -C "$dir" "$@" 2>/dev/null)"
+  rc=$?
+  t1="$(swiftbar_now_ms 2>/dev/null || echo 0)"
+  swiftbar_cache_set "$cache_key" "$rc" "$out"
+  # Keep label short; include subcommand for aggregation.
+  swiftbar_profile_log "time" "label=git" "subcmd=$subcmd" "ms=$((t1 - t0))" "rc=${rc}"
+  printf '%s\n' "$out"
+  return $rc
 }
 
 git_head_branch() {
