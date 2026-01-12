@@ -1,11 +1,6 @@
 # Happy Stacks
 
-
-
-Run the **Happy** stack locally (or many stacks in parallel) and access it remotely and securely (using Tailscale).
-
-`happy-stacks` is a CLI (`happys`) that orchestrate the real upstream repos
-cloned under your configured workspace (default: `~/.happy-stacks/workspace/components/*`).
+Run [**Happy**](https://happy.engineering/) locally and access it remotely and securely (using Tailscale).
 
 ## What is Happy?
 
@@ -13,7 +8,7 @@ Happy is an UI/CLI stack (server + web UI + CLI + daemon) who let you monitor an
 
 ## What is Happy Stacks?
 
-happy-stacks is a “launcher + workflow toolkit” to:
+happy-stacks allows to:
 
 - run Happy fully on your own machine (no hosted dependency)
 - safely access it remotely (HTTPS secure context) via Tailscale
@@ -309,6 +304,7 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
 - **Server flavors (server-light vs server)**: `[docs/server-flavors.md](docs/server-flavors.md)`
 - **Worktrees + forks workflow**: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`
 - **Stacks (multiple instances)**: `[docs/stacks.md](docs/stacks.md)`
+- **Paths + env precedence (home/workspace/runtime/stacks)**: `[docs/paths-and-env.md](docs/paths-and-env.md)`
 - **Menu bar (SwiftBar)**: `[docs/menubar.md](docs/menubar.md)`
 - **Mobile iOS dev**: `[docs/mobile-ios.md](docs/mobile-ios.md)`
 - **Tauri desktop app**: `[docs/tauri.md](docs/tauri.md)`

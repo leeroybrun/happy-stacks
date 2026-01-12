@@ -193,6 +193,8 @@ On startup, `happy-stacks` loads env in this order:
 
 `happys stack ...` sets `HAPPY_STACKS_ENV_FILE=~/.happy/stacks/<name>/env` (and also sets legacy `HAPPY_LOCAL_ENV_FILE`) and clears any already-exported `HAPPY_STACKS_*` / `HAPPY_LOCAL_*` variables so the stack env stays authoritative.
 
+For a full explanation of the different folders/paths (`home` vs `workspace` vs `runtime` vs stack storage) and the exact env precedence rules, see: `[docs/paths-and-env.md](docs/paths-and-env.md)`.
+
 Cloned-repo fallback (before you run `happys init`):
 
 1. `<repo>/.env` (defaults)
