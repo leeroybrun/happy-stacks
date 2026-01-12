@@ -261,33 +261,59 @@ async function main() {
       tmpDir: uiPaths.tmpDir,
     });
 
-    // Expo uses Metro (default 8081). If it's already used by another worktree/stack,
-    // Expo prompts to pick another port, which fails in non-interactive mode.
-    // Pick a free port up-front to make LLM/CI/service runs reliable.
-    const defaultMetroPort = 8081;
-    const metroPort = await pickNextFreeTcpPort(defaultMetroPort);
-    uiEnv.RCT_METRO_PORT = String(metroPort);
-    // eslint-disable-next-line no-console
-    console.log(`[local] ui: starting Expo web (metro port=${metroPort})`);
+    if (uiAlreadyRunning && !restart) {
+      const pid = Number(uiRunning.state?.pid);
+      const port = Number(uiRunning.state?.port);
+      if (stackMode && runtimeStatePath && Number.isFinite(pid) && pid > 1) {
+        await updateStackRuntimeStateFile(runtimeStatePath, {
+          processes: { expoWebPid: pid },
+          expo: { webPort: Number.isFinite(port) && port > 0 ? port : null },
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
+      if (Number.isFinite(port) && port > 0) {
+        console.log(`[local] ui already running (pid=${pid}, port=${port})`);
+        console.log(`[local] ui: open http://localhost:${port}`);
+      } else {
+        console.log('[local] ui already running (skipping Expo start)');
+      }
+    } else {
+      // Expo uses Metro (default 8081). If it's already used by another worktree/stack,
+      // Expo prompts to pick another port, which fails in non-interactive mode.
+      // Pick a free port up-front to make LLM/CI/service runs reliable.
+      const defaultMetroPort = 8081;
+      const metroPort = await pickNextFreeTcpPort(defaultMetroPort);
+      uiEnv.RCT_METRO_PORT = String(metroPort);
 
-    const uiArgs = ['start', '--web', '--port', String(metroPort)];
-    if (wantsExpoClearCache({ env: baseEnv })) {
-      uiArgs.push('--clear');
-    }
+      const uiArgs = ['start', '--web', '--port', String(metroPort)];
+      if (wantsExpoClearCache({ env: baseEnv })) {
+        uiArgs.push('--clear');
+      }
 
-    if (!uiAlreadyRunning || restart) {
       if (restart && uiRunning.state?.pid) {
         const prevPid = Number(uiRunning.state.pid);
         const stackName = (baseEnv.HAPPY_STACKS_STACK ?? baseEnv.HAPPY_LOCAL_STACK ?? '').trim() || autostart.stackName;
         const envPath = (baseEnv.HAPPY_STACKS_ENV_FILE ?? baseEnv.HAPPY_LOCAL_ENV_FILE ?? '').toString();
-        await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-web', json: false });
+        const res = await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-web', json: true });
+        if (!res.killed) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[local] ui: not stopping existing Expo pid=${prevPid} because it does not look stack-owned.\n` +
+              `[local] ui: continuing by starting a new Expo process on a free port.`
+          );
+        }
         uiAlreadyRunning = false;
       }
+
+      // eslint-disable-next-line no-console
+      console.log(`[local] ui: starting Expo web (metro port=${metroPort})`);
+
       const ui = await pmSpawnBin({ label: 'ui', dir: uiDir, bin: 'expo', args: uiArgs, env: uiEnv });
       children.push(ui);
       if (stackMode && runtimeStatePath) {
         await updateStackRuntimeStateFile(runtimeStatePath, {
           processes: { expoWebPid: ui.pid },
+          expo: { webPort: metroPort },
           updatedAt: new Date().toISOString(),
         }).catch(() => {});
       }
@@ -296,8 +322,7 @@ async function main() {
       } catch {
         // ignore
       }
-    } else {
-      console.log('[local] ui already running (skipping Expo start)');
+      console.log(`[local] ui: open http://localhost:${metroPort}`);
     }
   }
 

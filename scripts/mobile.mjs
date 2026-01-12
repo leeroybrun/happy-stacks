@@ -309,7 +309,14 @@ async function main() {
     const prevPid = Number(running.state.pid);
     const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || autostart.stackName;
     const envPath = (process.env.HAPPY_STACKS_ENV_FILE ?? process.env.HAPPY_LOCAL_ENV_FILE ?? '').toString();
-    await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-mobile', json: false });
+    const res = await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-mobile', json: true });
+    if (!res.killed) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[mobile] not stopping existing Metro pid=${prevPid} because it does not look stack-owned.\n` +
+          `[mobile] continuing by starting a new Metro on a free port.`
+      );
+    }
   }
 
   const requestedPort = Number.parseInt(String(portRaw), 10);

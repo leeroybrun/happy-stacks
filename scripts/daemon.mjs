@@ -123,6 +123,42 @@ export function isDaemonRunning(cliHomeDir) {
   return s.status === 'running' || s.status === 'starting';
 }
 
+async function readDaemonPsEnv(pid) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 1) return null;
+  if (process.platform === 'win32') return null;
+  try {
+    const out = await runCapture('ps', ['eww', '-p', String(n)]);
+    const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
+    // Usually: header + one line.
+    return lines.length >= 2 ? lines[1] : lines[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function daemonEnvMatches({ pid, cliHomeDir, internalServerUrl, publicServerUrl }) {
+  const line = await readDaemonPsEnv(pid);
+  if (!line) return null; // unknown
+  const home = String(cliHomeDir ?? '').trim();
+  const server = String(internalServerUrl ?? '').trim();
+  const web = String(publicServerUrl ?? '').trim();
+
+  // Must be for the same stack home dir.
+  if (home && !line.includes(`HAPPY_HOME_DIR=${home}`)) {
+    return false;
+  }
+  // If we have a desired server URL, require it (prevents ephemeral port mismatches).
+  if (server && !line.includes(`HAPPY_SERVER_URL=${server}`)) {
+    return false;
+  }
+  // Public URL mismatch is less fatal, but prefer it stable too when provided.
+  if (web && !line.includes(`HAPPY_WEBAPP_URL=${web}`)) {
+    return false;
+  }
+  return true;
+}
+
 function getLatestDaemonLogPath(homeDir) {
   try {
     const logsDir = join(homeDir, 'logs');
@@ -347,9 +383,25 @@ export async function startLocalDaemonWithAuth({
 
   const existing = checkDaemonState(cliHomeDir);
   if (!forceRestart && (existing.status === 'running' || existing.status === 'starting')) {
-    // eslint-disable-next-line no-console
-    console.log(`[local] daemon already running for stack home (pid=${existing.pid})`);
-    return;
+    const pid = existing.pid;
+    const matches = await daemonEnvMatches({ pid, cliHomeDir, internalServerUrl, publicServerUrl });
+    if (matches === true) {
+      // eslint-disable-next-line no-console
+      console.log(`[local] daemon already running for stack home (pid=${pid})`);
+      return;
+    }
+    if (matches === false) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[local] daemon is running but pointed at a different server URL; restarting (pid=${pid}).\n` +
+          `[local] expected: ${internalServerUrl}\n`
+      );
+    } else {
+      // unknown: best-effort keep running to avoid killing an unrelated process
+      // eslint-disable-next-line no-console
+      console.warn(`[local] daemon status is running but could not verify env; not restarting (pid=${pid})`);
+      return;
+    }
   }
 
   // Stop any existing daemon for THIS stack home dir.
