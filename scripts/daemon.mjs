@@ -147,7 +147,12 @@ function authCopyFromMainHint() {
 }
 
 async function seedCredentialsIfMissing({ cliHomeDir }) {
+  const stacksRootRaw = (process.env.HAPPY_STACKS_STORAGE_DIR ?? process.env.HAPPY_LOCAL_STORAGE_DIR ?? '').trim();
+  const stacksRoot = stacksRootRaw ? stacksRootRaw.replace(/^~(?=\/)/, homedir()) : join(homedir(), '.happy', 'stacks');
+
   const sources = [
+    // New layout: main stack credentials (preferred).
+    join(stacksRoot, 'main', 'cli'),
     // Legacy happy-local storage root (most common for existing users).
     join(homedir(), '.happy', 'local', 'cli'),
     // Older global location.
@@ -397,7 +402,14 @@ export async function startLocalDaemonWithAuth({
         throw new Error('Failed to start daemon (after credentials were created)');
       }
     } else {
-      console.error(`[local] To authenticate against this local server, run:\n${authLoginHint()}`);
+      const copyHint = authCopyFromMainHint();
+      console.error(
+        `[local] daemon failed to start (server returned an error).\n` +
+          `[local] Try:\n` +
+          `- happys doctor\n` +
+          (copyHint ? `- ${copyHint}\n` : '') +
+          `- ${authLoginHint()}`
+      );
       throw new Error('Failed to start daemon');
     }
   }

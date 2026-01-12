@@ -11,6 +11,7 @@ import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { parseDotenv } from './utils/dotenv.mjs';
+import { ensureDepsInstalled, pmExecBin } from './utils/pm.mjs';
 
 function getInternalServerUrl() {
   const portRaw = (process.env.HAPPY_LOCAL_SERVER_PORT ?? process.env.HAPPY_STACKS_SERVER_PORT ?? '').trim();
@@ -357,6 +358,7 @@ async function cmdCopyFrom({ argv, json }) {
   }
 
   const serverComponent = resolveServerComponentForCurrentStack();
+  const serverDirForPrisma = resolveServerComponentDir({ rootDir, serverComponent });
   const targetBaseDir = getDefaultAutostartPaths().baseDir;
   const targetCli = resolveCliHomeDir();
   const targetServerLightDataDir =
@@ -405,23 +407,48 @@ async function cmdCopyFrom({ argv, json }) {
   // This avoids FK failures (e.g., Prisma P2003) when the target DB is fresh but the copied token
   // refers to an account ID that does not exist there yet.
   try {
+    // Ensure prisma is runnable (best-effort). If deps aren't installed, we'll fall back to skipping DB seeding.
+    await ensureDepsInstalled(serverDirForPrisma, serverComponent).catch(() => {});
+
     const fromServerComponent = resolveServerComponentFromEnv(sourceEnv);
     const fromDatabaseUrl = resolveDatabaseUrlFromEnvOrThrow(sourceEnv, { label: `source stack "${fromStackName}"` });
     const targetEnv = process.env;
     const targetServerComponent = resolveServerComponentFromEnv(targetEnv);
     const targetDatabaseUrl = resolveDatabaseUrlFromEnvOrThrow(targetEnv, { label: `target stack "${stackName}"` });
 
-    const seeded = await seedAccountsFromSourceDbToTargetDb({
-      rootDir,
-      fromStackName,
-      fromServerComponent,
-      fromDatabaseUrl,
-      targetStackName: stackName,
-      targetServerComponent,
-      targetDatabaseUrl,
-    });
-    copied.dbAccounts = { sourceCount: seeded.sourceCount, insertedCount: seeded.insertedCount };
-    copied.db = true;
+    const runSeed = async () => {
+      const seeded = await seedAccountsFromSourceDbToTargetDb({
+        rootDir,
+        fromStackName,
+        fromServerComponent,
+        fromDatabaseUrl,
+        targetStackName: stackName,
+        targetServerComponent,
+        targetDatabaseUrl,
+      });
+      copied.dbAccounts = { sourceCount: seeded.sourceCount, insertedCount: seeded.insertedCount };
+      copied.db = true;
+      copied.dbError = null;
+    };
+
+    try {
+      await runSeed();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // If the target DB exists but hasn't had schema applied yet, Prisma will report missing tables.
+      // Fix it best-effort by applying schema, then retry seeding once.
+      const looksLikeMissingTable = msg.toLowerCase().includes('does not exist') || msg.toLowerCase().includes('no such table');
+      if (looksLikeMissingTable) {
+        if (serverComponent === 'happy-server-light') {
+          await pmExecBin({ dir: serverDirForPrisma, bin: 'prisma', args: ['db', 'push'], env: process.env }).catch(() => {});
+        } else if (serverComponent === 'happy-server') {
+          await pmExecBin({ dir: serverDirForPrisma, bin: 'prisma', args: ['migrate', 'deploy'], env: process.env }).catch(() => {});
+        }
+        await runSeed();
+      } else {
+        throw e;
+      }
+    }
   } catch (err) {
     copied.db = false;
     copied.dbAccounts = null;

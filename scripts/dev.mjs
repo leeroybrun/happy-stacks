@@ -14,6 +14,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo.mjs';
+import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack_startup.mjs';
 
 /**
  * Dev mode stack:
@@ -62,7 +63,6 @@ async function main() {
 
   const startUi = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
-  const restart = flags.has('--restart');
 
   const serverDir = getComponentDir(rootDir, serverComponentName);
   const uiDir = getComponentDir(rootDir, 'happy');
@@ -77,6 +77,7 @@ async function main() {
 
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
   const autostart = getDefaultAutostartPaths();
+  const restart = flags.has('--restart');
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
     : join(autostart.baseDir, 'cli');
@@ -159,6 +160,27 @@ async function main() {
     }
   }
   await ensureDepsInstalled(serverDir, serverComponentName);
+
+  // Reliability:
+  // - Ensure schema exists (server-light: db push; happy-server: migrate deploy if tables missing)
+  // - Auto-seed from main only when needed (non-main + non-interactive default, and only if missing creds or 0 accounts)
+  const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const acct = await getAccountCountForServerComponent({
+    serverComponentName,
+    serverDir,
+    env: serverEnv,
+    bestEffort: serverComponentName === 'happy-server',
+  });
+  await prepareDaemonAuthSeedIfNeeded({
+    rootDir,
+    env: baseEnv,
+    stackName: autostart.stackName,
+    cliHomeDir,
+    startDaemon,
+    isInteractive,
+    accountCount: typeof acct.accountCount === 'number' ? acct.accountCount : null,
+    quiet: false,
+  });
   // For happy-server: the upstream `dev` script is not stack-safe (kills fixed ports, reads .env.dev).
   // Use `start` and rely on stack-scoped env + optional migrations above.
   //

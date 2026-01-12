@@ -14,6 +14,7 @@ import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './da
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
+import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack_startup.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -161,6 +162,8 @@ async function main() {
         }
       : {}),
   };
+  let serverLightAccountCount = null;
+  let happyServerAccountCount = null;
   if (serverComponentName === 'happy-server-light') {
     const dataDir = baseEnv.HAPPY_SERVER_LIGHT_DATA_DIR?.trim()
       ? baseEnv.HAPPY_SERVER_LIGHT_DATA_DIR.trim()
@@ -173,12 +176,14 @@ async function main() {
       ? baseEnv.DATABASE_URL.trim()
       : `file:${join(dataDir, 'happy-server-light.sqlite')}`;
 
-    // Optional: update SQLite schema on interactive start only.
-    // We intentionally do NOT run this under launchd KeepAlive (no TTY) to avoid restart loops.
-    const prismaPushOnStart = (baseEnv.HAPPY_STACKS_PRISMA_PUSH ?? baseEnv.HAPPY_LOCAL_PRISMA_PUSH ?? '').trim() === '1';
-    if (prismaPushOnStart && process.stdout.isTTY) {
-      await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['db', 'push'], env: serverEnv });
-    }
+    // Reliability: ensure DB schema exists before daemon hits /v1/machines (health checks don't cover DB readiness).
+    const acct = await getAccountCountForServerComponent({
+      serverComponentName,
+      serverDir,
+      env: serverEnv,
+      bestEffort: false,
+    });
+    serverLightAccountCount = typeof acct.accountCount === 'number' ? acct.accountCount : null;
   }
   let effectiveInternalServerUrl = internalServerUrl;
   if (serverComponentName === 'happy-server') {
@@ -278,6 +283,28 @@ async function main() {
 
   // Daemon
   if (startDaemon) {
+    const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    if (serverComponentName === 'happy-server' && happyServerAccountCount == null) {
+      const acct = await getAccountCountForServerComponent({
+        serverComponentName,
+        serverDir,
+        env: serverEnv,
+        bestEffort: true,
+      });
+      happyServerAccountCount = typeof acct.accountCount === 'number' ? acct.accountCount : null;
+    }
+    const accountCount =
+      serverComponentName === 'happy-server-light' ? serverLightAccountCount : happyServerAccountCount;
+    await prepareDaemonAuthSeedIfNeeded({
+      rootDir,
+      env: baseEnv,
+      stackName: autostart.stackName,
+      cliHomeDir,
+      startDaemon,
+      isInteractive,
+      accountCount,
+      quiet: false,
+    });
     await startLocalDaemonWithAuth({
       cliBin,
       cliHomeDir,
