@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
  * - printing actionable diagnostics
  */
 
-export function cleanupStaleDaemonState(homeDir) {
+export async function cleanupStaleDaemonState(homeDir) {
   const statePath = join(homeDir, 'daemon.state.json');
   const lockPath = join(homeDir, 'daemon.state.json.lock');
 
@@ -23,14 +23,27 @@ export function cleanupStaleDaemonState(homeDir) {
     return;
   }
 
-  // If lock PID exists and is running, keep lock/state.
+  const lsofHasPath = async (pid, pathNeedle) => {
+    try {
+      const out = await runCapture('sh', ['-lc', `command -v lsof >/dev/null 2>&1 && lsof -nP -p ${pid} 2>/dev/null || true`]);
+      return out.includes(pathNeedle);
+    } catch {
+      return false;
+    }
+  };
+
+  // If lock PID exists and is running, keep lock/state ONLY if it still owns the lock file path.
   try {
     const raw = readFileSync(lockPath, 'utf-8').trim();
     const pid = Number(raw);
     if (Number.isFinite(pid) && pid > 0) {
       try {
         process.kill(pid, 0);
-        return;
+        // If PID was recycled, refuse to trust it unless we can prove it's associated with this home dir.
+        // This prevents cross-stack daemon kills due to stale lock files.
+        if (await lsofHasPath(pid, lockPath)) {
+          return;
+        }
       } catch {
         // stale pid
       }
@@ -47,7 +60,10 @@ export function cleanupStaleDaemonState(homeDir) {
       if (pid) {
         try {
           process.kill(pid, 0);
-          return;
+          // Only keep if we can prove it still uses this home dir (via state path).
+          if (await lsofHasPath(pid, statePath)) {
+            return;
+          }
         } catch {
           // stale pid
         }
@@ -232,6 +248,22 @@ async function killDaemonFromLockFile({ cliHomeDir }) {
     return false;
   }
 
+  // Hard safety: only kill if we can prove the PID is associated with this stack home dir.
+  // We do this by checking that `lsof -p <pid>` includes the lock path (or state file path).
+  let ownsLock = false;
+  try {
+    const out = await runCapture('sh', ['-lc', `command -v lsof >/dev/null 2>&1 && lsof -nP -p ${pid} 2>/dev/null || true`]);
+    ownsLock = out.includes(lockPath) || out.includes(join(cliHomeDir, 'daemon.state.json')) || out.includes(join(cliHomeDir, 'logs'));
+  } catch {
+    ownsLock = false;
+  }
+  if (!ownsLock) {
+    console.warn(
+      `[local] refusing to kill pid ${pid} from lock file (could be unrelated; lsof did not show ownership of ${cliHomeDir})`
+    );
+    return false;
+  }
+
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
@@ -343,14 +375,14 @@ export async function startLocalDaemonWithAuth({
     }
     // If state is missing and stop couldn't find it, force-stop the lock PID (otherwise repeated restarts accumulate daemons).
     await killDaemonFromLockFile({ cliHomeDir: join(homedir(), '.happy') });
-    cleanupStaleDaemonState(join(homedir(), '.happy'));
+    await cleanupStaleDaemonState(join(homedir(), '.happy'));
   }
 
   // If state is missing and stop couldn't find it, force-stop the lock PID (otherwise repeated restarts accumulate daemons).
   await killDaemonFromLockFile({ cliHomeDir });
 
   // Clean up stale lock/state files that can block daemon start.
-  cleanupStaleDaemonState(cliHomeDir);
+  await cleanupStaleDaemonState(cliHomeDir);
 
   const credentialsPath = join(cliHomeDir, 'access.key');
 

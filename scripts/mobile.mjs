@@ -1,11 +1,12 @@
 import './utils/env.mjs';
 import { parseArgs } from './utils/args.mjs';
-import { killPortListeners, pickNextFreeTcpPort } from './utils/ports.mjs';
+import { pickNextFreeTcpPort } from './utils/ports.mjs';
 import { run, runCapture, spawnProc } from './utils/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo.mjs';
+import { killProcessGroupOwnedByStack } from './utils/ownership.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -306,11 +307,9 @@ async function main() {
   }
   if (restart && running.state?.pid) {
     const prevPid = Number(running.state.pid);
-    const prevPort = Number(running.state.port);
-    if (Number.isFinite(prevPort) && prevPort > 0) {
-      await killPortListeners(prevPort, { label: 'expo' });
-    }
-    await killPid(prevPid);
+    const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || autostart.stackName;
+    const envPath = (process.env.HAPPY_STACKS_ENV_FILE ?? process.env.HAPPY_LOCAL_ENV_FILE ?? '').toString();
+    await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-mobile', json: false });
   }
 
   const requestedPort = Number.parseInt(String(portRaw), 10);

@@ -15,6 +15,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack_startup.mjs';
+import { updateStackRuntimeStateFile } from './utils/stack_runtime_state.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -121,6 +122,9 @@ async function main() {
   const children = [];
   let shuttingDown = false;
   const baseEnv = { ...process.env };
+  const stackMode = Boolean((baseEnv.HAPPY_STACKS_STACK ?? '').trim() || (baseEnv.HAPPY_LOCAL_STACK ?? '').trim());
+  const runtimeStatePath =
+    (baseEnv.HAPPY_STACKS_RUNTIME_STATE_PATH ?? baseEnv.HAPPY_LOCAL_RUNTIME_STATE_PATH ?? '').toString().trim() || '';
 
   // Ensure server deps exist before any Prisma/docker work.
   await ensureDepsInstalled(serverDir, serverComponentName);
@@ -141,9 +145,24 @@ async function main() {
     return;
   }
 
+  // Stack runtime state (stack-scoped commands only): record the runner PID + chosen ports so stop/restart never kills other stacks.
+  if (stackMode && runtimeStatePath) {
+    await updateStackRuntimeStateFile(runtimeStatePath, {
+      version: 1,
+      stackName: autostart.stackName,
+      script: 'run.mjs',
+      ephemeral: (baseEnv.HAPPY_STACKS_EPHEMERAL_PORTS ?? baseEnv.HAPPY_LOCAL_EPHEMERAL_PORTS ?? '').toString().trim() === '1',
+      ownerPid: process.pid,
+      ports: { server: serverPort },
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+
   // Server
   // If a previous run left a server behind, free the port first (prevents false "ready" checks).
-  if (!serverAlreadyRunning || restart) {
+  // NOTE: In stack mode we avoid killing arbitrary port listeners (fail-closed instead).
+  if ((!serverAlreadyRunning || restart) && !stackMode) {
     await killPortListeners(serverPort, { label: 'server' });
   }
 
@@ -203,16 +222,33 @@ async function main() {
       const backendPortRaw = (baseEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? baseEnv.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT ?? '').trim();
       const backendPort = backendPortRaw ? Number(backendPortRaw) : serverPort + 10;
       const backendUrl = `http://127.0.0.1:${backendPort}`;
-      await killPortListeners(backendPort, { label: 'happy-server-backend' });
+      if (!stackMode) {
+        await killPortListeners(backendPort, { label: 'happy-server-backend' });
+      }
 
       const backendEnv = { ...serverEnv, ...infra.env, PORT: String(backendPort) };
       const autoMigrate = (baseEnv.HAPPY_STACKS_PRISMA_MIGRATE ?? baseEnv.HAPPY_LOCAL_PRISMA_MIGRATE ?? '1') !== '0';
       if (autoMigrate) {
         await applyHappyServerMigrations({ serverDir, env: backendEnv });
       }
+      // Account probe should use the *actual* DATABASE_URL/infra env (ephemeral stacks do not persist it in env files).
+      const acct = await getAccountCountForServerComponent({
+        serverComponentName,
+        serverDir,
+        env: backendEnv,
+        bestEffort: true,
+      });
+      happyServerAccountCount = typeof acct.accountCount === 'number' ? acct.accountCount : null;
 
       const backend = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'start', env: backendEnv });
       children.push(backend);
+      if (stackMode && runtimeStatePath) {
+        await updateStackRuntimeStateFile(runtimeStatePath, {
+          ports: { server: serverPort, backend: backendPort },
+          processes: { happyServerBackendPid: backend.pid },
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
       await waitForServerReady(backendUrl);
 
       const gatewayArgs = [
@@ -230,6 +266,12 @@ async function main() {
 
       const gateway = spawnProc('ui', process.execPath, gatewayArgs, { ...backendEnv, PORT: String(serverPort) }, { cwd: rootDir });
       children.push(gateway);
+      if (stackMode && runtimeStatePath) {
+        await updateStackRuntimeStateFile(runtimeStatePath, {
+          processes: { uiGatewayPid: gateway.pid },
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
       await waitForServerReady(internalServerUrl);
       effectiveInternalServerUrl = internalServerUrl;
 
@@ -242,6 +284,12 @@ async function main() {
     if (!serverAlreadyRunning || restart) {
       const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'start', env: serverEnv });
       children.push(server);
+      if (stackMode && runtimeStatePath) {
+        await updateStackRuntimeStateFile(runtimeStatePath, {
+          processes: { serverPid: server.pid },
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
       await waitForServerReady(internalServerUrl);
     } else {
       console.log(`[local] server already running at ${internalServerUrl}`);

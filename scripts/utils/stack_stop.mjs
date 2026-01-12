@@ -3,10 +3,11 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { getComponentDir } from './paths.mjs';
-import { killPortListeners } from './ports.mjs';
-import { isPidAlive, killPid, readPidState } from './expo.mjs';
+import { isPidAlive, readPidState } from './expo.mjs';
 import { stopLocalDaemon } from '../daemon.mjs';
 import { stopHappyServerManagedInfra } from './happy_server_infra.mjs';
+import { deleteStackRuntimeStateFile, getStackRuntimeStatePath, readStackRuntimeStateFile } from './stack_runtime_state.mjs';
+import { killPidOwnedByStack, killProcessGroupOwnedByStack, listPidsWithEnvNeedle } from './ownership.mjs';
 
 function parseIntOrNull(raw) {
   const s = String(raw ?? '').trim();
@@ -89,7 +90,7 @@ async function stopDaemonTrackedSessions({ cliHomeDir, json }) {
   return { ok: true, skipped: false, stoppedSessionIds };
 }
 
-async function stopExpoStateDir({ stackName, baseDir, kind, stateFileName, json }) {
+async function stopExpoStateDir({ stackName, baseDir, kind, stateFileName, envPath, json }) {
   const root = join(baseDir, kind);
   let entries = [];
   try {
@@ -106,31 +107,28 @@ async function stopExpoStateDir({ stackName, baseDir, kind, stateFileName, json 
     const state = await readPidState(statePath);
     if (!state) continue;
     const pid = Number(state.pid);
-    const port = parseIntOrNull(state.port);
 
     if (!Number.isFinite(pid) || pid <= 1) continue;
     if (!isPidAlive(pid)) continue;
 
     if (!json) {
       // eslint-disable-next-line no-console
-      console.log(`[stack] stopping ${kind} (pid=${pid}${port ? ` port=${port}` : ''}) for ${stackName}`);
-    }
-    if (port) {
-      // eslint-disable-next-line no-await-in-loop
-      await killPortListeners(port, { label: `${stackName} ${kind}` });
+      console.log(`[stack] stopping ${kind} (pid=${pid}) for ${stackName}`);
     }
     // eslint-disable-next-line no-await-in-loop
-    await killPid(pid);
-    killed.push({ pid, port, statePath });
+    await killProcessGroupOwnedByStack(pid, { stackName, envPath, label: kind, json });
+    killed.push({ pid, port: null, statePath });
   }
   return killed;
 }
 
-export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json, noDocker = false, aggressive = false }) {
+export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json, noDocker = false, aggressive = false, sweepOwned = false }) {
   const actions = {
     stackName,
     baseDir,
     aggressive,
+    sweepOwned,
+    runner: null,
     daemonSessionsStopped: null,
     daemonStopped: false,
     killedPorts: [],
@@ -145,6 +143,30 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
   const backendPort = parseIntOrNull(env.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? env.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT);
   const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? join(baseDir, 'cli')).toString();
   const cliBin = join(getComponentDir(rootDir, 'happy-cli'), 'bin', 'happy.mjs');
+  const envPath = (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString();
+
+  // Preferred: stop stack-started processes (by PID) recorded in stack.runtime.json.
+  // This is safer than killing whatever happens to listen on a port, and doesn't rely on the runner's shutdown handler.
+  const runtimeStatePath = getStackRuntimeStatePath(stackName);
+  const runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+  const runnerPid = Number(runtimeState?.ownerPid);
+  const processes = runtimeState?.processes && typeof runtimeState.processes === 'object' ? runtimeState.processes : {};
+
+  // Kill known child processes first (process groups), then stop daemon, then stop runner.
+  const killedProcessPids = [];
+  for (const [key, rawPid] of Object.entries(processes)) {
+    const pid = Number(rawPid);
+    if (!Number.isFinite(pid) || pid <= 1) continue;
+    if (!isPidAlive(pid)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const res = await killProcessGroupOwnedByStack(pid, { stackName, envPath, cliHomeDir, label: key, json });
+    if (res.killed) {
+      killedProcessPids.push({ key, pid, reason: res.reason, pgid: res.pgid ?? null });
+    }
+  }
+  actions.runner = { stopped: false, pid: Number.isFinite(runnerPid) ? runnerPid : null, reason: runtimeState ? 'not_running_or_not_owned' : 'missing_state' };
+  actions.killedPorts = actions.killedPorts ?? [];
+  actions.processes = { killed: killedProcessPids };
 
   if (aggressive) {
     try {
@@ -162,33 +184,36 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
     actions.errors.push({ step: 'daemon', error: e instanceof Error ? e.message : String(e) });
   }
 
+  // Now stop the runner PID last (if it exists). This should clean up any remaining state files it owns.
+  if (Number.isFinite(runnerPid) && runnerPid > 1 && isPidAlive(runnerPid)) {
+    if (!json) {
+      // eslint-disable-next-line no-console
+      console.log(`[stack] stopping runner (pid=${runnerPid}) for ${stackName}`);
+    }
+    const res = await killPidOwnedByStack(runnerPid, { stackName, envPath, cliHomeDir, label: 'runner', json });
+    actions.runner = { stopped: res.killed, pid: runnerPid, reason: res.reason };
+  }
+
+  // Only delete runtime state if the runner is confirmed stopped (or not running).
+  if (!isPidAlive(runnerPid)) {
+    await deleteStackRuntimeStateFile(runtimeStatePath);
+  }
+
   try {
-    actions.uiDev = await stopExpoStateDir({ stackName, baseDir, kind: 'ui-dev', stateFileName: 'ui.state.json', json });
+    actions.uiDev = await stopExpoStateDir({ stackName, baseDir, kind: 'ui-dev', stateFileName: 'ui.state.json', envPath, json });
   } catch (e) {
     actions.errors.push({ step: 'expo-ui', error: e instanceof Error ? e.message : String(e) });
   }
   try {
-    actions.mobile = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile', stateFileName: 'expo.state.json', json });
+    actions.mobile = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile', stateFileName: 'expo.state.json', envPath, json });
   } catch (e) {
     actions.errors.push({ step: 'expo-mobile', error: e instanceof Error ? e.message : String(e) });
   }
 
-  if (backendPort) {
-    try {
-      const pids = await killPortListeners(backendPort, { label: `${stackName} happy-server-backend` });
-      actions.killedPorts.push({ port: backendPort, pids, label: 'happy-server-backend' });
-    } catch (e) {
-      actions.errors.push({ step: 'backend-port', error: e instanceof Error ? e.message : String(e) });
-    }
-  }
-  if (port) {
-    try {
-      const pids = await killPortListeners(port, { label: `${stackName} server` });
-      actions.killedPorts.push({ port, pids, label: 'server' });
-    } catch (e) {
-      actions.errors.push({ step: 'server-port', error: e instanceof Error ? e.message : String(e) });
-    }
-  }
+  // IMPORTANT:
+  // Never kill "whatever is listening on a port" in stack mode.
+  void backendPort;
+  void port;
 
   const managed = (env.HAPPY_STACKS_MANAGED_INFRA ?? env.HAPPY_LOCAL_MANAGED_INFRA ?? '1').toString().trim() !== '0';
   if (!noDocker && serverComponent === 'happy-server' && managed) {
@@ -199,6 +224,30 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
     }
   } else {
     actions.infra = { ok: true, skipped: true, reason: noDocker ? 'no_docker' : 'not_managed_or_not_happy_server' };
+  }
+
+  // Last resort: sweep any remaining processes that still carry this stack env file in their environment.
+  // This is still safe because envPath is unique per stack; we also exclude our own PID.
+  if (sweepOwned && envPath) {
+    const needle1 = `HAPPY_STACKS_ENV_FILE=${envPath}`;
+    const needle2 = `HAPPY_LOCAL_ENV_FILE=${envPath}`;
+    const pids = [
+      ...(await listPidsWithEnvNeedle(needle1)),
+      ...(await listPidsWithEnvNeedle(needle2)),
+    ]
+      .filter((pid) => pid !== process.pid)
+      .filter((pid) => Number.isFinite(pid) && pid > 1);
+
+    const swept = [];
+    for (const pid of Array.from(new Set(pids))) {
+      if (!isPidAlive(pid)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const res = await killProcessGroupOwnedByStack(pid, { stackName, envPath, cliHomeDir, label: 'sweep', json });
+      if (res.killed) {
+        swept.push({ pid, reason: res.reason, pgid: res.pgid ?? null });
+      }
+    }
+    actions.sweep = { pids: swept };
   }
 
   return actions;

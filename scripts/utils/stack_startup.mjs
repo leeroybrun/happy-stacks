@@ -10,18 +10,39 @@ function looksLikeMissingTableError(msg) {
 
 async function probeAccountCount({ serverDir, env }) {
   const probe = `
-import { PrismaClient } from '@prisma/client';
-const db = new PrismaClient();
-try {
-  const accountCount = await db.account.count();
-  console.log(JSON.stringify({ accountCount }));
-} finally {
-  await db.$disconnect();
-}
-`.trim();
+	let db;
+	try {
+	  const { PrismaClient } = await import('@prisma/client');
+	  db = new PrismaClient();
+	  const accountCount = await db.account.count();
+	  console.log(JSON.stringify({ accountCount }));
+	} catch (e) {
+	  console.log(
+	    JSON.stringify({
+	      error: {
+	        name: e?.name,
+	        message: e?.message,
+	        code: e?.code,
+	      },
+	    })
+	  );
+	} finally {
+	  try {
+	    await db?.$disconnect();
+	  } catch {
+	    // ignore
+	  }
+	}
+	`.trim();
 
   const out = await runCapture(process.execPath, ['--input-type=module', '-e', probe], { cwd: serverDir, env, timeoutMs: 15_000 });
   const parsed = out.trim() ? JSON.parse(out.trim()) : {};
+  if (parsed?.error) {
+    const e = new Error(parsed.error.message || 'unknown prisma probe error');
+    if (typeof parsed.error.name === 'string' && parsed.error.name) e.name = parsed.error.name;
+    if (typeof parsed.error.code === 'string' && parsed.error.code) e.code = parsed.error.code;
+    throw e;
+  }
   return Number(parsed.accountCount ?? 0);
 }
 
@@ -136,4 +157,3 @@ export async function prepareDaemonAuthSeedIfNeeded({
     quiet,
   });
 }
-

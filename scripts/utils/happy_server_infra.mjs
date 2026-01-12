@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { parseDotenv } from './dotenv.mjs';
 import { ensureEnvFileUpdated } from './env_file.mjs';
+import { pickNextFreeTcpPort } from './ports.mjs';
 import { pmExecBin } from './pm.mjs';
 import { run, runCapture } from './proc.mjs';
 
@@ -35,29 +35,6 @@ function sanitizeDnsLabel(raw, { fallback = 'happy' } = {}) {
 function coercePort(v) {
   const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
   return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function isPortFree(port) {
-  return await new Promise((resolvePromise) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on('error', () => resolvePromise(false));
-    srv.listen({ port, host: '127.0.0.1' }, () => {
-      srv.close(() => resolvePromise(true));
-    });
-  });
-}
-
-async function pickNextFreePort(startPort, { reservedPorts = new Set() } = {}) {
-  let port = startPort;
-  for (let i = 0; i < 200; i++) {
-    // eslint-disable-next-line no-await-in-loop
-    if (!reservedPorts.has(port) && (await isPortFree(port))) {
-      return port;
-    }
-    port += 1;
-  }
-  throw new Error(`[infra] unable to find a free port starting at ${startPort}`);
 }
 
 async function readEnvObject(envPath) {
@@ -315,17 +292,21 @@ export async function ensureHappyServerManagedInfra({
   }
   if (Number.isFinite(serverPort) && serverPort > 0) reservedPorts.add(serverPort);
 
-  const pgPort = coercePort(existingEnv.HAPPY_STACKS_PG_PORT ?? env.HAPPY_STACKS_PG_PORT) ?? (await pickNextFreePort(serverPort + 1000, { reservedPorts }));
+  const pgPort =
+    coercePort(existingEnv.HAPPY_STACKS_PG_PORT ?? env.HAPPY_STACKS_PG_PORT) ??
+    (await pickNextFreeTcpPort(serverPort + 1000, { reservedPorts }));
   reservedPorts.add(pgPort);
   const redisPort =
-    coercePort(existingEnv.HAPPY_STACKS_REDIS_PORT ?? env.HAPPY_STACKS_REDIS_PORT) ?? (await pickNextFreePort(pgPort + 1, { reservedPorts }));
+    coercePort(existingEnv.HAPPY_STACKS_REDIS_PORT ?? env.HAPPY_STACKS_REDIS_PORT) ??
+    (await pickNextFreeTcpPort(pgPort + 1, { reservedPorts }));
   reservedPorts.add(redisPort);
   const minioPort =
-    coercePort(existingEnv.HAPPY_STACKS_MINIO_PORT ?? env.HAPPY_STACKS_MINIO_PORT) ?? (await pickNextFreePort(redisPort + 1, { reservedPorts }));
+    coercePort(existingEnv.HAPPY_STACKS_MINIO_PORT ?? env.HAPPY_STACKS_MINIO_PORT) ??
+    (await pickNextFreeTcpPort(redisPort + 1, { reservedPorts }));
   reservedPorts.add(minioPort);
   const minioConsolePort =
     coercePort(existingEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT ?? env.HAPPY_STACKS_MINIO_CONSOLE_PORT) ??
-    (await pickNextFreePort(minioPort + 1, { reservedPorts }));
+    (await pickNextFreeTcpPort(minioPort + 1, { reservedPorts }));
   reservedPorts.add(minioConsolePort);
 
   const pgUser = (existingEnv.HAPPY_STACKS_PG_USER ?? env.HAPPY_STACKS_PG_USER ?? 'handy').trim() || 'handy';
@@ -355,27 +336,34 @@ export async function ensureHappyServerManagedInfra({
   const s3PublicUrl = `${pub}/files`;
 
   if (envPath) {
+    const ephemeralPorts = (env.HAPPY_STACKS_EPHEMERAL_PORTS ?? env.HAPPY_LOCAL_EPHEMERAL_PORTS ?? '').toString().trim() === '1';
     await ensureEnvFileUpdated({
       envPath,
       updates: [
-        { key: 'HAPPY_STACKS_PG_PORT', value: String(pgPort) },
-        { key: 'HAPPY_STACKS_REDIS_PORT', value: String(redisPort) },
-        { key: 'HAPPY_STACKS_MINIO_PORT', value: String(minioPort) },
-        { key: 'HAPPY_STACKS_MINIO_CONSOLE_PORT', value: String(minioConsolePort) },
+        // Stable credentials/files: persist these so restarts keep the same DB/user and S3 creds.
         { key: 'HAPPY_STACKS_PG_USER', value: pgUser },
         { key: 'HAPPY_STACKS_PG_PASSWORD', value: pgPassword },
         { key: 'HAPPY_STACKS_PG_DATABASE', value: pgDb },
         { key: 'HAPPY_STACKS_HANDY_MASTER_SECRET_FILE', value: secretFile },
-        // Vars consumed by happy-server:
-        { key: 'DATABASE_URL', value: databaseUrl },
-        { key: 'REDIS_URL', value: redisUrl },
-        { key: 'S3_HOST', value: s3Host },
-        { key: 'S3_PORT', value: String(minioPort) },
-        { key: 'S3_USE_SSL', value: s3UseSsl },
         { key: 'S3_ACCESS_KEY', value: s3AccessKey },
         { key: 'S3_SECRET_KEY', value: s3SecretKey },
         { key: 'S3_BUCKET', value: s3Bucket },
-        { key: 'S3_PUBLIC_URL', value: s3PublicUrl },
+        // Ports + derived URLs: persist only when ports are explicitly pinned (non-ephemeral mode).
+        ...(ephemeralPorts
+          ? []
+          : [
+              { key: 'HAPPY_STACKS_PG_PORT', value: String(pgPort) },
+              { key: 'HAPPY_STACKS_REDIS_PORT', value: String(redisPort) },
+              { key: 'HAPPY_STACKS_MINIO_PORT', value: String(minioPort) },
+              { key: 'HAPPY_STACKS_MINIO_CONSOLE_PORT', value: String(minioConsolePort) },
+              // Vars consumed by happy-server:
+              { key: 'DATABASE_URL', value: databaseUrl },
+              { key: 'REDIS_URL', value: redisUrl },
+              { key: 'S3_HOST', value: s3Host },
+              { key: 'S3_PORT', value: String(minioPort) },
+              { key: 'S3_USE_SSL', value: s3UseSsl },
+              { key: 'S3_PUBLIC_URL', value: s3PublicUrl },
+            ]),
       ],
     });
   }

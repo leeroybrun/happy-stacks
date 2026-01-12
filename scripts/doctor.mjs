@@ -117,6 +117,7 @@ async function main() {
 
   const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? Number(process.env.HAPPY_LOCAL_SERVER_PORT) : 3005;
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
+  const stackMode = Boolean((process.env.HAPPY_STACKS_STACK ?? '').trim() || (process.env.HAPPY_LOCAL_STACK ?? '').trim());
 
   const defaultPublicUrl = `http://localhost:${serverPort}`;
   const envPublicUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim() ? process.env.HAPPY_LOCAL_SERVER_URL.trim() : '';
@@ -206,8 +207,15 @@ async function main() {
     report.checks.serverHealth = { ok: false };
     if (!json) console.log(`❌ server health: unreachable (${internalServerUrl})`);
     if (fix) {
-      if (!json) console.log(`↪ attempting fix: freeing tcp:${serverPort}`);
-      await killPortListeners(serverPort, { label: 'doctor' });
+      if (stackMode) {
+        if (!json) {
+          console.log(`↪ fix skipped: refusing to kill unknown port listeners in stack mode.`);
+          console.log(`↪ Fix: use stack-safe controls instead: happys stack stop ${process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? 'main'} --aggressive`);
+        }
+      } else {
+        if (!json) console.log(`↪ attempting fix: freeing tcp:${serverPort}`);
+        await killPortListeners(serverPort, { label: 'doctor' });
+      }
     }
   }
 

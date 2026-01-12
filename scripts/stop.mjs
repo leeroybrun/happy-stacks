@@ -10,7 +10,7 @@ import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 function usage() {
   return [
     '[stop] usage:',
-    '  happys stop [--except-stacks=main,exp1] [--yes] [--aggressive] [--no-docker] [--no-service] [--json]',
+    '  happys stop [--except-stacks=main,exp1] [--yes] [--aggressive] [--sweep-owned] [--no-docker] [--no-service] [--json]',
     '',
     'Stops stacks and related local processes (server, daemon, Expo, managed infra) using stack-scoped commands.',
     '',
@@ -18,6 +18,7 @@ function usage() {
     '  happys stop --except-stacks=main --yes',
     '  happys stop --yes --no-docker',
     '  happys stop --except-stacks=main --yes --aggressive',
+    '  happys stop --except-stacks=main --yes --aggressive --sweep-owned',
   ].join('\n');
 }
 
@@ -59,6 +60,7 @@ async function main() {
   const exceptStacks = new Set(parseCsv(kv.get('--except-stacks')));
   const yes = flags.has('--yes');
   const aggressive = flags.has('--aggressive');
+  const sweepOwned = flags.has('--sweep-owned');
   const noDocker = flags.has('--no-docker');
   const noService = flags.has('--no-service');
 
@@ -108,6 +110,7 @@ async function main() {
         'stop',
         stackName,
         ...(aggressive ? ['--aggressive'] : []),
+        ...(sweepOwned ? ['--sweep-owned'] : []),
         ...(noDocker ? ['--no-docker'] : []),
       ];
       if (json) {

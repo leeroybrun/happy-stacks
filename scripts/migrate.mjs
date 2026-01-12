@@ -11,6 +11,7 @@ import { resolveStackEnvPath } from './utils/paths.mjs';
 import { ensureDepsInstalled } from './utils/pm.mjs';
 import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './utils/happy_server_infra.mjs';
 import { runCapture } from './utils/proc.mjs';
+import { pickNextFreeTcpPort } from './utils/ports.mjs';
 
 function usage() {
   return [
@@ -97,9 +98,15 @@ async function migrateLightToServer({ rootDir, fromStack, toStack, includeFiles,
   }
 
   const toPortRaw = getEnvValue(toEnv, 'HAPPY_STACKS_SERVER_PORT') || getEnvValue(toEnv, 'HAPPY_LOCAL_SERVER_PORT');
-  const toPort = toPortRaw ? Number(toPortRaw) : NaN;
+  let toPort = toPortRaw ? Number(toPortRaw) : NaN;
+  const toEphemeral = !toPortRaw;
   if (!Number.isFinite(toPort) || toPort <= 0) {
-    throw new Error(`[migrate] to-stack is missing a valid server port (HAPPY_STACKS_SERVER_PORT)`);
+    // Ephemeral-port stacks don't pin ports in env. Pick a free port for this one-off migration run.
+    toPort = await pickNextFreeTcpPort(3005);
+    if (!json) {
+      // eslint-disable-next-line no-console
+      console.log(`[migrate] to-stack has no pinned port; using ephemeral port ${toPort} for this migration run`);
+    }
   }
 
   // Ensure target secret is the same as source so auth tokens remain valid after migration.

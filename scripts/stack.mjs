@@ -1,7 +1,7 @@
 import './utils/env.mjs';
+import { spawn } from 'node:child_process';
 import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import net from 'node:net';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -9,12 +9,21 @@ import { homedir } from 'node:os';
 import { parseArgs } from './utils/args.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { getComponentDir, getComponentsDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
+import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
 import { createWorktree, resolveComponentSpecToDir } from './utils/worktrees.mjs';
 import { isTty, prompt, promptWorktreeSource, withRl } from './utils/wizard.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { ensureEnvFileUpdated } from './utils/env_file.mjs';
+import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env_file.mjs';
 import { stopStackWithEnv } from './utils/stack_stop.mjs';
+import {
+  deleteStackRuntimeStateFile,
+  getStackRuntimeStatePath,
+  isPidAlive,
+  readStackRuntimeStateFile,
+} from './utils/stack_runtime_state.mjs';
+import { killPid } from './utils/expo.mjs';
+import { killPidOwnedByStack } from './utils/ownership.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -40,26 +49,16 @@ function getDefaultPortStart() {
 }
 
 async function isPortFree(port) {
-  return await new Promise((resolvePromise) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on('error', () => resolvePromise(false));
-    srv.listen({ port, host: '127.0.0.1' }, () => {
-      srv.close(() => resolvePromise(true));
-    });
-  });
+  return await isTcpPortFree(port, { host: '127.0.0.1' });
 }
 
 async function pickNextFreePort(startPort, { reservedPorts = new Set() } = {}) {
-  let port = startPort;
-  for (let i = 0; i < 200; i++) {
-    // eslint-disable-next-line no-await-in-loop
-    if (!reservedPorts.has(port) && (await isPortFree(port))) {
-      return port;
-    }
-    port += 1;
+  try {
+    return await pickNextFreeTcpPort(startPort, { reservedPorts, host: '127.0.0.1' });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(msg.replace(/^\[local\]/, '[stack]'));
   }
-  throw new Error(`[stack] unable to find a free port starting at ${startPort}`);
 }
 
 async function readPortFromEnvFile(envPath) {
@@ -355,17 +354,77 @@ async function withStackEnv({ stackName, fn, extraEnv = {} }) {
       delete cleaned[k];
     }
   }
-  return await fn({
-    env: {
-      ...cleaned,
-      HAPPY_STACKS_STACK: stackName,
-      HAPPY_STACKS_ENV_FILE: envPath,
-      HAPPY_LOCAL_STACK: stackName,
-      HAPPY_LOCAL_ENV_FILE: envPath,
-      ...extraEnv,
-    },
-    envPath,
-  });
+  const raw = await readExistingEnv(envPath);
+  const stackEnv = parseEnvToObject(raw);
+
+  // Mirror HAPPY_STACKS_* and HAPPY_LOCAL_* prefixes so callers can use either.
+  // (Matches scripts/utils/env.mjs behavior.)
+  const applyPrefixMapping = (obj) => {
+    const keys = new Set(Object.keys(obj));
+    const suffixes = new Set();
+    for (const k of keys) {
+      if (k.startsWith('HAPPY_STACKS_')) suffixes.add(k.slice('HAPPY_STACKS_'.length));
+      if (k.startsWith('HAPPY_LOCAL_')) suffixes.add(k.slice('HAPPY_LOCAL_'.length));
+    }
+    for (const suffix of suffixes) {
+      const stacksKey = `HAPPY_STACKS_${suffix}`;
+      const localKey = `HAPPY_LOCAL_${suffix}`;
+      const stacksVal = (obj[stacksKey] ?? '').toString().trim();
+      const localVal = (obj[localKey] ?? '').toString().trim();
+      if (stacksVal) {
+        obj[stacksKey] = stacksVal;
+        obj[localKey] = stacksVal;
+      } else if (localVal) {
+        obj[localKey] = localVal;
+        obj[stacksKey] = localVal;
+      }
+    }
+  };
+
+  const runtimeStatePath = getStackRuntimeStatePath(stackName);
+  const runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+
+  const env = {
+    ...cleaned,
+    HAPPY_STACKS_STACK: stackName,
+    HAPPY_STACKS_ENV_FILE: envPath,
+    HAPPY_LOCAL_STACK: stackName,
+    HAPPY_LOCAL_ENV_FILE: envPath,
+    // Expose runtime state path so scripts can find it if needed.
+    HAPPY_STACKS_RUNTIME_STATE_PATH: runtimeStatePath,
+    HAPPY_LOCAL_RUNTIME_STATE_PATH: runtimeStatePath,
+    // Stack env is authoritative by default.
+    ...stackEnv,
+    // One-shot overrides (e.g. --happy=...) win over stack env file.
+    ...extraEnv,
+  };
+  applyPrefixMapping(env);
+
+  // Runtime-only port overlay (ephemeral stacks): only trust it when the owner pid is still alive.
+  const ownerPid = Number(runtimeState?.ownerPid);
+  if (isPidAlive(ownerPid)) {
+    const ports = runtimeState?.ports && typeof runtimeState.ports === 'object' ? runtimeState.ports : {};
+    const applyPort = (suffix, value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) return;
+      env[`HAPPY_STACKS_${suffix}`] = String(n);
+      env[`HAPPY_LOCAL_${suffix}`] = String(n);
+    };
+    applyPort('SERVER_PORT', ports.server);
+    applyPort('HAPPY_SERVER_BACKEND_PORT', ports.backend);
+    applyPort('PG_PORT', ports.pg);
+    applyPort('REDIS_PORT', ports.redis);
+    applyPort('MINIO_PORT', ports.minio);
+    applyPort('MINIO_CONSOLE_PORT', ports.minioConsole);
+
+    // Mark ephemeral mode for downstream helpers (e.g. infra should not persist ports).
+    if (runtimeState?.ephemeral) {
+      env.HAPPY_STACKS_EPHEMERAL_PORTS = '1';
+      env.HAPPY_LOCAL_EPHEMERAL_PORTS = '1';
+    }
+  }
+
+  return await fn({ env, envPath, stackEnv, runtimeStatePath, runtimeState });
 }
 
 async function interactiveNew({ rootDir, rl, defaults }) {
@@ -389,7 +448,7 @@ async function interactiveNew({ rootDir, rl, defaults }) {
 
   // Port
   if (!out.port) {
-    const want = (await rl.question('Port (empty = auto-pick): ')).trim();
+    const want = (await rl.question('Port (empty = ephemeral): ')).trim();
     out.port = want ? Number(want) : null;
   }
 
@@ -439,8 +498,9 @@ async function interactiveEdit({ rootDir, rl, stackName, existingEnv, defaults }
 
   // Port
   const currentPort = existingEnv.HAPPY_STACKS_SERVER_PORT ?? existingEnv.HAPPY_LOCAL_SERVER_PORT ?? '';
-  const wantPort = await prompt(rl, `Port (empty = keep ${currentPort || 'auto'}): `, { defaultValue: '' });
-  out.port = wantPort ? Number(wantPort) : (currentPort ? Number(currentPort) : null);
+  const wantPort = await prompt(rl, `Port (empty = keep ${currentPort || 'ephemeral'}; type 'ephemeral' to unpin): `, { defaultValue: '' });
+  const wantTrimmed = wantPort.trim().toLowerCase();
+  out.port = wantTrimmed === 'ephemeral' ? null : wantPort ? Number(wantPort) : (currentPort ? Number(currentPort) : null);
 
   // Remote for creating new worktrees
   const currentRemote = existingEnv.HAPPY_STACKS_STACK_REMOTE ?? existingEnv.HAPPY_LOCAL_STACK_REMOTE ?? '';
@@ -477,6 +537,7 @@ async function cmdNew({ rootDir, argv }) {
   const json = wantsJson(argv, { flags });
   const copyAuth = !(flags.has('--no-copy-auth') || flags.has('--fresh-auth'));
   const copyAuthFrom = (kv.get('--copy-auth-from') ?? '').trim() || 'main';
+  const forcePort = flags.has('--force-port');
 
   // argv here is already "args after 'new'", so the first positional is the stack name.
   let stackName = stackNameFromArg(positionals, 0);
@@ -505,7 +566,7 @@ async function cmdNew({ rootDir, argv }) {
     throw new Error(
       '[stack] usage: happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
         '[--happy=default|<owner/...>|<path>] [--happy-cli=...] [--happy-server=...] [--happy-server-light=...] ' +
-        '[--copy-auth-from=main] [--no-copy-auth] [--interactive]'
+        '[--copy-auth-from=main] [--no-copy-auth] [--interactive] [--force-port]'
     );
   }
   if (stackName === 'main') {
@@ -521,10 +582,33 @@ async function cmdNew({ rootDir, argv }) {
   const uiBuildDir = join(baseDir, 'ui');
   const cliHomeDir = join(baseDir, 'cli');
 
+  // Port strategy:
+  // - If --port is provided, we treat it as a pinned port and persist it in the stack env.
+  // - Otherwise, ports are ephemeral and chosen at stack start time (stored only in stack.runtime.json).
   let port = config.port;
-  if (!port || !Number.isFinite(port)) {
+  if (!Number.isFinite(port) || port <= 0) {
+    port = null;
+  }
+  if (port != null) {
+    // If user picked a port explicitly, fail-closed on collisions by default.
     const reservedPorts = await collectReservedStackPorts();
-    port = await pickNextFreePort(getDefaultPortStart(), { reservedPorts });
+    if (!forcePort && reservedPorts.has(port)) {
+      throw new Error(
+        `[stack] port ${port} is already reserved by another stack env.\n` +
+          `Fix:\n` +
+          `- omit --port to use an ephemeral port at start time (recommended)\n` +
+          `- or pick a different --port\n` +
+          `- or re-run with --force-port (not recommended)\n`
+      );
+    }
+    if (!(await isTcpPortFree(port))) {
+      throw new Error(
+        `[stack] port ${port} is not free on 127.0.0.1.\n` +
+          `Fix:\n` +
+          `- omit --port to use an ephemeral port at start time (recommended)\n` +
+          `- or stop the process currently using ${port}\n`
+      );
+    }
   }
 
   // Always pin component dirs explicitly (so stack env is stable even if repo env changes).
@@ -533,13 +617,15 @@ async function cmdNew({ rootDir, argv }) {
   // Prepare component dirs (may create worktrees).
   const stackEnv = {
     HAPPY_STACKS_STACK: stackName,
-    HAPPY_STACKS_SERVER_PORT: String(port),
     HAPPY_STACKS_SERVER_COMPONENT: serverComponent,
     HAPPY_STACKS_UI_BUILD_DIR: uiBuildDir,
     HAPPY_STACKS_CLI_HOME_DIR: cliHomeDir,
     HAPPY_STACKS_STACK_REMOTE: config.createRemote?.trim() ? config.createRemote.trim() : 'upstream',
     ...defaultComponentDirs,
   };
+  if (port != null) {
+    stackEnv.HAPPY_STACKS_SERVER_PORT = String(port);
+  }
 
   // Server-light storage isolation: ensure non-main stacks have their own sqlite + local files dir by default.
   // (This prevents a dev stack from mutating main stack's DB when schema changes.)
@@ -550,50 +636,54 @@ async function cmdNew({ rootDir, argv }) {
     stackEnv.DATABASE_URL = `file:${join(dataDir, 'happy-server-light.sqlite')}`;
   }
   if (serverComponent === 'happy-server') {
-    const reservedPorts = await collectReservedStackPorts();
-    reservedPorts.add(port);
-    const backendPort = await pickNextFreePort(port + 10, { reservedPorts });
-    reservedPorts.add(backendPort);
-    const pgPort = await pickNextFreePort(port + 1000, { reservedPorts });
-    reservedPorts.add(pgPort);
-    const redisPort = await pickNextFreePort(pgPort + 1, { reservedPorts });
-    reservedPorts.add(redisPort);
-    const minioPort = await pickNextFreePort(redisPort + 1, { reservedPorts });
-    reservedPorts.add(minioPort);
-    const minioConsolePort = await pickNextFreePort(minioPort + 1, { reservedPorts });
-
+    // Persist stable infra credentials in the stack env (ports are ephemeral unless explicitly pinned).
     const pgUser = 'handy';
     const pgPassword = randomToken(24);
     const pgDb = 'handy';
-    const databaseUrl = `postgresql://${encodeURIComponent(pgUser)}:${encodeURIComponent(pgPassword)}@127.0.0.1:${pgPort}/${encodeURIComponent(pgDb)}`;
-
     const s3Bucket = sanitizeDnsLabel(`happy-${stackName}`, { fallback: 'happy' });
     const s3AccessKey = randomToken(12);
     const s3SecretKey = randomToken(24);
-    const s3PublicUrl = `http://127.0.0.1:${minioPort}/${s3Bucket}`;
 
-    // Persist infra config in the stack env so restarts are stable/reproducible.
     stackEnv.HAPPY_STACKS_MANAGED_INFRA = stackEnv.HAPPY_STACKS_MANAGED_INFRA ?? '1';
-    stackEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT = String(backendPort);
-    stackEnv.HAPPY_STACKS_PG_PORT = String(pgPort);
-    stackEnv.HAPPY_STACKS_REDIS_PORT = String(redisPort);
-    stackEnv.HAPPY_STACKS_MINIO_PORT = String(minioPort);
-    stackEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT = String(minioConsolePort);
     stackEnv.HAPPY_STACKS_PG_USER = pgUser;
     stackEnv.HAPPY_STACKS_PG_PASSWORD = pgPassword;
     stackEnv.HAPPY_STACKS_PG_DATABASE = pgDb;
     stackEnv.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE = join(baseDir, 'happy-server', 'handy-master-secret.txt');
-
-    // Vars consumed by happy-server:
-    stackEnv.DATABASE_URL = databaseUrl;
-    stackEnv.REDIS_URL = `redis://127.0.0.1:${redisPort}`;
-    stackEnv.S3_HOST = '127.0.0.1';
-    stackEnv.S3_PORT = String(minioPort);
-    stackEnv.S3_USE_SSL = 'false';
     stackEnv.S3_ACCESS_KEY = s3AccessKey;
     stackEnv.S3_SECRET_KEY = s3SecretKey;
     stackEnv.S3_BUCKET = s3Bucket;
-    stackEnv.S3_PUBLIC_URL = s3PublicUrl;
+
+    // If user explicitly pinned the server port, also pin the rest of the ports + derived URLs for reproducibility.
+    if (port != null) {
+      const reservedPorts = await collectReservedStackPorts();
+      reservedPorts.add(port);
+      const backendPort = await pickNextFreePort(port + 10, { reservedPorts });
+      reservedPorts.add(backendPort);
+      const pgPort = await pickNextFreePort(port + 1000, { reservedPorts });
+      reservedPorts.add(pgPort);
+      const redisPort = await pickNextFreePort(pgPort + 1, { reservedPorts });
+      reservedPorts.add(redisPort);
+      const minioPort = await pickNextFreePort(redisPort + 1, { reservedPorts });
+      reservedPorts.add(minioPort);
+      const minioConsolePort = await pickNextFreePort(minioPort + 1, { reservedPorts });
+
+      const databaseUrl = `postgresql://${encodeURIComponent(pgUser)}:${encodeURIComponent(pgPassword)}@127.0.0.1:${pgPort}/${encodeURIComponent(pgDb)}`;
+      const s3PublicUrl = `http://127.0.0.1:${minioPort}/${s3Bucket}`;
+
+      stackEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT = String(backendPort);
+      stackEnv.HAPPY_STACKS_PG_PORT = String(pgPort);
+      stackEnv.HAPPY_STACKS_REDIS_PORT = String(redisPort);
+      stackEnv.HAPPY_STACKS_MINIO_PORT = String(minioPort);
+      stackEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT = String(minioConsolePort);
+
+      // Vars consumed by happy-server:
+      stackEnv.DATABASE_URL = databaseUrl;
+      stackEnv.REDIS_URL = `redis://127.0.0.1:${redisPort}`;
+      stackEnv.S3_HOST = '127.0.0.1';
+      stackEnv.S3_PORT = String(minioPort);
+      stackEnv.S3_USE_SSL = 'false';
+      stackEnv.S3_PUBLIC_URL = s3PublicUrl;
+    }
   }
 
   // happy
@@ -663,8 +753,13 @@ async function cmdNew({ rootDir, argv }) {
   const envPath = await writeStackEnv({ stackName, env: stackEnv });
   printResult({
     json,
-    data: { stackName, envPath, port, serverComponent },
-    text: [`[stack] created ${stackName}`, `[stack] env: ${envPath}`, `[stack] port: ${port}`, `[stack] server: ${serverComponent}`].join('\n'),
+    data: { stackName, envPath, port: port ?? null, serverComponent, portsMode: port == null ? 'ephemeral' : 'pinned' },
+    text: [
+      `[stack] created ${stackName}`,
+      `[stack] env: ${envPath}`,
+      `[stack] port: ${port == null ? 'ephemeral (picked at start)' : String(port)}`,
+      `[stack] server: ${serverComponent}`,
+    ].join('\n'),
   });
 }
 
@@ -707,16 +802,14 @@ async function cmdEdit({ rootDir, argv }) {
   const cliHomeDir = join(baseDir, 'cli');
 
   let port = config.port;
-  if (!port || !Number.isFinite(port)) {
-    const reservedPorts = await collectReservedStackPorts({ excludeStackName: stackName });
-    port = await pickNextFreePort(getDefaultPortStart(), { reservedPorts });
+  if (!Number.isFinite(port) || port <= 0) {
+    port = null;
   }
 
   const serverComponent = (config.serverComponent || existingEnv.HAPPY_STACKS_SERVER_COMPONENT || existingEnv.HAPPY_LOCAL_SERVER_COMPONENT || 'happy-server-light').trim();
 
   const next = {
     HAPPY_STACKS_STACK: stackName,
-    HAPPY_STACKS_SERVER_PORT: String(port),
     HAPPY_STACKS_SERVER_COMPONENT: serverComponent,
     HAPPY_STACKS_UI_BUILD_DIR: uiBuildDir,
     HAPPY_STACKS_CLI_HOME_DIR: cliHomeDir,
@@ -726,6 +819,9 @@ async function cmdEdit({ rootDir, argv }) {
     // Always pin defaults; overrides below can replace.
     ...resolveDefaultComponentDirs({ rootDir }),
   };
+  if (port != null) {
+    next.HAPPY_STACKS_SERVER_PORT = String(port);
+  }
 
   if (serverComponent === 'happy-server-light') {
     const dataDir = join(baseDir, 'server-light');
@@ -734,52 +830,66 @@ async function cmdEdit({ rootDir, argv }) {
     next.DATABASE_URL = `file:${join(dataDir, 'happy-server-light.sqlite')}`;
   }
   if (serverComponent === 'happy-server') {
-    const reservedPorts = await collectReservedStackPorts({ excludeStackName: stackName });
-    reservedPorts.add(port);
-    const backendPort = existingEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT?.trim()
-      ? Number(existingEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT.trim())
-      : await pickNextFreePort(port + 10, { reservedPorts });
-    reservedPorts.add(backendPort);
-    const pgPort = existingEnv.HAPPY_STACKS_PG_PORT?.trim() ? Number(existingEnv.HAPPY_STACKS_PG_PORT.trim()) : await pickNextFreePort(port + 1000, { reservedPorts });
-    reservedPorts.add(pgPort);
-    const redisPort = existingEnv.HAPPY_STACKS_REDIS_PORT?.trim() ? Number(existingEnv.HAPPY_STACKS_REDIS_PORT.trim()) : await pickNextFreePort(pgPort + 1, { reservedPorts });
-    reservedPorts.add(redisPort);
-    const minioPort = existingEnv.HAPPY_STACKS_MINIO_PORT?.trim() ? Number(existingEnv.HAPPY_STACKS_MINIO_PORT.trim()) : await pickNextFreePort(redisPort + 1, { reservedPorts });
-    reservedPorts.add(minioPort);
-    const minioConsolePort = existingEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT?.trim()
-      ? Number(existingEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT.trim())
-      : await pickNextFreePort(minioPort + 1, { reservedPorts });
-
+    // Persist stable infra credentials. Ports are ephemeral unless explicitly pinned.
     const pgUser = (existingEnv.HAPPY_STACKS_PG_USER ?? 'handy').trim() || 'handy';
     const pgPassword = (existingEnv.HAPPY_STACKS_PG_PASSWORD ?? '').trim() || randomToken(24);
     const pgDb = (existingEnv.HAPPY_STACKS_PG_DATABASE ?? 'handy').trim() || 'handy';
-    const databaseUrl = `postgresql://${encodeURIComponent(pgUser)}:${encodeURIComponent(pgPassword)}@127.0.0.1:${pgPort}/${encodeURIComponent(pgDb)}`;
-
-    const s3Bucket = (existingEnv.S3_BUCKET ?? sanitizeDnsLabel(`happy-${stackName}`, { fallback: 'happy' })).trim() || sanitizeDnsLabel(`happy-${stackName}`, { fallback: 'happy' });
+    const s3Bucket =
+      (existingEnv.S3_BUCKET ?? sanitizeDnsLabel(`happy-${stackName}`, { fallback: 'happy' })).trim() ||
+      sanitizeDnsLabel(`happy-${stackName}`, { fallback: 'happy' });
     const s3AccessKey = (existingEnv.S3_ACCESS_KEY ?? '').trim() || randomToken(12);
     const s3SecretKey = (existingEnv.S3_SECRET_KEY ?? '').trim() || randomToken(24);
-    const s3PublicUrl = `http://127.0.0.1:${minioPort}/${s3Bucket}`;
 
     next.HAPPY_STACKS_MANAGED_INFRA = (existingEnv.HAPPY_STACKS_MANAGED_INFRA ?? '1').trim() || '1';
-    next.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT = String(backendPort);
-    next.HAPPY_STACKS_PG_PORT = String(pgPort);
-    next.HAPPY_STACKS_REDIS_PORT = String(redisPort);
-    next.HAPPY_STACKS_MINIO_PORT = String(minioPort);
-    next.HAPPY_STACKS_MINIO_CONSOLE_PORT = String(minioConsolePort);
     next.HAPPY_STACKS_PG_USER = pgUser;
     next.HAPPY_STACKS_PG_PASSWORD = pgPassword;
     next.HAPPY_STACKS_PG_DATABASE = pgDb;
-    next.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE = join(baseDir, 'happy-server', 'handy-master-secret.txt');
-
-    next.DATABASE_URL = databaseUrl;
-    next.REDIS_URL = `redis://127.0.0.1:${redisPort}`;
-    next.S3_HOST = '127.0.0.1';
-    next.S3_PORT = String(minioPort);
-    next.S3_USE_SSL = 'false';
+    next.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE =
+      (existingEnv.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim() || join(baseDir, 'happy-server', 'handy-master-secret.txt');
     next.S3_ACCESS_KEY = s3AccessKey;
     next.S3_SECRET_KEY = s3SecretKey;
     next.S3_BUCKET = s3Bucket;
-    next.S3_PUBLIC_URL = s3PublicUrl;
+
+    if (port != null) {
+      // If user pinned the server port, keep ports + derived URLs stable as well.
+      const reservedPorts = await collectReservedStackPorts({ excludeStackName: stackName });
+      reservedPorts.add(port);
+      const backendPort = existingEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT?.trim()
+        ? Number(existingEnv.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT.trim())
+        : await pickNextFreePort(port + 10, { reservedPorts });
+      reservedPorts.add(backendPort);
+      const pgPort = existingEnv.HAPPY_STACKS_PG_PORT?.trim()
+        ? Number(existingEnv.HAPPY_STACKS_PG_PORT.trim())
+        : await pickNextFreePort(port + 1000, { reservedPorts });
+      reservedPorts.add(pgPort);
+      const redisPort = existingEnv.HAPPY_STACKS_REDIS_PORT?.trim()
+        ? Number(existingEnv.HAPPY_STACKS_REDIS_PORT.trim())
+        : await pickNextFreePort(pgPort + 1, { reservedPorts });
+      reservedPorts.add(redisPort);
+      const minioPort = existingEnv.HAPPY_STACKS_MINIO_PORT?.trim()
+        ? Number(existingEnv.HAPPY_STACKS_MINIO_PORT.trim())
+        : await pickNextFreePort(redisPort + 1, { reservedPorts });
+      reservedPorts.add(minioPort);
+      const minioConsolePort = existingEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT?.trim()
+        ? Number(existingEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT.trim())
+        : await pickNextFreePort(minioPort + 1, { reservedPorts });
+
+      const databaseUrl = `postgresql://${encodeURIComponent(pgUser)}:${encodeURIComponent(pgPassword)}@127.0.0.1:${pgPort}/${encodeURIComponent(pgDb)}`;
+      const s3PublicUrl = `http://127.0.0.1:${minioPort}/${s3Bucket}`;
+
+      next.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT = String(backendPort);
+      next.HAPPY_STACKS_PG_PORT = String(pgPort);
+      next.HAPPY_STACKS_REDIS_PORT = String(redisPort);
+      next.HAPPY_STACKS_MINIO_PORT = String(minioPort);
+      next.HAPPY_STACKS_MINIO_CONSOLE_PORT = String(minioConsolePort);
+
+      next.DATABASE_URL = databaseUrl;
+      next.REDIS_URL = `redis://127.0.0.1:${redisPort}`;
+      next.S3_HOST = '127.0.0.1';
+      next.S3_PORT = String(minioPort);
+      next.S3_USE_SSL = 'false';
+      next.S3_PUBLIC_URL = s3PublicUrl;
+    }
   }
 
   // Apply selections (create worktrees if needed)
@@ -810,7 +920,135 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
   await withStackEnv({
     stackName,
     extraEnv,
-    fn: async ({ env }) => {
+    fn: async ({ env, envPath, stackEnv, runtimeStatePath, runtimeState }) => {
+      const isStartLike = scriptPath === 'dev.mjs' || scriptPath === 'run.mjs';
+      if (!isStartLike) {
+        await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
+        return;
+      }
+
+      const wantsRestart = args.includes('--restart');
+      const pinnedServerPort = Boolean((stackEnv.HAPPY_STACKS_SERVER_PORT ?? '').trim() || (stackEnv.HAPPY_LOCAL_SERVER_PORT ?? '').trim());
+      const serverComponent =
+        (stackEnv.HAPPY_STACKS_SERVER_COMPONENT ?? stackEnv.HAPPY_LOCAL_SERVER_COMPONENT ?? '').toString().trim() || 'happy-server-light';
+      const managedInfra =
+        serverComponent === 'happy-server'
+          ? ((stackEnv.HAPPY_STACKS_MANAGED_INFRA ?? stackEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1').toString().trim() !== '0')
+          : false;
+
+      // If this is an ephemeral-port stack and it's already running, avoid spawning a second copy.
+      const existingOwnerPid = Number(runtimeState?.ownerPid);
+      const existingPort = Number(runtimeState?.ports?.server);
+      if (isPidAlive(existingOwnerPid)) {
+        if (!wantsRestart) {
+          console.log(
+            `[stack] ${stackName}: already running (pid=${existingOwnerPid}${Number.isFinite(existingPort) && existingPort > 0 ? ` port=${existingPort}` : ''})`
+          );
+          return;
+        }
+        // Restart: stop the existing runner first.
+        await killPidOwnedByStack(existingOwnerPid, { stackName, envPath, cliHomeDir: (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').toString(), label: 'runner', json: false });
+        await deleteStackRuntimeStateFile(runtimeStatePath);
+      }
+
+      // Ephemeral ports: allocate at start time, store only in runtime state (not in stack env).
+      if (!pinnedServerPort) {
+        const reserved = await collectReservedStackPorts({ excludeStackName: stackName });
+
+        // Also avoid ports held by other *running* ephemeral stacks.
+        const names = await listAllStackNames();
+        for (const n of names) {
+          if (n === stackName) continue;
+          const p = getStackRuntimeStatePath(n);
+          // eslint-disable-next-line no-await-in-loop
+          const st = await readStackRuntimeStateFile(p);
+          const pid = Number(st?.ownerPid);
+          if (!isPidAlive(pid)) continue;
+          const ports = st?.ports && typeof st.ports === 'object' ? st.ports : {};
+          for (const v of Object.values(ports)) {
+            const num = Number(v);
+            if (Number.isFinite(num) && num > 0) reserved.add(num);
+          }
+        }
+
+        const startPort = getDefaultPortStart();
+        const ports = {};
+        ports.server = await pickNextFreeTcpPort(startPort, { reservedPorts: reserved });
+        reserved.add(ports.server);
+
+        if (serverComponent === 'happy-server') {
+          ports.backend = await pickNextFreeTcpPort(ports.server + 10, { reservedPorts: reserved });
+          reserved.add(ports.backend);
+          if (managedInfra) {
+            ports.pg = await pickNextFreeTcpPort(ports.server + 1000, { reservedPorts: reserved });
+            reserved.add(ports.pg);
+            ports.redis = await pickNextFreeTcpPort(ports.pg + 1, { reservedPorts: reserved });
+            reserved.add(ports.redis);
+            ports.minio = await pickNextFreeTcpPort(ports.redis + 1, { reservedPorts: reserved });
+            reserved.add(ports.minio);
+            ports.minioConsole = await pickNextFreeTcpPort(ports.minio + 1, { reservedPorts: reserved });
+            reserved.add(ports.minioConsole);
+          }
+        }
+
+        // Sanity: if somehow a port is now occupied, fail closed (avoids killPortListeners nuking random processes).
+        // eslint-disable-next-line no-await-in-loop
+        if (!(await isTcpPortFree(Number(ports.server)))) {
+          throw new Error(`[stack] ${stackName}: picked server port ${ports.server} but it is not free`);
+        }
+
+        const childEnv = {
+          ...env,
+          HAPPY_STACKS_EPHEMERAL_PORTS: '1',
+          HAPPY_LOCAL_EPHEMERAL_PORTS: '1',
+          HAPPY_STACKS_SERVER_PORT: String(ports.server),
+          HAPPY_LOCAL_SERVER_PORT: String(ports.server),
+          ...(serverComponent === 'happy-server' && ports.backend
+            ? {
+                HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT: String(ports.backend),
+                HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT: String(ports.backend),
+              }
+            : {}),
+          ...(managedInfra && ports.pg
+            ? {
+                HAPPY_STACKS_PG_PORT: String(ports.pg),
+                HAPPY_LOCAL_PG_PORT: String(ports.pg),
+                HAPPY_STACKS_REDIS_PORT: String(ports.redis),
+                HAPPY_LOCAL_REDIS_PORT: String(ports.redis),
+                HAPPY_STACKS_MINIO_PORT: String(ports.minio),
+                HAPPY_LOCAL_MINIO_PORT: String(ports.minio),
+                HAPPY_STACKS_MINIO_CONSOLE_PORT: String(ports.minioConsole),
+                HAPPY_LOCAL_MINIO_CONSOLE_PORT: String(ports.minioConsole),
+              }
+            : {}),
+        };
+
+        // Spawn the runner (long-lived) and record its pid + ports for other stack-scoped commands.
+        const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], {
+          cwd: rootDir,
+          env: childEnv,
+          stdio: 'inherit',
+          shell: false,
+        });
+
+        try {
+          await new Promise((resolvePromise, rejectPromise) => {
+            child.on('error', rejectPromise);
+            child.on('exit', (code, sig) => {
+              if (code === 0) return resolvePromise();
+              return rejectPromise(new Error(`stack ${scriptPath} exited (code=${code ?? 'null'}, sig=${sig ?? 'null'})`));
+            });
+          });
+        } finally {
+          const cur = await readStackRuntimeStateFile(runtimeStatePath);
+          if (Number(cur?.ownerPid) === Number(child.pid)) {
+            await deleteStackRuntimeStateFile(runtimeStatePath);
+          }
+        }
+        return;
+      }
+
+      // Pinned port stack: run normally under the pinned env.
       await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
     },
   });
@@ -834,6 +1072,12 @@ function resolveTransientComponentOverrides({ rootDir, kv }) {
     if (dir) {
       overrides[envKey] = dir;
     }
+  }
+
+  if (Object.keys(overrides).length > 0) {
+    // Mark these as transient so scripts/utils/env.mjs won't clobber them when it loads the stack env file.
+    overrides.HAPPY_STACKS_TRANSIENT_COMPONENT_OVERRIDES = '1';
+    overrides.HAPPY_LOCAL_TRANSIENT_COMPONENT_OVERRIDES = '1';
   }
 
   return overrides;
@@ -1027,23 +1271,102 @@ function getEnvValue(obj, key) {
 }
 
 async function cmdAudit({ rootDir, argv }) {
-  const { flags } = parseArgs(argv);
+  const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
   const fix = flags.has('--fix');
   const fixMain = flags.has('--fix-main');
+  const fixPorts = flags.has('--fix-ports');
+  const fixWorkspace = flags.has('--fix-workspace');
+  const fixPaths = flags.has('--fix-paths');
+  const unpinPorts = flags.has('--unpin-ports');
+  const unpinPortsExceptRaw = (kv.get('--unpin-ports-except') ?? '').trim();
+  const unpinPortsExcept = new Set(
+    unpinPortsExceptRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+  const wantsEnvRepair = Boolean(fix || fixWorkspace || fixPaths);
 
   const stacks = await listAllStackNames();
 
   const report = [];
   const ports = new Map(); // port -> [stackName]
+  const otherWorkspaceRoot = join(homedir(), '.happy-stacks', 'workspace');
 
   for (const stackName of stacks) {
     const resolved = resolveStackEnvPath(stackName);
     const envPath = resolved.envPath;
     const baseDir = resolved.baseDir;
 
-    const raw = await readExistingEnv(envPath);
-    const env = parseEnvToObject(raw);
+    let raw = await readExistingEnv(envPath);
+    let env = parseEnvToObject(raw);
+
+    // If the env file is missing/empty, optionally reconstruct a safe baseline env.
+    if (!raw.trim() && wantsEnvRepair && (stackName !== 'main' || fixMain)) {
+      const serverComponent =
+        getEnvValue(env, 'HAPPY_STACKS_SERVER_COMPONENT') ||
+        getEnvValue(env, 'HAPPY_LOCAL_SERVER_COMPONENT') ||
+        'happy-server-light';
+      const expectedUi = join(baseDir, 'ui');
+      const expectedCli = join(baseDir, 'cli');
+      // Port strategy: main is pinned by convention; non-main stacks default to ephemeral ports.
+      const reservedPorts = stackName === 'main' ? await collectReservedStackPorts({ excludeStackName: stackName }) : new Set();
+      const port = stackName === 'main' ? await pickNextFreePort(getDefaultPortStart(), { reservedPorts }) : null;
+
+      const nextEnv = {
+        HAPPY_STACKS_STACK: stackName,
+        HAPPY_STACKS_SERVER_COMPONENT: serverComponent,
+        HAPPY_STACKS_UI_BUILD_DIR: expectedUi,
+        HAPPY_STACKS_CLI_HOME_DIR: expectedCli,
+        HAPPY_STACKS_STACK_REMOTE: 'upstream',
+        ...resolveDefaultComponentDirs({ rootDir }),
+      };
+      if (port != null) {
+        nextEnv.HAPPY_STACKS_SERVER_PORT = String(port);
+      }
+
+      if (serverComponent === 'happy-server-light') {
+        const dataDir = join(baseDir, 'server-light');
+        nextEnv.HAPPY_SERVER_LIGHT_DATA_DIR = dataDir;
+        nextEnv.HAPPY_SERVER_LIGHT_FILES_DIR = join(dataDir, 'files');
+        nextEnv.DATABASE_URL = `file:${join(dataDir, 'happy-server-light.sqlite')}`;
+      }
+
+      await writeStackEnv({ stackName, env: nextEnv });
+      raw = await readExistingEnv(envPath);
+      env = parseEnvToObject(raw);
+    }
+
+    // Optional: unpin ports for non-main stacks (ephemeral port model).
+    if (unpinPorts && stackName !== 'main' && !unpinPortsExcept.has(stackName) && raw.trim()) {
+      const serverComponentTmp =
+        getEnvValue(env, 'HAPPY_STACKS_SERVER_COMPONENT') || getEnvValue(env, 'HAPPY_LOCAL_SERVER_COMPONENT') || 'happy-server-light';
+      const remove = [
+        // Always remove pinned public server port.
+        'HAPPY_STACKS_SERVER_PORT',
+        'HAPPY_LOCAL_SERVER_PORT',
+        // Happy-server gateway/backend ports.
+        'HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT',
+        'HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT',
+        // Managed infra ports.
+        'HAPPY_STACKS_PG_PORT',
+        'HAPPY_LOCAL_PG_PORT',
+        'HAPPY_STACKS_REDIS_PORT',
+        'HAPPY_LOCAL_REDIS_PORT',
+        'HAPPY_STACKS_MINIO_PORT',
+        'HAPPY_LOCAL_MINIO_PORT',
+        'HAPPY_STACKS_MINIO_CONSOLE_PORT',
+        'HAPPY_LOCAL_MINIO_CONSOLE_PORT',
+      ];
+      if (serverComponentTmp === 'happy-server') {
+        // These are derived from the ports above; safe to re-compute at start time.
+        remove.push('DATABASE_URL', 'REDIS_URL', 'S3_PORT', 'S3_PUBLIC_URL');
+      }
+      await ensureEnvFilePruned({ envPath, removeKeys: remove });
+      raw = await readExistingEnv(envPath);
+      env = parseEnvToObject(raw);
+    }
 
     const serverComponent = getEnvValue(env, 'HAPPY_STACKS_SERVER_COMPONENT') || getEnvValue(env, 'HAPPY_LOCAL_SERVER_COMPONENT') || 'happy-server-light';
     const portRaw = getEnvValue(env, 'HAPPY_STACKS_SERVER_PORT') || getEnvValue(env, 'HAPPY_LOCAL_SERVER_PORT');
@@ -1066,6 +1389,8 @@ async function cmdAudit({ rootDir, argv }) {
     const expectedUi = join(baseDir, 'ui');
     if (!uiBuildDir) {
       issues.push({ code: 'missing_ui_build_dir', message: `missing UI build dir (expected ${expectedUi})` });
+    } else if (uiBuildDir !== expectedUi) {
+      issues.push({ code: 'ui_build_dir_mismatch', message: `UI build dir points to ${uiBuildDir} (expected ${expectedUi})` });
     }
 
     const stacksCli = getEnvValue(env, 'HAPPY_STACKS_CLI_HOME_DIR');
@@ -1074,6 +1399,8 @@ async function cmdAudit({ rootDir, argv }) {
     const expectedCli = join(baseDir, 'cli');
     if (!cliHomeDir) {
       issues.push({ code: 'missing_cli_home_dir', message: `missing CLI home dir (expected ${expectedCli})` });
+    } else if (cliHomeDir !== expectedCli) {
+      issues.push({ code: 'cli_home_dir_mismatch', message: `CLI home dir points to ${cliHomeDir} (expected ${expectedCli})` });
     }
 
     // Component dirs: require at least server component dir + happy-cli (otherwise stacks can accidentally fall back to some other workspace).
@@ -1090,6 +1417,36 @@ async function cmdAudit({ rootDir, argv }) {
       }
     }
 
+    // Workspace/component dir hygiene checks (best-effort).
+    const componentDirKeys = [
+      { component: 'happy', key: 'HAPPY_STACKS_COMPONENT_DIR_HAPPY' },
+      { component: 'happy-cli', key: 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI' },
+      { component: 'happy-server-light', key: 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT' },
+      { component: 'happy-server', key: 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER' },
+    ];
+    for (const { component, key } of componentDirKeys) {
+      const legacyKey = key.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+      const v = getEnvValue(env, key) || getEnvValue(env, legacyKey);
+      if (!v) continue;
+      if (!isAbsolute(v)) {
+        issues.push({ code: 'relative_component_dir', message: `${key} is relative (${v}); prefer absolute paths under this workspace` });
+        continue;
+      }
+      const norm = v.replaceAll('\\', '/');
+      if (norm.startsWith(otherWorkspaceRoot.replaceAll('\\', '/') + '/')) {
+        issues.push({ code: 'foreign_workspace_component_dir', message: `${key} points to another workspace: ${v}` });
+        continue;
+      }
+      const rootNorm = resolve(rootDir).replaceAll('\\', '/') + '/';
+      if (norm.includes('/components/') && !norm.startsWith(rootNorm)) {
+        issues.push({ code: 'external_component_dir', message: `${key} points outside current workspace: ${v}` });
+      }
+      // Optional: fail-closed existence check.
+      if (!existsSync(v)) {
+        issues.push({ code: 'missing_component_path', message: `${key} path does not exist: ${v}` });
+      }
+    }
+
     // Server-light DB/files isolation.
     const isServerLight = serverComponent === 'happy-server-light';
     if (isServerLight) {
@@ -1103,16 +1460,23 @@ async function cmdAudit({ rootDir, argv }) {
       if (!dataDir) issues.push({ code: 'missing_server_light_data_dir', message: `missing HAPPY_SERVER_LIGHT_DATA_DIR (expected ${expectedDataDir})` });
       if (!filesDir) issues.push({ code: 'missing_server_light_files_dir', message: `missing HAPPY_SERVER_LIGHT_FILES_DIR (expected ${expectedFilesDir})` });
       if (!dbUrl) issues.push({ code: 'missing_database_url', message: `missing DATABASE_URL (expected ${expectedDbUrl})` });
+      if (dataDir && dataDir !== expectedDataDir) issues.push({ code: 'server_light_data_dir_mismatch', message: `HAPPY_SERVER_LIGHT_DATA_DIR=${dataDir} (expected ${expectedDataDir})` });
+      if (filesDir && filesDir !== expectedFilesDir) issues.push({ code: 'server_light_files_dir_mismatch', message: `HAPPY_SERVER_LIGHT_FILES_DIR=${filesDir} (expected ${expectedFilesDir})` });
+      if (dbUrl && dbUrl !== expectedDbUrl) issues.push({ code: 'database_url_mismatch', message: `DATABASE_URL=${dbUrl} (expected ${expectedDbUrl})` });
 
     }
 
-    // Best-effort env repair (missing keys only).
-    if (fix && (stackName !== 'main' || fixMain) && raw.trim()) {
+    // Best-effort env repair (opt-in; non-main stacks only by default).
+    if ((fix || fixWorkspace || fixPaths) && (stackName !== 'main' || fixMain) && raw.trim()) {
       const updates = [];
 
       // Always ensure stack directories are explicitly pinned when missing.
       if (!stacksUi && !localUi) updates.push({ key: 'HAPPY_STACKS_UI_BUILD_DIR', value: expectedUi });
       if (!stacksCli && !localCli) updates.push({ key: 'HAPPY_STACKS_CLI_HOME_DIR', value: expectedCli });
+      if (fixPaths) {
+        if (uiBuildDir && uiBuildDir !== expectedUi) updates.push({ key: 'HAPPY_STACKS_UI_BUILD_DIR', value: expectedUi });
+        if (cliHomeDir && cliHomeDir !== expectedCli) updates.push({ key: 'HAPPY_STACKS_CLI_HOME_DIR', value: expectedCli });
+      }
 
       // Pin component dirs if missing (best-effort).
       if (missingComponentKeys.length) {
@@ -1132,9 +1496,59 @@ async function cmdAudit({ rootDir, argv }) {
         const expectedDataDir = join(baseDir, 'server-light');
         const expectedFilesDir = join(expectedDataDir, 'files');
         const expectedDbUrl = `file:${join(expectedDataDir, 'happy-server-light.sqlite')}`;
-        if (!dataDir) updates.push({ key: 'HAPPY_SERVER_LIGHT_DATA_DIR', value: expectedDataDir });
-        if (!filesDir) updates.push({ key: 'HAPPY_SERVER_LIGHT_FILES_DIR', value: expectedFilesDir });
-        if (!dbUrl) updates.push({ key: 'DATABASE_URL', value: expectedDbUrl });
+        if (!dataDir || (fixPaths && dataDir !== expectedDataDir)) updates.push({ key: 'HAPPY_SERVER_LIGHT_DATA_DIR', value: expectedDataDir });
+        if (!filesDir || (fixPaths && filesDir !== expectedFilesDir)) updates.push({ key: 'HAPPY_SERVER_LIGHT_FILES_DIR', value: expectedFilesDir });
+        if (!dbUrl || (fixPaths && dbUrl !== expectedDbUrl)) updates.push({ key: 'DATABASE_URL', value: expectedDbUrl });
+      }
+
+      if (fixWorkspace) {
+        const otherNorm = otherWorkspaceRoot.replaceAll('\\', '/') + '/';
+        for (const { component, key } of componentDirKeys) {
+          const legacyKey = key.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+          const current = getEnvValue(env, key) || getEnvValue(env, legacyKey);
+          if (!current) continue;
+
+          let next = current;
+          if (!isAbsolute(next) && next.startsWith('components/')) {
+            next = resolve(rootDir, next);
+          }
+          const norm = next.replaceAll('\\', '/');
+          if (norm.startsWith(otherNorm)) {
+            // Map any path under ~/.happy-stacks/workspace/... back into this repo root.
+            const rel = norm.slice(otherNorm.length);
+            const candidate = resolve(rootDir, rel);
+            if (existsSync(candidate)) {
+              next = candidate;
+            } else if (rel.includes('/components/.worktrees/')) {
+              // Attempt to recreate the referenced worktree inside this workspace.
+              const marker = '/components/.worktrees/';
+              const idx = rel.indexOf(marker);
+              const rest = rel.slice(idx + marker.length); // <component>/<owner>/<slug...>
+              const parts = rest.split('/').filter(Boolean);
+              if (parts.length >= 3) {
+                const comp = parts[0];
+                const owner = parts[1];
+                const slug = parts.slice(2).join('/');
+                const remoteName = owner === 'slopus' ? 'upstream' : 'origin';
+                try {
+                  // eslint-disable-next-line no-await-in-loop
+                  next = await createWorktree({ rootDir, component: comp, slug, remoteName });
+                } catch {
+                  // Fall back to candidate path (even if missing) and let other checks surface it.
+                  next = candidate;
+                }
+              } else {
+                next = candidate;
+              }
+            } else {
+              next = candidate;
+            }
+          }
+
+          if (next !== current) {
+            updates.push({ key, value: next });
+          }
+        }
       }
 
       if (updates.length) {
@@ -1155,7 +1569,136 @@ async function cmdAudit({ rootDir, argv }) {
   }
 
   // Port collisions (post-pass)
+  const collisions = [];
   for (const [port, names] of ports.entries()) {
+    if (names.length <= 1) continue;
+    collisions.push({ port, names: Array.from(names) });
+  }
+
+  // Optional: fix collisions by reassigning ports (non-main stacks only by default).
+  if (fixPorts) {
+    const allowMain = Boolean(fixMain);
+    const planned = await collectReservedStackPorts();
+    const byName = new Map(report.map((r) => [r.stackName, r]));
+
+    const parsePg = (url) => {
+      try {
+        const u = new URL(url);
+        const db = u.pathname?.replace(/^\//, '') || '';
+        return {
+          user: decodeURIComponent(u.username || ''),
+          password: decodeURIComponent(u.password || ''),
+          db,
+          host: u.hostname || '127.0.0.1',
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    for (const c of collisions) {
+      const names = c.names.slice().sort();
+      // Keep the first stack stable; reassign others to reduce churn.
+      const keep = names[0];
+      for (const stackName of names.slice(1)) {
+        if (stackName === 'main' && !allowMain) {
+          continue;
+        }
+        const entry = byName.get(stackName);
+        if (!entry) continue;
+        if (!entry.envPath) continue;
+        const raw = await readExistingEnv(entry.envPath);
+        if (!raw.trim()) continue;
+        const env = parseEnvToObject(raw);
+
+        const serverComponent =
+          getEnvValue(env, 'HAPPY_STACKS_SERVER_COMPONENT') || getEnvValue(env, 'HAPPY_LOCAL_SERVER_COMPONENT') || 'happy-server-light';
+        const portRaw = getEnvValue(env, 'HAPPY_STACKS_SERVER_PORT') || getEnvValue(env, 'HAPPY_LOCAL_SERVER_PORT');
+        const currentPort = portRaw ? Number(portRaw) : NaN;
+        if (Number.isFinite(currentPort) && currentPort > 0) {
+          // Fail-safe: don't rewrite ports for a stack that appears to be actively running.
+          // Otherwise we can strand a running server/daemon on a now-stale port.
+          // eslint-disable-next-line no-await-in-loop
+          const free = await isPortFree(currentPort);
+          if (!free) {
+            entry.issues.push({
+              code: 'port_fix_skipped_running',
+              message: `skipped port reassignment because port ${currentPort} is currently in use (stop the stack and re-run --fix-ports)`,
+            });
+            continue;
+          }
+        }
+        const startFrom = Number.isFinite(currentPort) && currentPort > 0 ? currentPort + 1 : getDefaultPortStart();
+
+        const updates = [];
+        const newServerPort = await pickNextFreePort(startFrom, { reservedPorts: planned });
+        planned.add(newServerPort);
+        updates.push({ key: 'HAPPY_STACKS_SERVER_PORT', value: String(newServerPort) });
+
+        if (serverComponent === 'happy-server') {
+          planned.add(newServerPort);
+          const backendPort = await pickNextFreePort(newServerPort + 10, { reservedPorts: planned });
+          planned.add(backendPort);
+          const pgPort = await pickNextFreePort(newServerPort + 1000, { reservedPorts: planned });
+          planned.add(pgPort);
+          const redisPort = await pickNextFreePort(pgPort + 1, { reservedPorts: planned });
+          planned.add(redisPort);
+          const minioPort = await pickNextFreePort(redisPort + 1, { reservedPorts: planned });
+          planned.add(minioPort);
+          const minioConsolePort = await pickNextFreePort(minioPort + 1, { reservedPorts: planned });
+          planned.add(minioConsolePort);
+
+          updates.push({ key: 'HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT', value: String(backendPort) });
+          updates.push({ key: 'HAPPY_STACKS_PG_PORT', value: String(pgPort) });
+          updates.push({ key: 'HAPPY_STACKS_REDIS_PORT', value: String(redisPort) });
+          updates.push({ key: 'HAPPY_STACKS_MINIO_PORT', value: String(minioPort) });
+          updates.push({ key: 'HAPPY_STACKS_MINIO_CONSOLE_PORT', value: String(minioConsolePort) });
+
+          // Update URLs while preserving existing credentials.
+          const pgUser = getEnvValue(env, 'HAPPY_STACKS_PG_USER') || 'handy';
+          const pgPassword = getEnvValue(env, 'HAPPY_STACKS_PG_PASSWORD') || '';
+          const pgDb = getEnvValue(env, 'HAPPY_STACKS_PG_DATABASE') || 'handy';
+          let user = pgUser;
+          let pass = pgPassword;
+          let db = pgDb;
+          const parsed = parsePg(getEnvValue(env, 'DATABASE_URL'));
+          if (parsed) {
+            if (parsed.user) user = parsed.user;
+            if (parsed.password) pass = parsed.password;
+            if (parsed.db) db = parsed.db;
+          }
+          const databaseUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@127.0.0.1:${pgPort}/${encodeURIComponent(db)}`;
+          updates.push({ key: 'DATABASE_URL', value: databaseUrl });
+          updates.push({ key: 'REDIS_URL', value: `redis://127.0.0.1:${redisPort}` });
+          updates.push({ key: 'S3_PORT', value: String(minioPort) });
+          const bucket = getEnvValue(env, 'S3_BUCKET') || sanitizeDnsLabel(`happy-${stackName}`, { fallback: 'happy' });
+          updates.push({ key: 'S3_PUBLIC_URL', value: `http://127.0.0.1:${minioPort}/${bucket}` });
+        }
+
+        await ensureEnvFileUpdated({ envPath: entry.envPath, updates });
+
+        // Update in-memory report for follow-up collision recomputation.
+        entry.serverPort = newServerPort;
+        entry.issues.push({ code: 'port_reassigned', message: `server port reassigned -> ${newServerPort} (was ${currentPort || 'unknown'})` });
+      }
+      // Ensure the "kept" one remains reserved in planned as well.
+      const keptEntry = byName.get(keep);
+      if (keptEntry?.serverPort) planned.add(keptEntry.serverPort);
+    }
+  }
+
+  // Recompute port collisions after optional fixes.
+  for (const r of report) {
+    r.issues = (r.issues ?? []).filter((i) => i.code !== 'port_collision');
+  }
+  const portsNow = new Map();
+  for (const r of report) {
+    if (!Number.isFinite(r.serverPort) || r.serverPort == null) continue;
+    const existing = portsNow.get(r.serverPort) ?? [];
+    existing.push(r.stackName);
+    portsNow.set(r.serverPort, existing);
+  }
+  for (const [port, names] of portsNow.entries()) {
     if (names.length <= 1) continue;
     for (const r of report) {
       if (r.serverPort === port) {
@@ -1166,7 +1709,7 @@ async function cmdAudit({ rootDir, argv }) {
 
   const out = {
     ok: true,
-    fixed: fix,
+    fixed: Boolean(fix || fixPorts || fixWorkspace || fixPaths || unpinPorts),
     stacks: report,
     summary: {
       total: report.length,
@@ -1225,8 +1768,11 @@ async function main() {
           'start',
           'build',
           'typecheck',
+          'lint',
+          'test',
           'doctor',
           'mobile',
+          'resume',
           'stop',
           'srv',
           'wt',
@@ -1236,19 +1782,22 @@ async function main() {
       },
       text: [
         '[stack] usage:',
-        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=main] [--no-copy-auth] [--json]',
+        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=main] [--no-copy-auth] [--force-port] [--json]',
         '  happys stack edit <name> --interactive [--json]',
         '  happys stack list [--json]',
         '  happys stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',
-        '  happys stack audit [--fix] [--fix-main] [--json]',
+        '  happys stack audit [--fix] [--fix-main] [--fix-ports] [--fix-workspace] [--fix-paths] [--unpin-ports] [--unpin-ports-except=stack1,stack2] [--json]',
         '  happys stack auth <name> status|login [--json]',
         '  happys stack dev <name> [-- ...]',
         '  happys stack start <name> [-- ...]',
         '  happys stack build <name> [-- ...]',
         '  happys stack typecheck <name> [component...] [--json]',
+        '  happys stack lint <name> [component...] [--json]',
+        '  happys stack test <name> [component...] [--json]',
         '  happys stack doctor <name> [-- ...]',
         '  happys stack mobile <name> [-- ...]',
-        '  happys stack stop <name> [--aggressive] [--no-docker] [--json]',
+        '  happys stack resume <name> <sessionId...> [--json]',
+        '  happys stack stop <name> [--aggressive] [--sweep-owned] [--no-docker] [--json]',
         '  happys stack srv <name> -- status|use ...',
         '  happys stack wt <name> -- <wt args...>',
         '  happys stack tailscale:status|enable|disable|url <name> [-- ...]',
@@ -1377,6 +1926,18 @@ async function main() {
     await cmdRunScript({ rootDir, stackName, scriptPath: 'typecheck.mjs', args: passthrough, extraEnv: overrides });
     return;
   }
+  if (cmd === 'lint') {
+    const { kv } = parseArgs(passthrough);
+    const overrides = resolveTransientComponentOverrides({ rootDir, kv });
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'lint.mjs', args: passthrough, extraEnv: overrides });
+    return;
+  }
+  if (cmd === 'test') {
+    const { kv } = parseArgs(passthrough);
+    const overrides = resolveTransientComponentOverrides({ rootDir, kv });
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'test.mjs', args: passthrough, extraEnv: overrides });
+    return;
+  }
   if (cmd === 'doctor') {
     await cmdRunScript({ rootDir, stackName, scriptPath: 'doctor.mjs', args: passthrough });
     return;
@@ -1385,16 +1946,42 @@ async function main() {
     await cmdRunScript({ rootDir, stackName, scriptPath: 'mobile.mjs', args: passthrough });
     return;
   }
+  if (cmd === 'resume') {
+    const sessionIds = passthrough.filter((a) => a && a !== '--' && !a.startsWith('--'));
+    if (sessionIds.length === 0) {
+      printResult({
+        json,
+        data: { ok: false, error: 'missing_session_ids' },
+        text: [
+          '[stack] usage:',
+          '  happys stack resume <name> <sessionId...>',
+        ].join('\n'),
+      });
+      process.exit(1);
+    }
+    const out = await withStackEnv({
+      stackName,
+      fn: async ({ env }) => {
+        const cliDir = getComponentDir(rootDir, 'happy-cli');
+        const happyBin = join(cliDir, 'bin', 'happy.mjs');
+        // Run stack-scoped happy-cli and ask the stack daemon to resume these sessions.
+        return await run(process.execPath, [happyBin, 'daemon', 'resume', ...sessionIds], { cwd: rootDir, env });
+      },
+    });
+    if (json) printResult({ json, data: { ok: true, resumed: sessionIds, out } });
+    return;
+  }
 
   if (cmd === 'stop') {
     const { flags: stopFlags } = parseArgs(passthrough);
     const noDocker = stopFlags.has('--no-docker');
     const aggressive = stopFlags.has('--aggressive');
+    const sweepOwned = stopFlags.has('--sweep-owned');
     const baseDir = getStackDir(stackName);
     const out = await withStackEnv({
       stackName,
       fn: async ({ env }) => {
-        return await stopStackWithEnv({ rootDir, stackName, baseDir, env, json, noDocker, aggressive });
+        return await stopStackWithEnv({ rootDir, stackName, baseDir, env, json, noDocker, aggressive, sweepOwned });
       },
     });
     if (json) printResult({ json, data: { ok: true, stopped: out } });

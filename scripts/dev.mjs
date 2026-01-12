@@ -15,6 +15,8 @@ import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } fr
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo.mjs';
 import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack_startup.mjs';
+import { updateStackRuntimeStateFile } from './utils/stack_runtime_state.mjs';
+import { killProcessGroupOwnedByStack } from './utils/ownership.mjs';
 
 /**
  * Dev mode stack:
@@ -105,6 +107,9 @@ async function main() {
   const children = [];
   let shuttingDown = false;
   const baseEnv = { ...process.env };
+  const stackMode = Boolean((baseEnv.HAPPY_STACKS_STACK ?? '').trim() || (baseEnv.HAPPY_LOCAL_STACK ?? '').trim());
+  const runtimeStatePath =
+    (baseEnv.HAPPY_STACKS_RUNTIME_STATE_PATH ?? baseEnv.HAPPY_LOCAL_RUNTIME_STATE_PATH ?? '').toString().trim() || '';
 
   const serverAlreadyRunning = await isHappyServerRunning(internalServerUrl);
   const daemonAlreadyRunning = startDaemon ? isDaemonRunning(cliHomeDir) : false;
@@ -119,8 +124,22 @@ async function main() {
     return;
   }
 
+  if (stackMode && runtimeStatePath) {
+    await updateStackRuntimeStateFile(runtimeStatePath, {
+      version: 1,
+      stackName: autostart.stackName,
+      script: 'dev.mjs',
+      ephemeral: (baseEnv.HAPPY_STACKS_EPHEMERAL_PORTS ?? baseEnv.HAPPY_LOCAL_EPHEMERAL_PORTS ?? '').toString().trim() === '1',
+      ownerPid: process.pid,
+      ports: { server: serverPort },
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+
   // Start server (only if not already healthy)
-  if (!serverAlreadyRunning || restart) {
+  // NOTE: In stack mode we avoid killing arbitrary port listeners (fail-closed instead).
+  if ((!serverAlreadyRunning || restart) && !stackMode) {
     await killPortListeners(serverPort, { label: 'server' });
   }
   const serverEnv = {
@@ -138,6 +157,7 @@ async function main() {
     serverEnv.HAPPY_SERVER_LIGHT_FILES_DIR = baseEnv.HAPPY_SERVER_LIGHT_FILES_DIR?.trim()
       ? baseEnv.HAPPY_SERVER_LIGHT_FILES_DIR.trim()
       : join(dataDir, 'files');
+    serverEnv.DATABASE_URL = baseEnv.DATABASE_URL?.trim() ? baseEnv.DATABASE_URL.trim() : `file:${join(dataDir, 'happy-server-light.sqlite')}`;
   }
   if (serverComponentName === 'happy-server') {
     const managed = (baseEnv.HAPPY_STACKS_MANAGED_INFRA ?? baseEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1') !== '0';
@@ -196,6 +216,12 @@ async function main() {
   if (!serverAlreadyRunning || restart) {
     const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
     children.push(server);
+    if (stackMode && runtimeStatePath) {
+      await updateStackRuntimeStateFile(runtimeStatePath, {
+        processes: { serverPid: server.pid },
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
     await waitForServerReady(internalServerUrl);
     console.log(`[local] server ready at ${internalServerUrl}`);
   } else {
@@ -252,15 +278,19 @@ async function main() {
     if (!uiAlreadyRunning || restart) {
       if (restart && uiRunning.state?.pid) {
         const prevPid = Number(uiRunning.state.pid);
-        const prevPort = Number(uiRunning.state.port);
-        if (Number.isFinite(prevPort) && prevPort > 0) {
-          await killPortListeners(prevPort, { label: 'ui' });
-        }
-        await killPid(prevPid);
+        const stackName = (baseEnv.HAPPY_STACKS_STACK ?? baseEnv.HAPPY_LOCAL_STACK ?? '').trim() || autostart.stackName;
+        const envPath = (baseEnv.HAPPY_STACKS_ENV_FILE ?? baseEnv.HAPPY_LOCAL_ENV_FILE ?? '').toString();
+        await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-web', json: false });
         uiAlreadyRunning = false;
       }
       const ui = await pmSpawnBin({ label: 'ui', dir: uiDir, bin: 'expo', args: uiArgs, env: uiEnv });
       children.push(ui);
+      if (stackMode && runtimeStatePath) {
+        await updateStackRuntimeStateFile(runtimeStatePath, {
+          processes: { expoWebPid: ui.pid },
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
       try {
         await writePidState(uiPaths.statePath, { pid: ui.pid, port: metroPort, uiDir, startedAt: new Date().toISOString() });
       } catch {
