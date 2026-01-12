@@ -118,17 +118,6 @@ async function migrateLightToServer({ rootDir, fromStack, toStack, includeFiles,
     updates: [{ key: 'HAPPY_STACKS_HANDY_MASTER_SECRET_FILE', value: targetSecretPath }],
   });
 
-  // Bring up infra and ensure env vars are present.
-  const infra = await ensureHappyServerManagedInfra({
-    stackName: toStack,
-    baseDir: to.baseDir,
-    serverPort: toPort,
-    publicServerUrl: `http://127.0.0.1:${toPort}`,
-    envPath: to.envPath,
-    env: process.env,
-  });
-  await applyHappyServerMigrations({ serverDir: fullDir, env: { ...process.env, ...infra.env } });
-
   // Resolve component dirs (prefer stack-pinned dirs).
   const lightDir = getEnvValue(fromEnv, 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT') || getEnvValue(fromEnv, 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT');
   const fullDir = getEnvValue(toEnv, 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER') || getEnvValue(toEnv, 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER');
@@ -138,6 +127,20 @@ async function migrateLightToServer({ rootDir, fromStack, toStack, includeFiles,
 
   await ensureDepsInstalled(lightDir, 'happy-server-light');
   await ensureDepsInstalled(fullDir, 'happy-server');
+
+  // Bring up infra and ensure env vars are present.
+  const infra = await ensureHappyServerManagedInfra({
+    stackName: toStack,
+    baseDir: to.baseDir,
+    serverPort: toPort,
+    publicServerUrl: `http://127.0.0.1:${toPort}`,
+    envPath: to.envPath,
+    env: {
+      ...process.env,
+      ...(toEphemeral ? { HAPPY_STACKS_EPHEMERAL_PORTS: '1', HAPPY_LOCAL_EPHEMERAL_PORTS: '1' } : {}),
+    },
+  });
+  await applyHappyServerMigrations({ serverDir: fullDir, env: { ...process.env, ...infra.env } });
 
   // Copy sqlite DB to a snapshot so migration is consistent even if the source server is running.
   const snapshotDir = join(to.baseDir, 'migrations');
