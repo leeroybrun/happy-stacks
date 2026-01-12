@@ -1,0 +1,8 @@
+tasks:
+  paths:
+    # Override artifact templates so Happy Stacks can enforce mandatory frontmatter keys.
+    # These templates are project-owned and are the single source of truth for
+    # happy-stacks-specific task metadata (stack/worktree/component planning).
+    template: ".edison/templates/artifacts/TASK.md"
+    qaTemplate: ".edison/templates/artifacts/QA.md"
+

@@ -1,0 +1,3 @@
+tdd:
+  enforcement: warn
+  coverage_threshold: 90

@@ -12,3 +12,18 @@ node_modules/
 .env.*.local
 env.local
 
+.worktrees/
+.edison/_generated/
+.edison/_locks/
+.edison/config.local/
+.edison/session/
+.project/
+.project/logs/
+.project/archive/
+.project/.session-id
+.project/sessions/_tx/
+.project/sessions/_locks/
+.project/qa/evidence-snapshots/
+.project/qa/locks/
+.project/qa/score-history/
+/triage

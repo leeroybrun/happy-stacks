@@ -1,0 +1,80 @@
+validation:
+  # Happy Stacks evidence policy:
+  # - "fast" preset: type-check + build + lint (good for UI iteration)
+  # - "standard" preset: fast + tests
+  #
+  # IMPORTANT: command evidence is generated via `edison evidence capture <task-id>`
+  # and is expected to run through `happys` wrappers (see .edison/config/ci.yml).
+
+  # Default to the fast preset; validators/QA can opt into "standard" per task when needed.
+  defaultPreset: fast
+
+  presets:
+    quick:
+      name: quick
+      description: "Docs/config-only changes (no command evidence required)"
+      required_evidence: []
+      validators: []
+
+    fast:
+      name: fast
+      description: "Typecheck + build + lint (stack-scoped)"
+      required_evidence:
+        - command-type-check.txt
+        - command-build.txt
+        - command-lint.txt
+
+    standard:
+      name: standard
+      description: "Fast + tests (stack-scoped)"
+      required_evidence:
+        - command-type-check.txt
+        - command-build.txt
+        - command-lint.txt
+        - command-test.txt
+
+  presetInference:
+    rules:
+      - patterns:
+          - "docs/**"
+          - "*.md"
+          - "**/*.md"
+          - "LICENSE"
+          - "LICENSE.*"
+        preset: quick
+        priority: 10
+
+  evidence:
+    # Baseline required evidence for tasks when preset does not override it.
+    requiredFiles:
+      - command-type-check.txt
+      - command-build.txt
+      - command-lint.txt
+    # Command name -> evidence filename mapping (used by evidence capture filtering).
+    files:
+      type-check: command-type-check.txt
+      lint: command-lint.txt
+      test: command-test.txt
+      build: command-build.txt
+
+  # Optional web server profiles for validators that need a running stack.
+  #
+  # IMPORTANT:
+  # - These profiles rely on running Edison via `happys edison --stack=<name> -- ...`
+  #   so the stack env (including HAPPY_LOCAL_SERVER_PORT) is loaded into the process env.
+  web_servers:
+    happy-stack:
+      # Expand via env var (Edison web_server config supports $VAR/${VAR} expansion).
+      url: "http://127.0.0.1:${HAPPY_STACKS_SERVER_PORT}"
+      healthcheck_url: "http://127.0.0.1:${HAPPY_STACKS_SERVER_PORT}/health"
+      ensure_running: true
+      stop_after: true
+      start:
+        # Start the stack in prod-like mode for validation. This stays running as a background process
+        # managed by Edison’s web_server lifecycle and is stopped only if started by Edison.
+        command: "node ./bin/happys.mjs stack start \"$HAPPY_STACKS_STACK\""
+      stop:
+        # Only stop when Edison started the process (avoid stopping a stack someone started manually).
+        run_even_if_no_process: false
+        command: "node ./bin/happys.mjs stack stop \"$HAPPY_STACKS_STACK\" --yes"
+

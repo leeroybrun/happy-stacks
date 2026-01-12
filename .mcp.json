@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "context7": {
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ],
+      "command": "npx",
+      "env": {}
+    },
+    "edison-pal": {
+      "args": [
+        "--from",
+        "git+https://github.com/BeehiveInnovations/pal-mcp-server.git",
+        "pal-mcp-server"
+      ],
+      "command": "uvx",
+      "env": {
+        "CLI_CLIENTS_CONFIG_PATH": "/Users/leeroy/Documents/Development/happy-local/.pal/conf/cli_clients",
+        "CUSTOM_API_URL": "http://127.0.0.1:11434/v1",
+        "DISABLED_TOOLS": "chat,thinkdeep,planner,consensus,codereview,precommit,debug,secaudit,docgen,analyze,refactor,tracer,testgen,challenge,apilookup",
+        "PAL_WORKING_DIR": "/Users/leeroy/Documents/Development/happy-local"
+      }
+    },
+    "sequential-thinking": {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "command": "npx",
+      "env": {}
+    }
+  }
+}
