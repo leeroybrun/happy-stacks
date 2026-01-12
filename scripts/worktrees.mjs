@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from './utils/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
-import { componentDirEnvKey, getComponentDir, getComponentsDir, getRootDir, getWorkspaceDir } from './utils/paths.mjs';
+import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths.mjs';
 import { parseGithubOwner } from './utils/worktrees.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
@@ -369,6 +369,21 @@ async function migrateComponentWorktrees({ rootDir, component }) {
   let renamed = 0;
 
   const componentsDir = getComponentsDir(rootDir);
+  // NOTE: getWorkspaceDir() is influenced by HAPPY_STACKS_WORKSPACE_DIR, which for this repo
+  // points at the current workspace. For migration we specifically want to consider the
+  // historical home workspace at: <home>/workspace/components
+  const legacyHomeWorkspaceComponentsDir = join(getHappyStacksHomeDir(), 'workspace', 'components');
+  const allowedComponentRoots = [componentsDir];
+  try {
+    if (
+      existsSync(legacyHomeWorkspaceComponentsDir) &&
+      resolve(legacyHomeWorkspaceComponentsDir) !== resolve(componentsDir)
+    ) {
+      allowedComponentRoots.push(legacyHomeWorkspaceComponentsDir);
+    }
+  } catch {
+    // ignore
+  }
 
   for (const wt of worktrees) {
     const wtPath = wt.path;
@@ -381,8 +396,14 @@ async function migrateComponentWorktrees({ rootDir, component }) {
       continue;
     }
 
-    // Only migrate worktrees living under this happy-stacks components folder.
-    if (!resolve(wtPath).startsWith(resolve(componentsDir) + '/')) {
+    // Only migrate worktrees living under either:
+    // - current workspace components folder, or
+    // - legacy home workspace components folder (~/.happy-stacks/workspace/components)
+    // This is necessary when users switch HAPPY_STACKS_WORKSPACE_DIR, otherwise git will keep
+    // worktrees "stuck" in the old workspace and branches can't be re-used in the new workspace.
+    const resolvedWt = resolve(wtPath);
+    const okRoot = allowedComponentRoots.some((d) => resolvedWt.startsWith(resolve(d) + '/'));
+    if (!okRoot) {
       continue;
     }
 
@@ -675,7 +696,13 @@ async function cmdNew({ rootDir, argv }) {
     await git(repoRoot, ['branch', '--set-upstream-to', `${remoteName}/${defaultBranch}`, mirrorBranch]).catch(() => {});
   }
 
-  await git(repoRoot, ['worktree', 'add', '-b', branchName, destPath, base]);
+  // If the branch already exists (common when migrating between workspaces),
+  // attach a new worktree to that branch instead of failing.
+  if (await gitOk(repoRoot, ['show-ref', '--verify', `refs/heads/${branchName}`])) {
+    await git(repoRoot, ['worktree', 'add', destPath, branchName]);
+  } else {
+    await git(repoRoot, ['worktree', 'add', '-b', branchName, destPath, base]);
+  }
 
   const depsMode = parseDepsMode(kv.get('--deps'));
   const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: destPath, depsMode });

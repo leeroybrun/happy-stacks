@@ -9,8 +9,25 @@ async function loadEnvFile(path, { override = false, overridePrefix = null } = {
   try {
     const contents = await readFile(path, 'utf-8');
     const parsed = parseDotenv(contents);
+    const allowTransientComponentDirOverrides =
+      !overridePrefix &&
+      override &&
+      ((process.env.HAPPY_STACKS_TRANSIENT_COMPONENT_OVERRIDES ?? '').trim() === '1' ||
+        (process.env.HAPPY_LOCAL_TRANSIENT_COMPONENT_OVERRIDES ?? '').trim() === '1');
     for (const [k, v] of parsed.entries()) {
       const allowOverride = override && (!overridePrefix || k.startsWith(overridePrefix));
+      // Special-case: allow one-shot CLI overrides (e.g. `happys stack typecheck <stack> --happy-cli=...`)
+      // to win over stack env files for component directories.
+      //
+      // This keeps stack env files authoritative by default (we also scrub HAPPY_STACKS_* from the parent
+      // environment in `withStackEnv()`), but lets the stack wrappers inject a temporary override when explicitly requested.
+      if (
+        allowTransientComponentDirOverrides &&
+        (k.startsWith('HAPPY_STACKS_COMPONENT_DIR_') || k.startsWith('HAPPY_LOCAL_COMPONENT_DIR_')) &&
+        (process.env[k] ?? '').trim()
+      ) {
+        continue;
+      }
       if (allowOverride || process.env[k] == null || process.env[k] === '') {
         process.env[k] = v;
       }
@@ -83,12 +100,13 @@ process.env.HAPPY_STACKS_HOME_DIR = process.env.HAPPY_STACKS_HOME_DIR ?? __homeD
 //   ~/.happy-stacks/.env
 //   ~/.happy-stacks/env.local
 //
-// Backwards compatible fallback for cloned-repo usage (when home config doesn't exist yet):
-//   <repo>/.env
-//   <repo>/env.local
+// Additionally: when running from a cloned repo, load <repo>/.env as a *fallback* even if home config exists.
+// This helps keep repo-local dev settings (e.g. custom Codex binaries) working without requiring users to
+// duplicate them into ~/.happy-stacks/env.local.
 const homeEnv = join(__homeDir, '.env');
 const homeLocal = join(__homeDir, 'env.local');
 const hasHomeConfig = existsSync(homeEnv) || existsSync(homeLocal);
+const repoEnv = join(__cliRootDir, '.env');
 
 // 1) Load defaults first (lowest precedence)
 if (hasHomeConfig) {
@@ -100,6 +118,12 @@ if (hasHomeConfig) {
   await loadEnvFile(join(__cliRootDir, 'env.local'), { override: true, overridePrefix: 'HAPPY_LOCAL_' });
   await loadEnvFile(join(__cliRootDir, 'env.local'), { override: true, overridePrefix: 'HAPPY_STACKS_' });
 }
+
+// Repo-local fallback (dev convenience):
+// If the repo has a .env, load it without overriding anything already set by the environment or home config.
+// Note: we intentionally do NOT load repo env.local here, because env.local is treated as higher-precedence
+// overrides and could unexpectedly fight with stack/home configuration when present.
+await loadEnvFile(repoEnv, { override: false });
 
 // If no explicit env file is set, and we're on the default "main" stack, prefer the stack-scoped env file
 // if it exists: ~/.happy/stacks/main/env
