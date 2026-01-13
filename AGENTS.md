@@ -187,6 +187,41 @@ The default stack (`main`) is meant to stay stable. By default, **`happys wt use
 
 ---
 
+### Safety invariants (must not regress)
+
+These are intentional safety properties of Happy Stacks. If you change code under `scripts/`, preserve these invariants (or explicitly redesign them with the user).
+
+#### **Process isolation (stacks)**
+
+- **Never kill by port in stack mode**: stack-scoped commands must not “kill whatever is listening on a port”.
+  - Stack stop/restart must kill only processes that can be **proven owned** by the stack (via env-file / stack markers, CLI home dir, and/or `stack.runtime.json` recorded PIDs).
+  - Port-based killing (e.g. `killPortListeners`) is allowed only in **non-stack** local convenience paths.
+
+#### **Ephemeral ports (non-main stacks)**
+
+- **Ephemeral stacks pick ports at start time**: non-main stacks do not pin ports in their env files; ports are chosen on stack start and recorded in `stack.runtime.json`.
+- **Restart reuses ports (or fails closed)**: `happys stack dev/start <stack> --restart` must reuse the previous runtime ports when available.
+  - If any reused port is unexpectedly occupied, the command must **error** (fail-closed) rather than killing unknown listeners or silently reallocating ports (which would break component communication).
+  - To allocate new ports intentionally, stop the stack and re-run without `--restart`.
+
+#### **Watch mode**
+
+- **Watcher restarts must be stack-owned**: watcher-driven restarts (server/daemon/UI) must only restart processes if the PID is known and provably stack-owned.
+  - If the PID is unknown (e.g. server was already running), watchers should refuse and instruct to re-run with `--restart` so Happy Stacks can spawn + track PIDs.
+
+#### **Tailscale Serve (public URLs)**
+
+- **Do not auto-enable or repoint Tailscale Serve for non-main stacks by default**.
+  - Non-main stacks should default to `http://localhost:<port>` unless the user explicitly configured a public URL.
+  - Expo web dev UI should default to the stack’s local server URL (not a shared `*.ts.net` URL).
+
+#### **Daemons**
+
+- **Multiple daemons are expected**: one per stack is normal. Never “fix” issues by killing all daemons.
+- **Daemon kills must be ownership-gated**: any fallback kill path (lockfile/state PID) must verify the process is tied to the correct stack home dir (`HAPPY_HOME_DIR`) and refuse otherwise.
+
+---
+
 ### Multi-stack daemons (expected behavior)
 
 Each stack is isolated (ports + CLI home dir). That means **running multiple stacks can legitimately result in multiple daemons** (one per stack).
@@ -498,6 +533,14 @@ Dev mode (Expo web dev server for UI):
 ```bash
 happys dev
 ```
+
+Notes (dev reliability):
+
+- `happys dev` will **install deps as needed** and will **auto-build `happy-cli`** if its `dist/` output is missing or out of date.
+- In interactive TTY runs, `happys dev` enables a lightweight watcher for `happy-cli` changes and will **rebuild + restart the daemon** as needed.
+  - Disable: `happys dev --no-watch`
+  - Force-enable: `happys dev --watch`
+  - Build mode control: `HAPPY_STACKS_CLI_BUILD_MODE=auto|always|never` (legacy prefix also supported: `HAPPY_LOCAL_CLI_BUILD_MODE`)
 
 #### **Server flavor**
 
