@@ -31,6 +31,58 @@ This means:
 
 ---
 
+## Sessions in `happy-local` (important)
+
+Edison “sessions” still exist in `happy-local`, but **they do not create git worktrees** here because Edison worktrees are disabled (`.edison/config/worktrees.yml`).
+
+Think of sessions in this repo as:
+
+- **Ownership + safety gating** for task lifecycle transitions (claim/done)
+- **Optional context** for validation bundling and session-scoped task queues
+
+### What sessions do (and don’t) do here
+
+- **Sessions do**:
+  - allow safely claiming tasks into a session (`task claim`)
+  - gate completing tasks (`task done` requires a session)
+  - optionally move tasks/QA into session-scoped directories under `.project/sessions/...`
+- **Sessions do not**:
+  - create/manage git worktrees (Happy Stacks handles worktrees)
+  - persist “current session” via `.project/.session-id` (Edison only writes that inside a git worktree)
+    - Outside worktrees, prefer passing `--session <id>` or setting `AGENTS_SESSION=<id>` for your shell.
+
+### Commands that require a session vs not
+
+- **Requires a session**:
+  - `happys edison -- task claim <task-id> --session <session-id>`
+  - `happys edison -- task done <task-id> --session <session-id>`
+- **Does NOT require a session**:
+  - Evidence capture: `happys edison --stack=<stack> -- evidence capture <task-id>`
+  - Validation: `happys edison --stack=<stack> -- qa validate <task-id> --execute`
+
+### Recommended flow (implementation)
+
+Use sessions for ownership, and Happy Stacks for isolation:
+
+- Create a session (no worktree will be created in this repo):
+  - `happys edison -- session create --id <session-id>`
+- Claim **component** tasks into that session:
+  - `happys edison -- task claim <task-id> --session <session-id>`
+- Implement only in the stack’s pinned component worktrees.
+- Mark done when finished:
+  - `happys edison -- task done <task-id> --session <session-id>`
+
+### Recommended flow (validation-only)
+
+If you’re only validating existing tasks, you generally **do not need to create a session**:
+
+- `happys edison --stack=<stack> -- evidence capture <task-id>`
+- `happys edison --stack=<stack> -- qa validate <task-id> --execute`
+
+Note: a **parent task is not a session**. Parent tasks are planning umbrellas; sessions are for “who is working on what right now” and guarded claim/done transitions.
+
+---
+
 ## The one correct entrypoint: `happys edison`
 
 **Do not run `edison ...` directly** in `happy-local`.
@@ -162,9 +214,16 @@ Configured in:
 
 Presets:
 
-- **fast**: typecheck + build + lint + **browser UI validation** (see below)
-- **standard**: fast + tests + **browser UI validation**
+- **fast**: typecheck + build + lint + **track drift review**
+- **standard**: fast + tests + **track drift review**
+- **fast-ui**: fast + **browser UI validation** + **track drift review** (for tasks that include component `happy`)
+- **standard-ui**: standard + **browser UI validation** + **track drift review** (for tasks that include component `happy`)
 - **quick**: docs-only (no command evidence)
+
+Track drift review is intentionally fast:
+
+- `track:coherence` is captured as **command evidence** (`command-track-coherence.txt`).
+- The `track-drift-review` validator should **read that evidence** and should not re-run `track:coherence` unless evidence is missing/broken.
 
 ---
 
