@@ -39,6 +39,26 @@ validation:
         - command-test.txt
         - command-track-coherence.txt
         - command-task-diff.txt
+      validators:
+        - track-drift-review
+      blocking_validators:
+        - track-drift-review
+
+    # Validation-only preset: includes CodeRabbit review evidence.
+    #
+    # IMPORTANT:
+    # - Use this preset when you intend to *validate* / promote a task.
+    # - Do NOT use this preset for routine implementation evidence capture; it is heavier.
+    standard-validate:
+      name: standard-validate
+      description: "Standard + CodeRabbit review (validation-only, stack-scoped)"
+      required_evidence:
+        - command-type-check.txt
+        - command-build.txt
+        - command-lint.txt
+        - command-test.txt
+        - command-track-coherence.txt
+        - command-task-diff.txt
         - command-coderabbit.txt
       validators:
         - track-drift-review
@@ -63,6 +83,24 @@ validation:
     standard-ui:
       name: standard-ui
       description: "Standard + browser UI validation (for tasks that include component happy)"
+      required_evidence:
+        - command-type-check.txt
+        - command-build.txt
+        - command-lint.txt
+        - command-test.txt
+        - command-track-coherence.txt
+        - command-task-diff.txt
+      validators:
+        - browser-e2e
+        - track-drift-review
+      blocking_validators:
+        - browser-e2e
+        - track-drift-review
+
+    # Validation-only preset for UI tasks: includes CodeRabbit review evidence.
+    standard-ui-validate:
+      name: standard-ui-validate
+      description: "Standard UI + CodeRabbit review (validation-only, stack-scoped)"
       required_evidence:
         - command-type-check.txt
         - command-build.txt

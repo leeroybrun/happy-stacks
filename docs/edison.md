@@ -220,10 +220,23 @@ Configured in:
 Presets:
 
 - **fast**: typecheck + build + lint + **track drift review**
-- **standard**: standard evidence + **track drift review** + **CodeRabbit** (blocking)
+- **standard**: typecheck + build + lint + tests + **track drift review** (implementation evidence)
+- **standard-validate**: **standard** + **CodeRabbit review evidence** (validation-only)
 - **fast-ui**: fast + **browser UI validation** + **track drift review** (for tasks that include component `happy`)
-- **standard-ui**: standard + **browser UI validation** + **track drift review** + **CodeRabbit** (blocking)
+- **standard-ui**: standard + **browser UI validation** + **track drift review** (implementation evidence)
+- **standard-ui-validate**: **standard-ui** + **CodeRabbit review evidence** (validation-only)
 - **quick**: docs-only (no command evidence)
+
+#### CodeRabbit evidence policy (Happy Stacks)
+
+- CodeRabbit runs as **command evidence** (`command-coderabbit.txt`), not as an Edison validator.
+- It is **mandatory for execute-mode task validation**:
+  - `happys edison --stack=<stack> -- qa validate <task-id> --execute --preset standard-validate`
+- It **does not run automatically**. When preflight reports it missing, capture it explicitly:
+
+```bash
+happys edison --stack=<stack> -- evidence capture <task-id> --preset standard-validate --only coderabbit
+```
 
 Track drift review is intentionally fast:
 

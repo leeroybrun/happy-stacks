@@ -40,6 +40,18 @@ happys edison --stack=<stack> -- evidence capture <task-id>
 Presets:
 - **fast**: type-check + build + lint
 - **standard**: fast + tests
+- **standard-validate**: standard + CodeRabbit review (validation-only)
+- **standard-ui-validate**: standard-ui + CodeRabbit review (validation-only)
+
+Validation-only requirement (MANDATORY):
+
+- To run `qa validate --execute`, you MUST use a `*-validate` preset.
+- CodeRabbit evidence is required for those presets and will be surfaced by the preflight checklist.
+- CodeRabbit does NOT run automatically; you must capture it explicitly when missing:
+
+```bash
+happys edison --stack=<stack> -- evidence capture <task-id> --preset standard-validate --only coderabbit
+```
 
 4. If the validator needs a running server:
    - Use the configured Edison web server profile (`happy-stack`) via validator workflow.
