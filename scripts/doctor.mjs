@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
-import { assertServerComponentDirMatches } from './utils/validate.mjs';
+import { assertServerComponentDirMatches } from './utils/server/validate.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 

@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
 import { isDaemonRunning, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
+import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/server/validate.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
 import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeStart } from './utils/stack/runtime_state.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';

@@ -12,7 +12,7 @@ import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
-import { detectServerComponentDirMismatch } from './utils/validate.mjs';
+import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
 
 function getActiveStackName() {
   return (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';

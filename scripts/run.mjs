@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { maybeResetTailscaleServe } from './tailscale.mjs';
 import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
+import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/server/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
 import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack/startup.mjs';
 import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
