@@ -13,7 +13,19 @@ PLUGIN_SOURCE="$SCRIPT_DIR/happy-stacks.5s.sh"
 # You can override:
 #   HAPPY_LOCAL_SWIFTBAR_INTERVAL=30s ./install.sh
 PLUGIN_INTERVAL="${HAPPY_STACKS_SWIFTBAR_INTERVAL:-${HAPPY_LOCAL_SWIFTBAR_INTERVAL:-5m}}"
-PLUGIN_FILE="happy-stacks.${PLUGIN_INTERVAL}.sh"
+PLUGIN_BASENAME="${HAPPY_STACKS_SWIFTBAR_PLUGIN_BASENAME:-happy-stacks}"
+PLUGIN_FILE="${PLUGIN_BASENAME}.${PLUGIN_INTERVAL}.sh"
+
+# Optional: install a wrapper plugin instead of copying the source.
+# This is useful for sandbox/test installs so the plugin can be pinned to a specific home/canonical dir
+# even under SwiftBar's minimal environment.
+WRAPPER="${HAPPY_STACKS_SWIFTBAR_PLUGIN_WRAPPER:-0}"
+
+escape_single_quotes() {
+  # Escape a string so it can be safely embedded inside single quotes in a bash script.
+  # e.g. abc'def -> abc'"'"'def
+  printf "%s" "$1" | sed "s/'/'\"'\"'/g"
+}
 
 FORCE=0
 for arg in "$@"; do
@@ -131,28 +143,62 @@ PLUGIN_DEST="$PLUGINS_DIR/$PLUGIN_FILE"
 # Remove any legacy happy-local plugins to avoid duplicates.
 rm -f "$PLUGINS_DIR"/happy-local.*.sh 2>/dev/null || true
 
+EXISTED=0
 if [[ -f "$PLUGIN_DEST" ]]; then
+    EXISTED=1
+fi
+
+SHOULD_INSTALL=1
+if [[ "$EXISTED" == "1" ]]; then
     echo "Plugin already exists at $PLUGIN_DEST"
     if [[ "$FORCE" == "1" ]] || [[ ! -t 0 ]]; then
-        cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"
-        chmod +x "$PLUGIN_DEST"
-        echo -e "${GREEN}✓ Plugin updated${NC}"
+        SHOULD_INSTALL=1
     else
         echo "Would you like to overwrite it? (y/n)"
         read -r OVERWRITE_CHOICE
-        
         if [[ "$OVERWRITE_CHOICE" != "y" ]] && [[ "$OVERWRITE_CHOICE" != "Y" ]]; then
+            SHOULD_INSTALL=0
             echo "Skipping plugin installation."
-        else
-            cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"
-            chmod +x "$PLUGIN_DEST"
-            echo -e "${GREEN}✓ Plugin updated${NC}"
         fi
     fi
-else
-    cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"
-    chmod +x "$PLUGIN_DEST"
-    echo -e "${GREEN}✓ Plugin installed${NC}"
+fi
+
+if [[ "$SHOULD_INSTALL" == "1" ]]; then
+    if [[ "$WRAPPER" == "1" ]]; then
+        # Generate a wrapper plugin that pins env vars and executes the real plugin source.
+        HOME_DIR_VAL="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$HOME/.happy-stacks}}"
+        CANONICAL_DIR_VAL="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+        HOME_DIR_ESC="$(escape_single_quotes "$HOME_DIR_VAL")"
+        CANONICAL_DIR_ESC="$(escape_single_quotes "$CANONICAL_DIR_VAL")"
+        SRC_ESC="$(escape_single_quotes "$PLUGIN_SOURCE")"
+        BASENAME_ESC="$(escape_single_quotes "$PLUGIN_BASENAME")"
+
+        cat >"$PLUGIN_DEST" <<EOF
+#!/bin/bash
+set -euo pipefail
+export HAPPY_STACKS_HOME_DIR='$HOME_DIR_ESC'
+export HAPPY_LOCAL_DIR='$HOME_DIR_ESC'
+export HAPPY_STACKS_CANONICAL_HOME_DIR='$CANONICAL_DIR_ESC'
+export HAPPY_LOCAL_CANONICAL_HOME_DIR='$CANONICAL_DIR_ESC'
+export HAPPY_STACKS_SWIFTBAR_PLUGIN_BASENAME='$BASENAME_ESC'
+export HAPPY_LOCAL_SWIFTBAR_PLUGIN_BASENAME='$BASENAME_ESC'
+exec '$SRC_ESC'
+EOF
+        chmod +x "$PLUGIN_DEST"
+        if [[ "$EXISTED" == "1" ]]; then
+            echo -e "${GREEN}✓ Plugin updated (wrapper)${NC}"
+        else
+            echo -e "${GREEN}✓ Plugin installed (wrapper)${NC}"
+        fi
+    else
+        cp "$PLUGIN_SOURCE" "$PLUGIN_DEST"
+        chmod +x "$PLUGIN_DEST"
+        if [[ "$EXISTED" == "1" ]]; then
+            echo -e "${GREEN}✓ Plugin updated${NC}"
+        else
+            echo -e "${GREEN}✓ Plugin installed${NC}"
+        fi
+    fi
 fi
 
 #

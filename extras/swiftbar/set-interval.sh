@@ -26,16 +26,18 @@ if [[ -z "$PLUGIN_DIR" ]]; then
 fi
 mkdir -p "$PLUGIN_DIR"
 
-TARGET="$PLUGIN_DIR/happy-stacks.${INTERVAL}.sh"
+PLUGIN_BASENAME="${HAPPY_STACKS_SWIFTBAR_PLUGIN_BASENAME:-${HAPPY_LOCAL_SWIFTBAR_PLUGIN_BASENAME:-happy-stacks}}"
+TARGET="$PLUGIN_DIR/${PLUGIN_BASENAME}.${INTERVAL}.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_HOME_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+CANONICAL_HOME_DIR="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$CANONICAL_HOME_DIR}}"
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 SOURCE="${HAPPY_LOCAL_DIR}/extras/swiftbar/happy-stacks.5s.sh"
 
 # If a happy-stacks plugin already exists, rename it into place; otherwise copy from repo source.
-EXISTING="$(ls "$PLUGIN_DIR"/happy-stacks.*.sh 2>/dev/null | head -1 || true)"
+EXISTING="$(ls "$PLUGIN_DIR"/"${PLUGIN_BASENAME}".*.sh 2>/dev/null | head -1 || true)"
 if [[ -n "$EXISTING" ]]; then
   if [[ "$EXISTING" != "$TARGET" ]]; then
     rm -f "$TARGET"
@@ -50,7 +52,7 @@ else
 fi
 
 # Remove any other intervals to avoid duplicates in SwiftBar.
-for f in "$PLUGIN_DIR"/happy-stacks.*.sh; do
+for f in "$PLUGIN_DIR"/"${PLUGIN_BASENAME}".*.sh; do
   [[ "$f" == "$TARGET" ]] && continue
   rm -f "$f" || true
 done

@@ -350,4 +350,21 @@ Notes:
   - **Use `.env.example` as the canonical template** (copy it to `.env` if you’re running this repo directly).
   - If an LLM tool refuses to read/edit `.env.example` due to safety restrictions, **do not create an `env.example` workaround**—instead, ask the user to apply the change manually.
 
+### Sandbox / test installs (fully isolated)
+
+If you want to test the full setup flow (including PR stacks) without impacting your “real” install, run with:
+
+```bash
+npx happy-stacks --sandbox-dir /tmp/happy-stacks-sandbox setup pr --happy=123 --happy-cli=456
+```
+
+To reset completely, just delete the sandbox folder:
+
+```bash
+rm -rf /tmp/happy-stacks-sandbox
+```
+
+Sandbox mode disables global OS side effects (PATH edits, SwiftBar plugin install, LaunchAgents/systemd services) by default.
+To explicitly allow them for testing, set `HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1`.
+
 For contributor/LLM workflow expectations: `[AGENTS.md](AGENTS.md)`.

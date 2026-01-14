@@ -21,6 +21,8 @@ import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
 import { printAuthLoginInstructions } from './utils/auth_login_ux.mjs';
 import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth_files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -154,49 +156,6 @@ function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {
 function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
   const fromEnv = (env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim();
   return fromEnv || join(stackBaseDir, 'server-light');
-}
-
-async function resolveHandyMasterSecretFromStack({ stackName, requireStackExists }) {
-  if (isLegacyAuthSourceName(stackName)) {
-    const baseDir = getLegacyHappyBaseDir();
-    const legacySecretPath = join(baseDir, 'server-light', 'handy-master-secret.txt');
-    const secret = await readTextIfExists(legacySecretPath);
-    return secret ? { secret, source: legacySecretPath } : { secret: null, source: null };
-  }
-
-  if (requireStackExists && !stackExistsSync(stackName)) {
-    throw new Error(`[auth] cannot copy auth: source stack "${stackName}" does not exist`);
-  }
-
-  const sourceBaseDir = getStackDir(stackName);
-  const sourceEnvPath = getStackEnvPath(stackName);
-  const raw = await readTextIfExists(sourceEnvPath);
-  const env = raw ? parseEnvToObject(raw) : {};
-
-  const inline = (env.HANDY_MASTER_SECRET ?? '').trim();
-  if (inline) {
-    return { secret: inline, source: `${sourceEnvPath} (HANDY_MASTER_SECRET)` };
-  }
-
-  const secretFile = (env.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim();
-  if (secretFile) {
-    const secret = await readTextIfExists(secretFile);
-    if (secret) return { secret, source: secretFile };
-  }
-
-  const dataDir = getServerLightDataDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env });
-  const secretPath = join(dataDir, 'handy-master-secret.txt');
-  const secret = await readTextIfExists(secretPath);
-  if (secret) return { secret, source: secretPath };
-
-  // Last-resort legacy: if main has never been migrated to stack dirs.
-  if (stackName === 'main') {
-    const legacy = join(homedir(), '.happy', 'server-light', 'handy-master-secret.txt');
-    const legacySecret = await readTextIfExists(legacy);
-    if (legacySecret) return { secret: legacySecret, source: legacy };
-  }
-
-  return { secret: null, source: null };
 }
 
 function resolveCliHomeDir() {
@@ -671,6 +630,7 @@ async function cmdCopyFrom({ argv, json }) {
   const { secret, source } = await resolveHandyMasterSecretFromStack({
     stackName: fromStackName,
     requireStackExists: !isLegacySource,
+    allowLegacyMainFallback: !isSandboxed() || sandboxAllowsGlobalSideEffects(),
   });
 
   const copied = {

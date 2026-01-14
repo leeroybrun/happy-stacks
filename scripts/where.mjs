@@ -8,6 +8,8 @@ import { parseArgs } from './utils/args.mjs';
 import { getComponentsDir, getComponentDir, getHappyStacksHomeDir, getRootDir, getStackLabel, getStackName, getWorkspaceDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
+import { getCanonicalHomeDir, getCanonicalHomeEnvPath } from './utils/config.mjs';
+import { getSandboxDir } from './utils/sandbox.mjs';
 
 function expandHome(p) {
   return p.replace(/^~(?=\/)/, homedir());
@@ -36,6 +38,9 @@ async function main() {
 
   const rootDir = getRootDir(import.meta.url);
   const homeDir = getHappyStacksHomeDir();
+  const canonicalHomeDir = getCanonicalHomeDir();
+  const canonicalEnv = getCanonicalHomeEnvPath();
+  const sandboxDir = getSandboxDir();
   const runtimeDir = getRuntimeDir();
   const workspaceDir = getWorkspaceDir(rootDir);
   const componentsDir = getComponentsDir(rootDir);
@@ -60,12 +65,15 @@ async function main() {
     data: {
       ok: true,
       rootDir,
+      sandbox: sandboxDir ? { enabled: true, dir: sandboxDir } : { enabled: false },
       homeDir,
+      canonicalHomeDir,
       runtimeDir,
       workspaceDir,
       componentsDir,
       stack: { name: stackName, label: stackLabel },
       envFiles: {
+        canonical: { path: canonicalEnv, exists: existsSync(canonicalEnv) },
         homeEnv: { path: homeEnv, exists: existsSync(homeEnv) },
         homeLocal: { path: homeLocal, exists: existsSync(homeLocal) },
         active: resolvedActiveEnv ? { path: resolvedActiveEnv.envPath, exists: existsSync(resolvedActiveEnv.envPath) } : null,
@@ -80,12 +88,15 @@ async function main() {
     },
     text: [
       `[where] root:      ${rootDir}`,
+      sandboxDir ? `[where] sandbox:   ${sandboxDir}` : null,
+      `[where] canonical: ${canonicalHomeDir}`,
       `[where] home:      ${homeDir}`,
       `[where] runtime:   ${runtimeDir}`,
       `[where] workspace: ${workspaceDir}`,
       `[where] components:${componentsDir}`,
       '',
       `[where] stack:     ${stackName} (${stackLabel})`,
+      `[where] env (canonical pointer): ${existsSync(canonicalEnv) ? canonicalEnv : `${canonicalEnv} (missing)`}`,
       `[where] env (home defaults): ${existsSync(homeEnv) ? homeEnv : `${homeEnv} (missing)`}`,
       `[where] env (home overrides): ${existsSync(homeLocal) ? homeLocal : `${homeLocal} (missing)`}`,
       `[where] env (active): ${resolvedActiveEnv?.envPath ? resolvedActiveEnv.envPath : '(none)'}`,

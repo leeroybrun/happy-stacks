@@ -1,5 +1,7 @@
 import { spawnProc, run, runCapture } from './utils/proc.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
+import { getStacksStorageRoot } from './utils/paths.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -202,16 +204,20 @@ function authCopyFromSeedHint() {
 }
 
 async function seedCredentialsIfMissing({ cliHomeDir }) {
-  const stacksRootRaw = (process.env.HAPPY_STACKS_STORAGE_DIR ?? process.env.HAPPY_LOCAL_STORAGE_DIR ?? '').trim();
-  const stacksRoot = stacksRootRaw ? stacksRootRaw.replace(/^~(?=\/)/, homedir()) : join(homedir(), '.happy', 'stacks');
+  const stacksRoot = getStacksStorageRoot();
+  const allowGlobal = sandboxAllowsGlobalSideEffects();
 
   const sources = [
     // New layout: main stack credentials (preferred).
     join(stacksRoot, 'main', 'cli'),
-    // Legacy happy-local storage root (most common for existing users).
-    join(homedir(), '.happy', 'local', 'cli'),
-    // Older global location.
-    join(homedir(), '.happy'),
+    ...((!isSandboxed() || allowGlobal)
+      ? [
+          // Legacy happy-local storage root (most common for existing users).
+          join(homedir(), '.happy', 'local', 'cli'),
+          // Older global location.
+          join(homedir(), '.happy'),
+        ]
+      : []),
   ];
 
   const copyIfMissing = async ({ relPath, mode, label }) => {
@@ -421,7 +427,7 @@ export async function startLocalDaemonWithAuth({
   }
 
   // Best-effort: for the main stack, also stop the legacy global daemon home (~/.happy) to prevent legacy overlap.
-  if (stackName === 'main') {
+  if (stackName === 'main' && (!isSandboxed() || sandboxAllowsGlobalSideEffects())) {
     const legacyEnv = { ...daemonEnv, HAPPY_HOME_DIR: join(homedir(), '.happy') };
     try {
       await new Promise((resolve) => {
@@ -454,7 +460,9 @@ export async function startLocalDaemonWithAuth({
       return { ok: true, exitCode, excerpt: null, logPath: null };
     }
 
-    const logPath = getLatestDaemonLogPath(cliHomeDir) || getLatestDaemonLogPath(join(homedir(), '.happy'));
+    const logPath =
+      getLatestDaemonLogPath(cliHomeDir) ||
+      ((!isSandboxed() || sandboxAllowsGlobalSideEffects()) ? getLatestDaemonLogPath(join(homedir(), '.happy')) : null);
     const excerpt = logPath ? readLastLines(logPath, 120) : null;
     return { ok: false, exitCode, excerpt, logPath };
   };

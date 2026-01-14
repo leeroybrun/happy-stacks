@@ -6,6 +6,7 @@ import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTty, promptSelect, withRl } from './utils/wizard.mjs';
+import { getCanonicalHomeDir } from './utils/config.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { fetchHappyHealth } from './utils/server.mjs';
@@ -522,7 +523,7 @@ async function cmdSetup({ rootDir, argv }) {
 
     installPath = await withRl(async (rl) => {
       const v = await promptSelect(rl, {
-        title: `Add ${join(homedir(), '.happy-stacks', 'bin')} to your shell PATH?`,
+        title: `Add ${join(getCanonicalHomeDir(), 'bin')} to your shell PATH?`,
         options: [
           { label: 'no (default)', value: false },
           { label: 'yes', value: true },

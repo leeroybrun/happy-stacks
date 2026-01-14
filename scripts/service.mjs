@@ -2,6 +2,8 @@ import './utils/env.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/pm.mjs';
+import { getCanonicalHomeDir } from './utils/config.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
@@ -63,6 +65,13 @@ function getAutostartEnv({ rootDir }) {
 }
 
 export async function installService() {
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    throw new Error(
+      '[local] service install is disabled in sandbox mode.\n' +
+        'Reason: services are global OS state (launchd/systemd) and can affect your real installation.\n' +
+        'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+    );
+  }
   if (process.platform !== 'darwin' && process.platform !== 'linux') {
     throw new Error('[local] service install is only supported on macOS (launchd) and Linux (systemd user).');
   }
@@ -89,6 +98,10 @@ export async function installService() {
 }
 
 export async function uninstallService() {
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    // Sandbox cleanups should be safe and should not touch global services by default.
+    return;
+  }
   if (process.platform !== 'darwin' && process.platform !== 'linux') return;
 
   if (process.platform === 'linux') {
@@ -132,7 +145,7 @@ function systemdEnvLines(env) {
 async function ensureSystemdUserServiceEnabled({ rootDir, label, env }) {
   const unitPath = systemdUnitPath();
   await mkdir(dirname(unitPath), { recursive: true });
-  const happysShim = join(homedir(), '.happy-stacks', 'bin', 'happys');
+  const happysShim = join(getCanonicalHomeDir(), 'bin', 'happys');
   const entry = existsSync(happysShim) ? happysShim : join(rootDir, 'bin', 'happys.mjs');
   const exec = existsSync(happysShim) ? entry : `${process.execPath} ${entry}`;
 

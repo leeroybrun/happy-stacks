@@ -9,7 +9,8 @@ is_git_repo() {
 }
 
 git_cache_dir() {
-  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$HOME/.happy-stacks}}"
+  local canonical="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$canonical}}"
   local dir="${home}/cache/swiftbar/git"
   mkdir -p "$dir" 2>/dev/null || true
   echo "$dir"

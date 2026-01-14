@@ -309,7 +309,7 @@ async function main() {
     }
   } catch {
     report.checks.happyOnPath = { ok: false };
-    if (!json) console.log('ℹ️ happy on PATH: not found (run: happys init --install-path, or add ~/.happy-stacks/bin to PATH)');
+    if (!json) console.log(`ℹ️ happy on PATH: not found (run: happys init --install-path, or add ${join(getHappyStacksHomeDir(), 'bin')} to PATH)`);
   }
 
   // happys on PATH
@@ -321,7 +321,7 @@ async function main() {
     }
   } catch {
     report.checks.happysOnPath = { ok: false };
-    if (!json) console.log('ℹ️ happys on PATH: not found (run: happys init --install-path, or add ~/.happy-stacks/bin to PATH)');
+    if (!json) console.log(`ℹ️ happys on PATH: not found (run: happys init --install-path, or add ${join(getHappyStacksHomeDir(), 'bin')} to PATH)`);
   }
 
   if (!json) {
@@ -331,7 +331,7 @@ async function main() {
       console.log('- Install a stable runtime (recommended for SwiftBar/services): happys self update');
     }
     if (!report.checks.happysOnPath?.ok) {
-      console.log('- Add shims to PATH: export PATH="$HOME/.happy-stacks/bin:$PATH" (or: happys init --install-path)');
+      console.log(`- Add shims to PATH: export PATH="${join(getHappyStacksHomeDir(), 'bin')}:$PATH" (or: happys init --install-path)`);
     }
     console.log('');
   }

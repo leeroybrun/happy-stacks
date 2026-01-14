@@ -938,7 +938,32 @@ function firstExistingPath(paths) {
   return '';
 }
 
-async function maybeInstallCodeRabbitWrapper({ rootDir, env }) {
+async function resolveRealBinary({ rootDir, env, name, ignorePrefix }) {
+  // Prefer a non-wrapper binary if a wrapper is already on PATH.
+  try {
+    const raw = (await runCapture('which', ['-a', name], { cwd: rootDir, env })).toString();
+    const candidates = raw
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const c of candidates) {
+      if (ignorePrefix && c.startsWith(ignorePrefix)) continue;
+      return c;
+    }
+  } catch {
+    // fall through
+  }
+  // Fallback: best-effort single path.
+  try {
+    const single = (await runCapture('which', [name], { cwd: rootDir, env })).toString().trim();
+    if (ignorePrefix && single.startsWith(ignorePrefix)) return '';
+    return single;
+  } catch {
+    return '';
+  }
+}
+
+async function maybeInstallCodeRabbitWrapper({ rootDir, env, componentDirs = [] }) {
   // Problem:
   // - Edison runs the CodeRabbit CLI as a "blocking" validator in happy-local presets.
   // - The upstream CodeRabbit CLI defaults to an interactive UX and may emit only progress
@@ -948,18 +973,12 @@ async function maybeInstallCodeRabbitWrapper({ rootDir, env }) {
   // - Inject a PATH-local wrapper for `coderabbit` so that when Edison calls it with no args,
   //   we force a deterministic, non-interactive `coderabbit review --plain ...` run and
   //   provide an instruction file that requires structured findings in stdout.
-  let real = '';
-  try {
-    real = (await runCapture('which', ['coderabbit'], { cwd: rootDir, env })).toString().trim();
-  } catch {
-    real = '';
-  }
+  const binDir = join(rootDir, '.edison', '_tmp', 'hs-bin');
+  const real = await resolveRealBinary({ rootDir, env, name: 'coderabbit', ignorePrefix: binDir });
   if (!real) return;
 
-  const binDir = join(rootDir, '.edison', '_tmp', 'hs-bin');
   const wrapperPath = join(binDir, process.platform === 'win32' ? 'coderabbit.cmd' : 'coderabbit');
   const wrapperJsPath = join(binDir, 'coderabbit-wrapper.mjs');
-  const configPath = join(rootDir, '.edison', 'validators', 'overlays', 'coderabbit-cli-config.md');
 
   await mkdir(binDir, { recursive: true }).catch(() => {});
 
@@ -984,22 +1003,37 @@ const finalArgs = argv.length
       "review",
       "--plain",
       "--type",
-      "all",
+      "committed",
       "--no-color",
       "--cwd",
       defaultCwd,
       ...(configFile ? ["--config", configFile] : []),
     ];
 
-const child = spawn(realBin, finalArgs, {
-  stdio: "inherit",
-  env: { ...process.env, CODERABBIT_WRAPPER_ACTIVE: "1" },
-});
+let attempts = 0;
+function spawnOnce() {
+  attempts += 1;
+  const child = spawn(realBin, finalArgs, {
+    stdio: "inherit",
+    env: { ...process.env, CODERABBIT_WRAPPER_ACTIVE: "1" },
+  });
 
-child.on("exit", (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  process.exit(code ?? 1);
-});
+  child.on("error", (err) => {
+    if (err && err.code === "EAGAIN" && attempts < 5) {
+      setTimeout(spawnOnce, 250);
+      return;
+    }
+    console.error(err);
+    process.exit(1);
+  });
+
+  child.on("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    process.exit(code ?? 1);
+  });
+}
+
+spawnOnce();
 `;
 
   await writeFile(wrapperJsPath, wrapperJs, 'utf-8');
@@ -1017,14 +1051,14 @@ child.on("exit", (code, signal) => {
   // Choose a review cwd that matches the task scope as closely as possible.
   // Happy-stacks sets EDISON_CI__FINGERPRINT__GIT_ROOTS to the targeted component repos.
   const roots = parseJsonArrayFromEnv(env.EDISON_CI__FINGERPRINT__GIT_ROOTS);
-  const inferredCwd = firstExistingPath(roots) || (env.AGENTS_PROJECT_ROOT ?? '').toString() || rootDir;
+  const wt = componentDirs.find((p) => typeof p === 'string' && p.includes('/components/.worktrees/')) || '';
+  const inferredCwd = wt || firstExistingPath(roots) || (env.AGENTS_PROJECT_ROOT ?? '').toString() || rootDir;
 
   const sep = pathListSeparator();
   const prevPath = (env.PATH ?? '').toString();
   env.PATH = `${binDir}${sep}${prevPath}`;
   env.CODERABBIT_REAL_BIN = real;
   env.CODERABBIT_CWD = inferredCwd;
-  env.CODERABBIT_CONFIG_FILE = configPath;
 }
 
 async function listTaskFilesAll({ rootDir }) {

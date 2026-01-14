@@ -8,14 +8,13 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commandHelpArgs, renderHappysRootHelp, resolveHappysCommand } from '../scripts/utils/cli_registry.mjs';
+import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../scripts/utils/canonical_home.mjs';
 
 function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
-function expandHome(p) {
-  return String(p ?? '').replace(/^~(?=\/)/, homedir());
-}
+// expandHome is imported from scripts/utils/canonical_home.mjs
 
 function dotenvGetQuick(envPath, key) {
   try {
@@ -47,7 +46,7 @@ function resolveCliRootDir() {
   if (fromEnv) return expandHome(fromEnv);
 
   // Stable pointer file: even if the real home dir is elsewhere, `happys init` writes the pointer here.
-  const canonicalEnv = join(homedir(), '.happy-stacks', '.env');
+  const canonicalEnv = getCanonicalHomeEnvPathFromEnv(process.env);
   const v =
     dotenvGetQuick(canonicalEnv, 'HAPPY_STACKS_CLI_ROOT_DIR') ||
     dotenvGetQuick(canonicalEnv, 'HAPPY_LOCAL_CLI_ROOT_DIR') ||
@@ -86,9 +85,64 @@ function resolveHomeDir() {
   if (fromEnv) return expandHome(fromEnv);
 
   // Stable pointer file: even if the real home dir is elsewhere, `happys init` writes the pointer here.
-  const canonicalEnv = join(homedir(), '.happy-stacks', '.env');
+  const canonicalEnv = getCanonicalHomeEnvPathFromEnv(process.env);
   const v = dotenvGetQuick(canonicalEnv, 'HAPPY_STACKS_HOME_DIR') || dotenvGetQuick(canonicalEnv, 'HAPPY_LOCAL_HOME_DIR') || '';
   return v ? expandHome(v) : join(homedir(), '.happy-stacks');
+}
+
+function stripGlobalOpt(argv, { name, aliases = [] }) {
+  const names = [name, ...aliases];
+  for (const n of names) {
+    const eq = `${n}=`;
+    const iEq = argv.findIndex((a) => a.startsWith(eq));
+    if (iEq >= 0) {
+      const value = argv[iEq].slice(eq.length);
+      const next = [...argv.slice(0, iEq), ...argv.slice(iEq + 1)];
+      return { value, argv: next };
+    }
+    const i = argv.indexOf(n);
+    if (i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('-')) {
+      const value = argv[i + 1];
+      const next = [...argv.slice(0, i), ...argv.slice(i + 2)];
+      return { value, argv: next };
+    }
+  }
+  return { value: '', argv };
+}
+
+function applySandboxDirIfRequested(argv) {
+  const explicit = (process.env.HAPPY_STACKS_SANDBOX_DIR ?? '').trim();
+  const { value, argv: nextArgv } = stripGlobalOpt(argv, { name: '--sandbox-dir', aliases: ['--sandbox'] });
+  const raw = value || explicit;
+  if (!raw) return { argv: nextArgv, enabled: false };
+
+  const sandboxDir = expandHome(raw);
+  // Keep all state under one folder that can be deleted to reset completely.
+  const canonicalHomeDir = join(sandboxDir, 'canonical');
+  const homeDir = join(sandboxDir, 'home');
+  const workspaceDir = join(sandboxDir, 'workspace');
+  const runtimeDir = join(sandboxDir, 'runtime');
+  const storageDir = join(sandboxDir, 'storage');
+
+  process.env.HAPPY_STACKS_SANDBOX_DIR = sandboxDir;
+  process.env.HAPPY_STACKS_CLI_ROOT_DISABLE = '1'; // never re-exec into a user's "real" install when sandboxing
+
+  process.env.HAPPY_STACKS_CANONICAL_HOME_DIR = process.env.HAPPY_STACKS_CANONICAL_HOME_DIR ?? canonicalHomeDir;
+  process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR = process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR ?? process.env.HAPPY_STACKS_CANONICAL_HOME_DIR;
+
+  process.env.HAPPY_STACKS_HOME_DIR = process.env.HAPPY_STACKS_HOME_DIR ?? homeDir;
+  process.env.HAPPY_LOCAL_HOME_DIR = process.env.HAPPY_LOCAL_HOME_DIR ?? process.env.HAPPY_STACKS_HOME_DIR;
+
+  process.env.HAPPY_STACKS_WORKSPACE_DIR = process.env.HAPPY_STACKS_WORKSPACE_DIR ?? workspaceDir;
+  process.env.HAPPY_LOCAL_WORKSPACE_DIR = process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? process.env.HAPPY_STACKS_WORKSPACE_DIR;
+
+  process.env.HAPPY_STACKS_RUNTIME_DIR = process.env.HAPPY_STACKS_RUNTIME_DIR ?? runtimeDir;
+  process.env.HAPPY_LOCAL_RUNTIME_DIR = process.env.HAPPY_LOCAL_RUNTIME_DIR ?? process.env.HAPPY_STACKS_RUNTIME_DIR;
+
+  process.env.HAPPY_STACKS_STORAGE_DIR = process.env.HAPPY_STACKS_STORAGE_DIR ?? storageDir;
+  process.env.HAPPY_LOCAL_STORAGE_DIR = process.env.HAPPY_LOCAL_STORAGE_DIR ?? process.env.HAPPY_STACKS_STORAGE_DIR;
+
+  return { argv: nextArgv, enabled: true };
 }
 
 function maybeAutoUpdateNotice(cliRootDir, cmd) {
@@ -193,8 +247,10 @@ function runNodeScript(cliRootDir, scriptRelPath, args) {
 
 function main() {
   const cliRootDir = getCliRootDir();
+  const initialArgv = process.argv.slice(2);
+  const { argv, enabled: sandboxed } = applySandboxDirIfRequested(initialArgv);
+  void sandboxed;
   maybeReexecToCliRoot(cliRootDir);
-  const argv = process.argv.slice(2);
 
   // If the user passed only flags (common via `npx happy-stacks --help`),
   // treat it as root help rather than `help --help` (which would look like

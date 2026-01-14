@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDotenv } from './dotenv.mjs';
+import { getCanonicalHomeEnvPathFromEnv } from './canonical_home.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './sandbox.mjs';
 
 async function loadEnvFile(path, { override = false, overridePrefix = null } = {}) {
   try {
@@ -99,11 +101,11 @@ function applyStacksPrefixMapping() {
   }
 }
 
-// If HAPPY_STACKS_HOME_DIR isn't set, try the canonical pointer file at ~/.happy-stacks/.env first.
+// If HAPPY_STACKS_HOME_DIR isn't set, try the canonical pointer file at <canonicalHomeDir>/.env first.
 //
 // This allows installs where the "real" home/workspace/runtime are elsewhere, while still
 // giving us a stable discovery location for launchd/SwiftBar/minimal shells.
-const canonicalEnvPath = join(homedir(), '.happy-stacks', '.env');
+const canonicalEnvPath = getCanonicalHomeEnvPathFromEnv(process.env);
 if (!(process.env.HAPPY_STACKS_HOME_DIR ?? '').trim() && existsSync(canonicalEnvPath)) {
   await loadEnvFile(canonicalEnvPath, { override: false });
   await loadEnvFile(canonicalEnvPath, { override: true, overridePrefix: 'HAPPY_STACKS_' });
@@ -160,7 +162,8 @@ if (hasHomeConfig) {
   const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
   const stacksStorageRootRaw = (process.env.HAPPY_STACKS_STORAGE_DIR ?? process.env.HAPPY_LOCAL_STORAGE_DIR ?? '').trim();
   const stacksStorageRoot = stacksStorageRootRaw ? expandHome(stacksStorageRootRaw) : join(homedir(), '.happy', 'stacks');
-  const legacyStacksRoot = join(homedir(), '.happy', 'local', 'stacks');
+  const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
+  const legacyStacksRoot = allowLegacy ? join(homedir(), '.happy', 'local', 'stacks') : join(stacksStorageRoot, '__legacy_disabled__');
 
   const candidates = [
     join(stacksStorageRoot, stackName, 'env'),

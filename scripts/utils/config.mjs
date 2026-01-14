@@ -1,14 +1,18 @@
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { ensureEnvFileUpdated } from './env_file.mjs';
 import { getHappyStacksHomeDir, resolveStackEnvPath } from './paths.mjs';
+import { getCanonicalHomeDirFromEnv } from './canonical_home.mjs';
 
 export function getHomeEnvPath() {
   return join(getHappyStacksHomeDir(), '.env');
 }
 
+export function getCanonicalHomeDir() {
+  return getCanonicalHomeDirFromEnv(process.env);
+}
+
 export function getCanonicalHomeEnvPath() {
-  return join(homedir(), '.happy-stacks', '.env');
+  return join(getCanonicalHomeDir(), '.env');
 }
 
 export function getHomeEnvLocalPath() {

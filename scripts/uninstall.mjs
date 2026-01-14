@@ -10,6 +10,8 @@ import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { getHappyStacksHomeDir, getRootDir, getStacksStorageRoot } from './utils/paths.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
+import { getCanonicalHomeEnvPath } from './utils/config.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 function expandHome(p) {
   return p.replace(/^~(?=\/)/, homedir());
@@ -69,13 +71,14 @@ async function main() {
   if (wantsHelp(argv, { flags }) || argv.includes('help')) {
     printResult({
       json,
-      data: { flags: ['--remove-workspace', '--remove-stacks', '--yes'], json: true },
+      data: { flags: ['--remove-workspace', '--remove-stacks', '--yes', '--global'], json: true },
       text: [
         '[uninstall] usage:',
         '  happys uninstall [--json]   # dry-run',
         '  happys uninstall --yes [--json]',
         '  happys uninstall --remove-workspace --yes',
         '  happys uninstall --remove-stacks --yes',
+        '  happys uninstall --global --yes   # also remove global OS integrations (services/SwiftBar) even in sandbox mode',
         '',
         'notes:',
         '  - default removes: runtime, shims, cache, SwiftBar assets + plugin files, and LaunchAgent services',
@@ -93,11 +96,12 @@ async function main() {
   const yes = flags.has('--yes');
   const removeWorkspace = flags.has('--remove-workspace');
   const removeStacks = flags.has('--remove-stacks');
+  const allowGlobal = flags.has('--global') || sandboxAllowsGlobalSideEffects();
 
   const dryRun = !yes;
 
   // 1) Stop/uninstall services best-effort.
-  if (!dryRun) {
+  if (!dryRun && (!isSandboxed() || allowGlobal)) {
     try {
       spawnSync(process.execPath, [join(rootDir, 'scripts', 'service.mjs'), 'uninstall'], {
         stdio: json ? 'ignore' : 'inherit',
@@ -110,9 +114,15 @@ async function main() {
   }
 
   // 2) Remove SwiftBar plugin files best-effort.
-  const menubar = dryRun ? { ok: true, removed: 0, pluginsDir: resolveSwiftbarPluginsDir() } : await removeSwiftbarPluginFiles().catch(() => ({ ok: false, removed: 0, pluginsDir: null }));
+  const menubar =
+    isSandboxed() && !allowGlobal
+      ? { ok: true, removed: 0, pluginsDir: null, skipped: 'sandbox' }
+      : dryRun
+        ? { ok: true, removed: 0, pluginsDir: resolveSwiftbarPluginsDir() }
+        : await removeSwiftbarPluginFiles().catch(() => ({ ok: false, removed: 0, pluginsDir: null }));
 
   // 3) Remove home-managed runtime + shims + extras + cache + env pointers.
+  const canonicalEnv = getCanonicalHomeEnvPath();
   const toRemove = [
     join(homeDir, 'bin'),
     join(homeDir, 'runtime'),
@@ -120,6 +130,8 @@ async function main() {
     join(homeDir, 'cache'),
     join(homeDir, '.env'),
     join(homeDir, 'env.local'),
+    // Stable pointer file (can differ from homeDir for custom installs).
+    canonicalEnv,
   ];
   const removedPaths = [];
   for (const p of toRemove) {

@@ -3,10 +3,12 @@ import { cp, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 async function ensureSwiftbarAssets({ cliRootDir }) {
   const homeDir = getHappyStacksHomeDir();
@@ -35,9 +37,20 @@ function openSwiftbarPluginsDir() {
   }
 }
 
-function removeSwiftbarPlugins() {
+function sandboxPluginBasename() {
+  const sandboxDir = (process.env.HAPPY_STACKS_SANDBOX_DIR ?? '').trim();
+  if (!sandboxDir) return '';
+  const hash = createHash('sha256').update(sandboxDir).digest('hex').slice(0, 10);
+  return `happy-stacks.sandbox-${hash}`;
+}
+
+function removeSwiftbarPlugins({ patterns }) {
+  const pats = (patterns ?? []).filter(Boolean);
+  const args = pats.length ? pats.map((p) => `"${p}"`).join(' ') : '"happy-stacks.*.sh" "happy-local.*.sh"';
   const s =
-    'DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)"; if [[ -z "$DIR" ]]; then DIR="$HOME/Library/Application Support/SwiftBar/Plugins"; fi; if [[ -d "$DIR" ]]; then rm -f "$DIR"/happy-stacks.*.sh "$DIR"/happy-local.*.sh 2>/dev/null || true; echo "$DIR"; else echo ""; fi';
+    `DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)"; ` +
+    `if [[ -z "$DIR" ]]; then DIR="$HOME/Library/Application Support/SwiftBar/Plugins"; fi; ` +
+    `if [[ -d "$DIR" ]]; then rm -f "$DIR"/${args} 2>/dev/null || true; echo "$DIR"; else echo ""; fi`;
   const res = spawnSync('bash', ['-lc', s], { encoding: 'utf-8' });
   if (res.status !== 0) {
     return null;
@@ -75,7 +88,8 @@ async function main() {
         '',
         'notes:',
         '  - installs SwiftBar plugin into the active SwiftBar plugin folder',
-        '  - keeps plugin source under ~/.happy-stacks/extras/swiftbar for stability',
+        '  - keeps plugin source under <homeDir>/extras/swiftbar for stability',
+        '  - sandbox mode: install/uninstall are disabled by default (set HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1 to override)',
       ].join('\n'),
     });
     return;
@@ -93,7 +107,14 @@ async function main() {
   }
 
   if (cmd === 'menubar:uninstall' || cmd === 'uninstall') {
-    const dir = removeSwiftbarPlugins();
+    if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+      printResult({ json, data: { ok: true, skipped: 'sandbox' }, text: '[menubar] uninstall skipped (sandbox mode)' });
+      return;
+    }
+    const patterns = isSandboxed()
+      ? [`${sandboxPluginBasename()}.*.sh`]
+      : ['happy-stacks.*.sh', 'happy-local.*.sh'];
+    const dir = removeSwiftbarPlugins({ patterns });
     printResult({ json, data: { ok: true, pluginsDir: dir }, text: dir ? `[menubar] removed plugins from ${dir}` : '[menubar] no plugins dir found' });
     return;
   }
@@ -123,9 +144,26 @@ async function main() {
   }
 
   if (cmd === 'menubar:install' || cmd === 'install') {
+    if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+      throw new Error(
+        '[menubar] install is disabled in sandbox mode.\n' +
+          'Reason: SwiftBar plugin installation writes to a global user folder.\n' +
+          'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+      );
+    }
     const { destDir } = await ensureSwiftbarAssets({ cliRootDir });
     const installer = join(destDir, 'install.sh');
-    const res = spawnSync('bash', [installer, '--force'], { stdio: 'inherit', env: { ...process.env, HAPPY_STACKS_HOME_DIR: getHappyStacksHomeDir() } });
+    const env = {
+      ...process.env,
+      HAPPY_STACKS_HOME_DIR: getHappyStacksHomeDir(),
+      ...(isSandboxed()
+        ? {
+            HAPPY_STACKS_SWIFTBAR_PLUGIN_BASENAME: sandboxPluginBasename(),
+            HAPPY_STACKS_SWIFTBAR_PLUGIN_WRAPPER: '1',
+          }
+        : {}),
+    };
+    const res = spawnSync('bash', [installer, '--force'], { stdio: 'inherit', env });
     if (res.status !== 0) {
       process.exit(res.status ?? 1);
     }

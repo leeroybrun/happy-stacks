@@ -11,12 +11,13 @@ import { installService, uninstallService } from './service.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 /**
  * Install/setup the local stack:
  * - ensure components exist (optionally clone if missing)
  * - install dependencies where needed
- * - build happy-cli (optional) and install `happy`/`happys` shims under `~/.happy-stacks/bin`
+ * - build happy-cli (optional) and install `happy`/`happys` shims under `<homeDir>/bin`
  * - build the web UI bundle (so `run` can serve it)
  * - optional macOS autostart (LaunchAgent)
  */
@@ -152,7 +153,9 @@ async function interactiveWizard({ rootDir, defaults }) {
     });
 
     const enableAutostart = await promptSelect(rl, {
-      title: 'Enable macOS autostart (LaunchAgent)?',
+      title: isSandboxed()
+        ? 'Enable macOS autostart (LaunchAgent)? (NOTE: sandbox mode; this is global OS state)'
+        : 'Enable macOS autostart (LaunchAgent)?',
       options: [
         { label: 'no (default)', value: false },
         { label: 'yes', value: true },
@@ -211,6 +214,8 @@ async function main() {
   const rootDir = getRootDir(import.meta.url);
 
   const interactive = flags.has('--interactive') && isTty();
+  const allowGlobal = sandboxAllowsGlobalSideEffects();
+  const sandboxed = isSandboxed();
 
   // Defaults for wizard.
   const defaultRepoSource = resolveRepoSource({ flags });
@@ -220,7 +225,7 @@ async function main() {
     upstreamOwner: 'slopus',
     serverComponentName: getServerComponentName({ kv }),
     allowClone: !flags.has('--no-clone') && ((process.env.HAPPY_LOCAL_CLONE_MISSING ?? '1') !== '0' || flags.has('--clone')),
-    enableAutostart: flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1',
+    enableAutostart: (!sandboxed || allowGlobal) && (flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1'),
     buildTauri: flags.has('--tauri') && !flags.has('--no-tauri'),
   };
 
@@ -260,7 +265,8 @@ async function main() {
   const cloneMissingDefault = (process.env.HAPPY_LOCAL_CLONE_MISSING ?? '1') !== '0';
   const allowClone =
     wizard?.allowClone ?? (!flags.has('--no-clone') && (flags.has('--clone') || cloneMissingDefault));
-  const enableAutostart = wizard?.enableAutostart ?? (flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1');
+  const enableAutostartRaw = wizard?.enableAutostart ?? (flags.has('--autostart') || (process.env.HAPPY_LOCAL_AUTOSTART ?? '0') === '1');
+  const enableAutostart = sandboxed && !allowGlobal ? false : enableAutostartRaw;
   const disableAutostart = flags.has('--no-autostart');
 
   const serverComponentName = (wizard?.serverComponentName ?? getServerComponentName({ kv })).trim();
@@ -366,7 +372,7 @@ async function main() {
       serverComponentName,
       dirs: { serverLightDir, serverFullDir, cliDir: cliDirFinal, uiDir: uiDirFinal },
       cloned: allowClone,
-      autostart: enableAutostart ? 'enabled' : disableAutostart ? 'disabled' : 'unchanged',
+      autostart: enableAutostart ? 'enabled' : sandboxed && enableAutostartRaw && !allowGlobal ? 'skipped (sandbox)' : disableAutostart ? 'disabled' : 'unchanged',
       interactive: Boolean(wizard),
     },
     text: '[local] setup complete',

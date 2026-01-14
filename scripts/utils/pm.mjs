@@ -252,8 +252,9 @@ export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {
 
   const shim = `#!/bin/bash
 set -euo pipefail
-HOME_DIR="\${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
-HAPPYS="$HOME_DIR/bin/happys"
+# Prefer the sibling happys shim (works for sandbox installs too).
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+HAPPYS="$BIN_DIR/happys"
 if [[ -x "$HAPPYS" ]]; then
   exec "$HAPPYS" happy "$@"
 fi

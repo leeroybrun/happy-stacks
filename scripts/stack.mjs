@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 
 import { parseArgs } from './utils/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc.mjs';
-import { getComponentDir, getComponentsDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
+import { getComponentDir, getComponentsDir, getHappyStacksHomeDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
 import {
   createWorktree,
@@ -34,6 +34,9 @@ import { openUrlInBrowser } from './utils/browser.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth_files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
+import { getHomeEnvLocalPath } from './utils/config.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
@@ -205,49 +208,6 @@ function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
   return fromEnv || join(stackBaseDir, 'server-light');
 }
 
-async function resolveHandyMasterSecretFromStack({ stackName, requireStackExists }) {
-  if (isLegacyAuthSourceName(stackName)) {
-    const baseDir = getLegacyHappyBaseDir();
-    const legacySecretPath = join(baseDir, 'server-light', 'handy-master-secret.txt');
-    const secret = await readTextIfExists(legacySecretPath);
-    return secret ? { secret, source: legacySecretPath } : { secret: null, source: null };
-  }
-
-  if (requireStackExists && !stackExistsSync(stackName)) {
-    throw new Error(`[stack] cannot copy auth: source stack "${stackName}" does not exist`);
-  }
-
-  const sourceBaseDir = getStackDir(stackName);
-  const sourceEnvPath = getStackEnvPath(stackName);
-  const raw = await readExistingEnv(sourceEnvPath);
-  const env = parseEnvToObject(raw);
-
-  const inline = (env.HANDY_MASTER_SECRET ?? '').trim();
-  if (inline) {
-    return { secret: inline, source: `${sourceEnvPath} (HANDY_MASTER_SECRET)` };
-  }
-
-  const secretFile = (env.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim();
-  if (secretFile) {
-    const secret = await readTextIfExists(secretFile);
-    if (secret) return { secret, source: secretFile };
-  }
-
-  const dataDir = getServerLightDataDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env });
-  const secretPath = join(dataDir, 'handy-master-secret.txt');
-  const secret = await readTextIfExists(secretPath);
-  if (secret) return { secret, source: secretPath };
-
-  // Last-resort legacy: if main has never been migrated to stack dirs.
-  if (stackName === 'main') {
-    const legacy = join(homedir(), '.happy', 'server-light', 'handy-master-secret.txt');
-    const legacySecret = await readTextIfExists(legacy);
-    if (legacySecret) return { secret: legacySecret, source: legacy };
-  }
-
-  return { secret: null, source: null };
-}
-
 async function copyAuthFromStackIntoNewStack({
   fromStackName,
   stackName,
@@ -260,6 +220,7 @@ async function copyAuthFromStackIntoNewStack({
   const { secret, source } = await resolveHandyMasterSecretFromStack({
     stackName: fromStackName,
     requireStackExists: requireSourceStackExists,
+    allowLegacyMainFallback: !isSandboxed() || sandboxAllowsGlobalSideEffects(),
   });
 
   const copied = { secret: false, accessKey: false, settings: false, sourceStack: fromStackName };
@@ -1403,7 +1364,7 @@ async function cmdAudit({ rootDir, argv }) {
 
   const report = [];
   const ports = new Map(); // port -> [stackName]
-  const otherWorkspaceRoot = join(homedir(), '.happy-stacks', 'workspace');
+  const otherWorkspaceRoot = join(getHappyStacksHomeDir(), 'workspace');
 
   for (const stackName of stacks) {
     const resolved = resolveStackEnvPath(stackName);
@@ -1880,7 +1841,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         created: created.trim() ? JSON.parse(created.trim()) : { ok: true },
         next: {
           login: `happys stack auth ${name} login`,
-          setEnv: `# add to ~/.happy-stacks/env.local:\nHAPPY_STACKS_AUTH_SEED_FROM=${name}\nHAPPY_STACKS_AUTO_AUTH_SEED=1`,
+          setEnv: `# add to ${getHomeEnvLocalPath()}:\nHAPPY_STACKS_AUTH_SEED_FROM=${name}\nHAPPY_STACKS_AUTO_AUTH_SEED=1`,
           reseedAll: `happys auth copy-from ${name} --all --except=main,${name}`,
         },
       },
@@ -2064,13 +2025,16 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         console.log(`[stack] skipping guided login. You can do it later with: happys stack auth ${name} login`);
       }
 
-      const wantEnvRaw = (await prompt(rl, `Set this as the default auth seed (writes ~/.happy-stacks/env.local)? (Y/n): `, { defaultValue: 'y' }))
+      const wantEnvRaw = (await prompt(
+        rl,
+        `Set this as the default auth seed (writes ${getHomeEnvLocalPath()})? (Y/n): `,
+        { defaultValue: 'y' }
+      ))
         .trim()
         .toLowerCase();
       const wantEnv = wantEnvRaw === 'y' || wantEnvRaw === 'yes' || wantEnvRaw === '';
       if (wantEnv) {
-        const homeDir = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim() ? process.env.HAPPY_STACKS_HOME_DIR.trim().replace(/^~(?=\/)/, homedir()) : join(homedir(), '.happy-stacks');
-        const envLocalPath = join(homeDir, 'env.local');
+        const envLocalPath = getHomeEnvLocalPath();
         await ensureEnvFileUpdated({
           envPath: envLocalPath,
           updates: [
@@ -2080,7 +2044,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         });
         console.log(`[stack] updated: ${envLocalPath}`);
       } else {
-        console.log(`[stack] tip: set in ~/.happy-stacks/env.local: HAPPY_STACKS_AUTH_SEED_FROM=${name} and HAPPY_STACKS_AUTO_AUTH_SEED=1`);
+        console.log(`[stack] tip: set in ${getHomeEnvLocalPath()}: HAPPY_STACKS_AUTH_SEED_FROM=${name} and HAPPY_STACKS_AUTO_AUTH_SEED=1`);
       }
 
       if (!savedDevKey) {
@@ -2104,7 +2068,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
       }
     });
   } else {
-    console.log(`- set as default seed (recommended) in ~/.happy-stacks/env.local:`);
+    console.log(`- set as default seed (recommended) in ${getHomeEnvLocalPath()}:`);
     console.log(`  HAPPY_STACKS_AUTH_SEED_FROM=${name}`);
     console.log(`  HAPPY_STACKS_AUTO_AUTH_SEED=1`);
     console.log(`- (optional) seed existing stacks: happys auth copy-from ${name} --all --except=main,${name}`);
@@ -2390,7 +2354,8 @@ async function cmdPrStack({ rootDir, argv }) {
   const devAuthAccessKeyPath = join(resolveStackEnvPath('dev-auth').baseDir, 'cli', 'access.key');
 
   const hasMainAccessKey = existsSync(mainAccessKeyPath);
-  const hasLegacyAccessKey = existsSync(legacyAccessKeyPath);
+  const allowGlobal = sandboxAllowsGlobalSideEffects();
+  const hasLegacyAccessKey = (!isSandboxed() || allowGlobal) && existsSync(legacyAccessKeyPath);
   const hasDevAuthAccessKey = existsSync(devAuthAccessKeyPath) && existsSync(resolveStackEnvPath('dev-auth').envPath);
 
   const inferredSeedFromEnv = resolveAuthSeedFromEnv(process.env);

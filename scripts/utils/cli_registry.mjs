@@ -317,6 +317,9 @@ export function renderHappysRootHelp() {
   return [
     'happys - Happy Stacks CLI',
     '',
+    'global flags:',
+    '  --sandbox-dir PATH   Run fully isolated under PATH (no writes to your real ~/.happy-stacks or ~/.happy/stacks)',
+    '',
     'usage:',
     ...usageLines.map((l) => `  ${l}`),
     '',

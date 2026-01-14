@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # SwiftBar menu action wrapper.
-# Runs `happys` using the stable shim installed under ~/.happy-stacks/bin.
+# Runs `happys` using the stable shim installed under <homeDir>/bin.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_HOME_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Prefer explicit env vars, but default to the install location inferred from this script path.
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+CANONICAL_HOME_DIR="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$CANONICAL_HOME_DIR}}"
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 
 HAPPYS_BIN="$HAPPY_LOCAL_DIR/bin/happys"

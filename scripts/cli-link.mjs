@@ -11,7 +11,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
  *
  * What it does:
  * - optionally builds `components/happy-cli` (controlled by env/flags)
- * - installs `happy`/`happys` shims under `~/.happy-stacks/bin` (recommended over `npm link`)
+ * - installs `happy`/`happys` shims under `<homeDir>/bin` (default: `~/.happy-stacks/bin`) (recommended over `npm link`)
  *
  * Env:
  * - HAPPY_LOCAL_CLI_BUILD=0 to skip building happy-cli

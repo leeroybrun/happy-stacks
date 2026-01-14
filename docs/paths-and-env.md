@@ -67,7 +67,11 @@ Happy Stacks loads env in `scripts/utils/env.mjs`.
 
 ### 0) “Canonical pointer” env (discovery)
 
-If `HAPPY_STACKS_HOME_DIR` is *not* set, we first try to read `~/.happy-stacks/.env` to discover the intended home dir (useful for LaunchAgents / SwiftBar / minimal shells).
+If `HAPPY_STACKS_HOME_DIR` is *not* set, we first try to read the **canonical pointer** env file to discover the intended home dir (useful for LaunchAgents / SwiftBar / minimal shells).
+
+- Default canonical pointer path: `~/.happy-stacks/.env`
+- Override canonical pointer location:
+  - `HAPPY_STACKS_CANONICAL_HOME_DIR=/some/dir` (pointer becomes `<dir>/.env`)
 
 ### 1) Global defaults (home config) OR cloned-repo defaults
 
@@ -110,6 +114,23 @@ Stack env files are allowed to contain **non-prefixed keys** (like `DATABASE_URL
 - Put **your personal overrides** in `~/.happy-stacks/env.local`.
 - Put **per-stack isolation config** in the stack env file `~/.happy/stacks/<name>/env` (this is what `happys stack edit` and `happys stack wt` mutate).
 - Put **repo-local dev-only defaults** in `<cliRootDir>/.env` (works best when you’re actually running from that checkout as the CLI root dir).
+
+---
+
+## Sandbox / test installs (fully isolated)
+
+If you want to test the full install + setup flows without touching your real installation, run with:
+
+```bash
+npx happy-stacks --sandbox-dir /tmp/happy-stacks-sandbox where
+```
+
+In sandbox mode, Happy Stacks redirects **home/workspace/runtime/storage** under the sandbox folder (so you can `rm -rf` it to reset).
+
+Global OS side effects (PATH edits, SwiftBar plugin install, LaunchAgents/systemd services) are **disabled by default** in sandbox mode.
+To explicitly allow them for testing, set:
+
+- `HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1`
 
 ---
 

@@ -37,7 +37,8 @@ swiftbar_now_ms() {
 
 swiftbar_profile_log_file() {
   # Keep logs in the home install by default (stable across repos/worktrees).
-  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$HOME/.happy-stacks}}"
+  local canonical="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$canonical}}"
   echo "${home}/cache/swiftbar/profile.log"
 }
 
@@ -195,7 +196,8 @@ expand_home_path() {
 }
 
 resolve_happy_local_dir() {
-  local home="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+  local canonical="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$canonical}}"
 
   # If user provided a valid directory, keep it.
   if [[ -n "${HAPPY_LOCAL_DIR:-}" ]] && [[ -f "$HAPPY_LOCAL_DIR/extras/swiftbar/lib/utils.sh" ]]; then
@@ -363,8 +365,9 @@ resolve_node_bin() {
     return
   fi
 
-  # Fall back to reading ~/.happy-stacks/.env (written by `happys init`).
-  local home="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"
+  # Fall back to reading the canonical pointer env (written by `happys init`).
+  local canonical="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+  local home="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$canonical}}"
   local env_file="$home/.env"
   if [[ -f "$env_file" ]]; then
     local v

@@ -19,8 +19,10 @@
 
 # SwiftBar runs with a minimal environment, so users often won't have
 # HAPPY_STACKS_HOME_DIR / HAPPY_STACKS_WORKSPACE_DIR exported.
-# Treat ~/.happy-stacks/.env as the canonical pointer file (written by `happys init`).
-CANONICAL_ENV_FILE="$HOME/.happy-stacks/.env"
+# Treat <canonicalHomeDir>/.env as the canonical pointer file (written by `happys init`).
+# Default: ~/.happy-stacks/.env
+CANONICAL_HOME_DIR="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+CANONICAL_ENV_FILE="$CANONICAL_HOME_DIR/.env"
 
 _dotenv_get_quick() {
   # Usage: _dotenv_get_quick /path/to/env KEY
@@ -54,7 +56,7 @@ if [[ -f "$CANONICAL_ENV_FILE" ]]; then
 fi
 _home_from_canonical="$(_expand_home_quick "${_home_from_canonical:-}")"
 
-HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-${_home_from_canonical:-$HOME/.happy-stacks}}"
+HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-${_home_from_canonical:-$CANONICAL_HOME_DIR}}"
 HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-$HAPPY_STACKS_HOME_DIR}"
 HAPPY_LOCAL_PORT="${HAPPY_LOCAL_PORT:-3005}"
 

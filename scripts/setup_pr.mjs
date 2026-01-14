@@ -3,6 +3,7 @@ import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { run } from './utils/proc.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -43,11 +44,12 @@ function detectBestAuthSource() {
   const devAuthEnvExists = existsSync(resolveStackEnvPath('dev-auth').envPath);
   const devAuthAccessKey = join(resolveStackEnvPath('dev-auth').baseDir, 'cli', 'access.key');
   const mainAccessKey = join(resolveStackEnvPath('main').baseDir, 'cli', 'access.key');
+  const allowGlobal = sandboxAllowsGlobalSideEffects();
   const legacyAccessKey = join(homedir(), '.happy', 'cli', 'access.key');
 
   const hasDevAuth = devAuthEnvExists && existsSync(devAuthAccessKey);
   const hasMain = existsSync(mainAccessKey);
-  const hasLegacy = existsSync(legacyAccessKey);
+  const hasLegacy = (!isSandboxed() || allowGlobal) && existsSync(legacyAccessKey);
 
   if (hasDevAuth) return { from: 'dev-auth', hasAny: true };
   if (hasMain) return { from: 'main', hasAny: true };
@@ -91,7 +93,7 @@ async function main() {
         '  happys setup pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]   # alias',
         '',
         'What it does (idempotent):',
-        '- ensures ~/.happy-stacks exists (init)',
+        '- ensures happy-stacks home exists (init)',
         '- bootstraps/clones missing components (upstream by default)',
         '- creates or reuses a PR stack and checks out PR worktrees',
         '- optionally seeds auth (best available source: dev-auth → main → legacy)',

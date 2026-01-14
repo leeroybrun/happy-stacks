@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './sandbox.mjs';
 
 const PRIMARY_APP_SLUG = 'happy-stacks';
 const LEGACY_APP_SLUG = 'happy-local';
@@ -101,12 +102,13 @@ export function resolveStackBaseDir(stackName = getStackName()) {
   const preferredRoot = getStacksStorageRoot();
   const newBase = join(preferredRoot, stackName);
   const legacyBase = stackName === 'main' ? LEGACY_STORAGE_ROOT : join(LEGACY_STORAGE_ROOT, 'stacks', stackName);
+  const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
 
   // Prefer the new layout by default.
   //
   // For non-main stacks, keep legacy layout if the legacy env exists and the new env does not.
   // This avoids breaking existing stacks until `happys stack migrate` is run.
-  if (stackName !== 'main') {
+  if (allowLegacy && stackName !== 'main') {
     const newEnv = join(preferredRoot, stackName, 'env');
     const legacyEnv = join(LEGACY_STORAGE_ROOT, 'stacks', stackName, 'env');
     if (!existsSync(newEnv) && existsSync(legacyEnv)) {
@@ -123,11 +125,12 @@ export function resolveStackEnvPath(stackName = getStackName()) {
   const newEnv = join(getStacksStorageRoot(), stackName, 'env');
   // Legacy layout: ~/.happy/local/stacks/<name>/env
   const legacyEnv = join(LEGACY_STORAGE_ROOT, 'stacks', stackName, 'env');
+  const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
 
   if (existsSync(newEnv)) {
     return { envPath: newEnv, isLegacy: false, baseDir: join(getStacksStorageRoot(), stackName) };
   }
-  if (existsSync(legacyEnv)) {
+  if (allowLegacy && existsSync(legacyEnv)) {
     return { envPath: legacyEnv, isLegacy: true, baseDir: join(LEGACY_STORAGE_ROOT, 'stacks', stackName) };
   }
   return { envPath: newEnv, isLegacy, baseDir: activeBase };

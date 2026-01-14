@@ -15,10 +15,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_HOME_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Prefer explicit env vars, but default to the install location inferred from this script path.
-HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+CANONICAL_HOME_DIR="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$DEFAULT_HOME_DIR}}"
+HAPPY_LOCAL_DIR="${HAPPY_LOCAL_DIR:-${HAPPY_STACKS_HOME_DIR:-$CANONICAL_HOME_DIR}}"
 HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 
-# Use shared resolver for workspace dir (respects HAPPY_STACKS_WORKSPACE_DIR and ~/.happy-stacks/.env).
+# Use shared resolver for workspace dir (respects HAPPY_STACKS_WORKSPACE_DIR and canonical pointer env).
 LIB_DIR="$HAPPY_LOCAL_DIR/extras/swiftbar/lib"
 if [[ -f "$LIB_DIR/utils.sh" ]]; then
   # shellcheck source=/dev/null

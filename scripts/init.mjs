@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { ensureCanonicalHomeEnvUpdated, ensureHomeEnvUpdated } from './utils/config.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 function expandHome(p) {
   return p.replace(/^~(?=\/)/, homedir());
@@ -139,15 +140,15 @@ async function main() {
   if (argv.includes('--help') || argv.includes('-h') || argv[0] === 'help') {
     console.log([
       '[init] usage:',
-      '  happys init [--home-dir=/path] [--workspace-dir=/path] [--runtime-dir=/path] [--storage-dir=/path] [--cli-root-dir=/path] [--tailscale-bin=/path] [--tailscale-cmd-timeout-ms=MS] [--tailscale-enable-timeout-ms=MS] [--tailscale-enable-timeout-ms-auto=MS] [--tailscale-reset-timeout-ms=MS] [--install-path] [--no-runtime] [--force-runtime] [--no-bootstrap] [--] [bootstrap args...]',
+      '  happys init [--canonical-home-dir=/path] [--home-dir=/path] [--workspace-dir=/path] [--runtime-dir=/path] [--storage-dir=/path] [--cli-root-dir=/path] [--tailscale-bin=/path] [--tailscale-cmd-timeout-ms=MS] [--tailscale-enable-timeout-ms=MS] [--tailscale-enable-timeout-ms-auto=MS] [--tailscale-reset-timeout-ms=MS] [--install-path] [--no-runtime] [--force-runtime] [--no-bootstrap] [--] [bootstrap args...]',
       '',
       'notes:',
-      '  - writes ~/.happy-stacks/.env (stable pointer file)',
-      '  - default workspace: ~/.happy-stacks/workspace',
-      '  - default runtime: ~/.happy-stacks/runtime (recommended for services/SwiftBar)',
+      '  - writes <canonicalHomeDir>/.env (stable pointer file; default: ~/.happy-stacks/.env)',
+      '  - default workspace: <homeDir>/workspace',
+      '  - default runtime: <homeDir>/runtime (recommended for services/SwiftBar)',
       '  - runtime install is skipped if the same version is already installed (use --force-runtime to reinstall)',
       '  - set HAPPY_STACKS_INIT_NO_RUNTIME=1 to persist skipping runtime installs on this machine',
-      '  - optional: --install-path adds ~/.happy-stacks/bin to your shell PATH (idempotent)',
+      '  - optional: --install-path adds <homeDir>/bin to your shell PATH (idempotent)',
       '  - by default, runs `happys bootstrap --interactive` at the end (TTY only) IF components are not already present',
     ].join('\n'));
     return;
@@ -159,7 +160,17 @@ async function main() {
   //
   // Other scripts load this pointer via `scripts/utils/env.mjs`, but `init.mjs` is often run before
   // anything else (or directly from a repo checkout). So we load it here too.
-  const canonicalEnvPath = join(homedir(), '.happy-stacks', '.env');
+  const canonicalHomeDirRaw = parseArgValue(argv, 'canonical-home-dir');
+  const canonicalHomeDir = expandHome(firstNonEmpty(
+    canonicalHomeDirRaw,
+    process.env.HAPPY_STACKS_CANONICAL_HOME_DIR,
+    process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR,
+    join(homedir(), '.happy-stacks'),
+  ));
+  process.env.HAPPY_STACKS_CANONICAL_HOME_DIR = canonicalHomeDir;
+  process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR = process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR ?? canonicalHomeDir;
+
+  const canonicalEnvPath = join(canonicalHomeDir, '.env');
   if (existsSync(canonicalEnvPath)) {
     await loadEnvFile(canonicalEnvPath, { override: false });
     await loadEnvFile(canonicalEnvPath, { override: true, overridePrefix: 'HAPPY_STACKS_' });
@@ -245,6 +256,7 @@ async function main() {
   const nodePath = process.execPath;
 
   await mkdir(homeDir, { recursive: true });
+  await mkdir(canonicalHomeDir, { recursive: true });
   await mkdir(workspaceDir, { recursive: true });
   await mkdir(join(workspaceDir, 'components'), { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
@@ -306,10 +318,10 @@ async function main() {
   const shim = [
     '#!/bin/bash',
     'set -euo pipefail',
-    'CANONICAL_ENV="$HOME/.happy-stacks/.env"',
+    `CANONICAL_ENV="${canonicalEnvPath}"`,
     '',
     '# Best-effort: if env vars are not exported (common under launchd/SwiftBar),',
-    '# read the stable pointer file at ~/.happy-stacks/.env to discover the real dirs.',
+    '# read the stable pointer file at CANONICAL_ENV to discover the real dirs.',
     'if [[ -f "$CANONICAL_ENV" ]]; then',
     '  if [[ -z "${HAPPY_STACKS_HOME_DIR:-}" ]]; then',
     '    HAPPY_STACKS_HOME_DIR="$(grep -E \'^HAPPY_STACKS_HOME_DIR=\' "$CANONICAL_ENV" | head -n 1 | sed \'s/^HAPPY_STACKS_HOME_DIR=//\')" || true',
@@ -333,7 +345,7 @@ async function main() {
     '  fi',
     'fi',
     '',
-    'HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HOME/.happy-stacks}"',
+    `HOME_DIR="\${HAPPY_STACKS_HOME_DIR:-${canonicalHomeDir}}"`,
     'ENV_FILE="$HOME_DIR/.env"',
     'WORKDIR="${HAPPY_STACKS_WORKSPACE_DIR:-$HOME_DIR/workspace}"',
     'if [[ -d "$WORKDIR" ]]; then',
@@ -370,12 +382,19 @@ async function main() {
   await writeExecutable(happysShimPath, shim);
   await writeExecutable(happyShimPath, `#!/bin/bash\nset -euo pipefail\nexec \"${happysShimPath}\" happy \"$@\"\n`);
 
+  let didInstallPath = false;
   if (argv.includes('--install-path')) {
-    const res = await ensurePathInstalled({ homeDir });
-    if (res.updated) {
-      console.log(`[init] added ${homeDir}/bin to PATH via ${res.path}`);
+    if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+      console.log('[init] sandbox mode: skipping --install-path (would modify your shell config)');
+      console.log('[init] tip: set HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1 if you really want to test PATH modifications');
     } else {
-      console.log(`[init] PATH already configured in ${res.path}`);
+      const res = await ensurePathInstalled({ homeDir });
+      didInstallPath = true;
+      if (res.updated) {
+        console.log(`[init] added ${homeDir}/bin to PATH via ${res.path}`);
+      } else {
+        console.log(`[init] PATH already configured in ${res.path}`);
+      }
     }
   }
 
@@ -387,7 +406,7 @@ async function main() {
   console.log(`[init] shims:     ${homeDir}/bin`);
   console.log('');
 
-  if (!argv.includes('--install-path')) {
+  if (!argv.includes('--install-path') || !didInstallPath) {
     console.log('[init] note: to use `happys` / `happy` from any terminal, add shims to PATH:');
     console.log(`  export PATH="${homeDir}/bin:$PATH"`);
     console.log('  (or re-run: happys init --install-path)');
