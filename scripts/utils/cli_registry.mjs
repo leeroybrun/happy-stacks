@@ -30,6 +30,14 @@ export function getHappysRegistry() {
       description: 'Guided setup (selfhost or dev)',
     },
     {
+      name: 'setup-pr',
+      aliases: ['setupPR', 'setuppr'],
+      kind: 'node',
+      scriptRelPath: 'scripts/setup_pr.mjs',
+      rootUsage: 'happys setup-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
+      description: 'One-shot: set up + run a PR stack (maintainer-friendly)',
+    },
+    {
       name: 'uninstall',
       kind: 'node',
       scriptRelPath: 'scripts/uninstall.mjs',

@@ -196,14 +196,18 @@ function main() {
   maybeReexecToCliRoot(cliRootDir);
   const argv = process.argv.slice(2);
 
+  // If the user passed only flags (common via `npx happy-stacks --help`),
+  // treat it as root help rather than `help --help` (which would look like
+  // "unknown command: --help").
   const cmd = argv.find((a) => !a.startsWith('--')) ?? 'help';
-  const rest = cmd === 'help' ? [] : argv.slice(argv.indexOf(cmd) + 1);
+  const cmdIndex = argv.indexOf(cmd);
+  const rest = cmdIndex >= 0 ? argv.slice(cmdIndex + 1) : [];
 
   maybeAutoUpdateNotice(cliRootDir, cmd);
 
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
-    const target = argv[argv.indexOf(cmd) + 1];
-    if (!target) {
+    const target = rest[0];
+    if (!target || target.startsWith('-')) {
       console.log(usage());
       return;
     }

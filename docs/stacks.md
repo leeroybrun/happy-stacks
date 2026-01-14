@@ -57,7 +57,7 @@ Example (most common):
 happys stack pr pr123 \
   --happy=https://github.com/slopus/happy/pull/123 \
   --happy-cli=https://github.com/slopus/happy-cli/pull/456 \
-  --seed-auth --copy-auth-from=dev-auth \
+  --seed-auth --copy-auth-from=dev-auth --link-auth \
   --dev
 ```
 
@@ -67,6 +67,7 @@ Notes:
 - `--seed-auth` uses `happys stack auth <stack> copy-from <source>` under the hood, which also best-effort seeds DB Account rows (avoids FK errors like Prisma `P2003`).
 - You can use your existing non-stacks Happy install as an auth seed source with:
   - `--copy-auth-from=legacy` (reads from `~/.happy/{cli,server-light}` best-effort)
+- `--link-auth` symlinks auth files instead of copying them (keeps credentials in sync, but reduces isolation).
 - For full-server stacks (`happy-server`), seeding may need Docker infra:
 
 ```bash

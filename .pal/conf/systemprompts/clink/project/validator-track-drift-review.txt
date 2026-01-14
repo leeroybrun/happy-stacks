@@ -30,23 +30,19 @@ You have:
 
 Read the drift probe output from command evidence (fast path).
 
-1) Locate the current fingerprint snapshot directory:
+1) Check evidence freshness/completeness:
 
 ```bash
-node ./bin/happys.mjs edison -- evidence status <task-id> --json
+happys edison --stack=<stack> -- evidence status <task-id> --preset <preset>
 ```
 
-This prints `snapshotDir` pointing at:
-
-- `.project/qa/evidence-snapshots/.../<clean|dirty>/`
-
-2) Read the evidence file produced by evidence capture:
+2) View the command evidence output (do NOT browse snapshot directories):
 
 ```bash
-cat "<snapshotDir>/command-track-coherence.txt"
+happys edison --stack=<stack> -- evidence show <task-id> --command track-coherence
 ```
 
-Interpretation (this file is JSON from `happys edison track:coherence --json`):
+Interpretation (this command output is JSON from `happys edison track:coherence --json`):
 
 - If it returns `{ skipped: true, reason: "no_targets" }`: **PASS** (no cross-track validation applicable).
 - Otherwise, it returns `results[]` with per-component comparisons:

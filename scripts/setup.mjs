@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { installService } from './service.mjs';
+import { getDevAuthKeyPath } from './utils/dev_auth_key.mjs';
 
 function boolFromFlagsOrKv({ flags, kv, onFlag, offFlag, key, defaultValue }) {
   if (flags.has(offFlag)) return false;
@@ -180,7 +181,156 @@ function mainCliHomeDirForEnvPath(envPath) {
   return join(baseDir, 'cli');
 }
 
+function getMainStacksAccessKeyPath() {
+  const cliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
+  return join(cliHomeDir, 'access.key');
+}
+
+function getLegacyHappyAccessKeyPath() {
+  return join(homedir(), '.happy', 'cli', 'access.key');
+}
+
+function getDevAuthStackAccessKeyPath(stackName = 'dev-auth') {
+  const { baseDir, envPath } = resolveStackEnvPath(stackName);
+  if (!existsSync(envPath)) return null;
+  return join(baseDir, 'cli', 'access.key');
+}
+
+function detectAuthSources() {
+  const devKeyPath = getDevAuthKeyPath();
+  const mainAccessKeyPath = getMainStacksAccessKeyPath();
+  const legacyAccessKeyPath = getLegacyHappyAccessKeyPath();
+  const devAuthAccessKeyPath = getDevAuthStackAccessKeyPath('dev-auth');
+  return {
+    devKeyPath,
+    hasDevKey: existsSync(devKeyPath),
+    mainAccessKeyPath,
+    hasMainAccessKey: existsSync(mainAccessKeyPath),
+    legacyAccessKeyPath,
+    hasLegacyAccessKey: existsSync(legacyAccessKeyPath),
+    devAuthAccessKeyPath,
+    hasDevAuthAccessKey: Boolean(devAuthAccessKeyPath && existsSync(devAuthAccessKeyPath)),
+  };
+}
+
+async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
+  if (!interactive) return;
+
+  const sources = detectAuthSources();
+
+  // 1) Dev key reuse (preferred: reuse if present).
+  if (sources.hasDevKey) {
+    // eslint-disable-next-line no-console
+    console.log(`[setup] dev-key: detected (${sources.devKeyPath})`);
+    const choice = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title:
+          'A dev key is already configured on this machine. Reuse it? (recommended for restoring the UI account)',
+        options: [
+          { label: 'yes (default) — keep using the existing dev key', value: 'reuse' },
+          { label: 'print it now (will display a secret key)', value: 'print' },
+          { label: 'skip', value: 'skip' },
+        ],
+        defaultIndex: 0,
+      });
+    });
+    if (choice === 'print') {
+      // eslint-disable-next-line no-console
+      console.log('[setup] dev-key: printing (sensitive)');
+      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['dev-key', '--print'] });
+    }
+  } else if (profile === 'dev') {
+    // No dev key: offer to create a dedicated seed stack, which guides generating/saving one.
+    const create = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title: 'No dev key found. Create one now via a dedicated dev-auth seed stack?',
+        options: [
+          { label: 'yes (recommended)', value: true },
+          { label: 'no', value: false },
+        ],
+        defaultIndex: 0,
+      });
+    });
+    if (create) {
+      await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth'] });
+    }
+  }
+
+  // 2) Default auth seeding source for NEW stacks (ordering requested):
+  // - prefer dev-auth if we have a dev key (or dev-auth is already set up)
+  // - else prefer main happy-stacks (if authenticated)
+  // - else prefer legacy ~/.happy (if present)
+  const opts = [];
+  if (sources.hasDevKey && sources.hasDevAuthAccessKey) {
+    opts.push({ label: 'use dev-auth seed stack (recommended)', value: 'dev-auth' });
+  }
+  if (!sources.hasDevAuthAccessKey && sources.hasDevKey && existsSync(resolveStackEnvPath('dev-auth').envPath)) {
+    opts.push({ label: 'use dev-auth seed stack (exists but not authenticated yet)', value: 'dev-auth' });
+  }
+  if (sources.hasMainAccessKey) {
+    opts.push({ label: 'use Happy Stacks main (copy/symlink from main stack)', value: 'main' });
+  }
+  if (sources.hasLegacyAccessKey) {
+    opts.push({ label: 'use legacy ~/.happy (best-effort)', value: 'legacy' });
+  }
+  opts.push({ label: 'disable auto-seeding (I will login per stack)', value: 'off' });
+
+  const defaultSeed = opts[0]?.value ?? 'off';
+  const seedChoice = await withRl(async (rl) => {
+    return await promptSelect(rl, {
+      title: 'Default auth source for new stacks (so PR stacks can work without re-login)?',
+      options: opts,
+      defaultIndex: Math.max(0, opts.findIndex((o) => o.value === defaultSeed)),
+    });
+  });
+
+  if (seedChoice === 'off') {
+    await ensureEnvLocalUpdated({
+      rootDir,
+      updates: [
+        { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '0' },
+        { key: 'HAPPY_LOCAL_AUTO_AUTH_SEED', value: '0' },
+      ],
+    });
+    return;
+  }
+
+  // Symlink vs copy for seeded stacks (preferred: symlink so credentials stay up to date).
+  const linkChoice = await withRl(async (rl) => {
+    return await promptSelect(rl, {
+      title: 'When seeding auth into stacks, reuse credentials via symlink or copy?',
+      options: [
+        { label: 'reuse (recommended) — symlink so it stays up to date', value: 'link' },
+        { label: 'copy — more isolated per stack', value: 'copy' },
+      ],
+      defaultIndex: 0,
+    });
+  });
+
+  await ensureEnvLocalUpdated({
+    rootDir,
+    updates: [
+      { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '1' },
+      { key: 'HAPPY_LOCAL_AUTO_AUTH_SEED', value: '1' },
+      { key: 'HAPPY_STACKS_AUTH_SEED_FROM', value: String(seedChoice) },
+      { key: 'HAPPY_LOCAL_AUTH_SEED_FROM', value: String(seedChoice) },
+      { key: 'HAPPY_STACKS_AUTH_LINK', value: linkChoice === 'link' ? '1' : '0' },
+      { key: 'HAPPY_LOCAL_AUTH_LINK', value: linkChoice === 'link' ? '1' : '0' },
+    ],
+  });
+}
+
 async function cmdSetup({ rootDir, argv }) {
+  // Alias: `happys setup pr ...` (maintainer-friendly, idempotent PR setup).
+  // This delegates to `setup-pr` so the logic stays centralized.
+  const firstPositional = argv.find((a) => !a.startsWith('--')) ?? '';
+  if (firstPositional === 'pr') {
+    const idx = argv.indexOf('pr');
+    const forwarded = idx >= 0 ? argv.slice(idx + 1) : [];
+    await run(process.execPath, [join(rootDir, 'scripts', 'setup_pr.mjs'), ...forwarded], { cwd: rootDir });
+    return;
+  }
+
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
   if (wantsHelp(argv, { flags })) {
@@ -205,12 +355,14 @@ async function cmdSetup({ rootDir, argv }) {
         '  happys setup',
         '  happys setup --profile=selfhost',
         '  happys setup --profile=dev',
+        '  happys setup pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>]',
         '  happys setup --auth',
         '  happys setup --no-auth',
         '',
         'notes:',
         '  - selfhost profile is a guided installer for running Happy locally (optionally with Tailscale + autostart).',
         '  - dev profile prepares a development workspace (bootstrap wizard + optional dev tooling).',
+        '  - `setup pr` is a non-interactive, idempotent helper for maintainers to run PR stacks (delegates to `happys setup-pr`).',
       ].join('\n'),
     });
     return;
@@ -446,51 +598,8 @@ async function cmdSetup({ rootDir, argv }) {
         await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['new', '--interactive'] });
       }
 
-      // Optional: import existing non-stacks Happy credentials into Happy Stacks main.
-      // This helps maintainers who already have a Happy account on their machine avoid a fresh login.
-      //
-      // Source (legacy): ~/.happy/cli/access.key
-      // Target (Happy Stacks main): ~/.happy/stacks/main/cli/access.key (or legacy base dir if not migrated)
-      try {
-        const legacyAccessKey = join(homedir(), '.happy', 'cli', 'access.key');
-        const mainCliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
-        const mainAccessKey = join(mainCliHomeDir, 'access.key');
-
-        if (existsSync(legacyAccessKey) && !existsSync(mainAccessKey)) {
-          const doImport = await withRl(async (rl) => {
-            return await promptSelect(rl, {
-              title: 'Found an existing Happy install at ~/.happy. Import its credentials into Happy Stacks main?',
-              options: [
-                { label: 'yes (recommended)', value: true },
-                { label: 'no', value: false },
-              ],
-              defaultIndex: 0,
-            });
-          });
-          if (doImport) {
-            // Best-effort: also tries to seed DB account rows if the legacy local DB exists.
-            await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['copy-from', 'legacy', '--allow-main'] });
-          }
-        }
-      } catch {
-        // ignore
-      }
-
-      // Optional: set up a dedicated dev auth seed stack.
-      // This makes future stacks able to auto-seed auth without re-login.
-      const setupDevAuth = await withRl(async (rl) => {
-        return await promptSelect(rl, {
-          title: 'Set up a dedicated auth seed stack (dev-auth) for development stacks?',
-          options: [
-            { label: 'no (default)', value: false },
-            { label: 'yes', value: true },
-          ],
-          defaultIndex: 0,
-        });
-      });
-      if (setupDevAuth) {
-        await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth'] });
-      }
+      // Guided maintainer-friendly auth defaults (dev key → main → legacy).
+      await maybeConfigureAuthDefaults({ rootDir, profile, interactive });
     }
   } else {
     // Selfhost setup: run non-interactively and keep it simple.
@@ -570,16 +679,59 @@ async function cmdSetup({ rootDir, argv }) {
     // 8) Optional: auth login (runs interactive browser flow via happy-cli).
     if (authWanted) {
       const ctx = profile === 'selfhost' ? 'selfhost' : 'dev';
-      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['login', `--context=${ctx}`] });
-
       const cliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
       const accessKey = join(cliHomeDir, 'access.key');
-      if (!existsSync(accessKey)) {
+      if (existsSync(accessKey)) {
         // eslint-disable-next-line no-console
-        console.log('[setup] auth: not completed yet (missing access.key). You can retry with: happys auth login');
+        console.log('[setup] auth: already configured (access.key exists)');
       } else {
-        // eslint-disable-next-line no-console
-        console.log('[setup] auth: complete');
+        // Before starting an interactive login, offer the best available shortcut in this order:
+        // For selfhost profile:
+        // - prefer reusing legacy ~/.happy creds if present (maintainers often already have a local install)
+        // - otherwise, run the normal login flow
+        let reused = false;
+        if (interactive) {
+          const legacyAccessKey = join(homedir(), '.happy', 'cli', 'access.key');
+          const hasLegacy = existsSync(legacyAccessKey);
+
+          if (hasLegacy) {
+            const options = [];
+            if (hasLegacy) {
+              options.push({ label: 'reuse legacy ~/.happy (symlink; stays up to date)', value: 'legacy-link' });
+              options.push({ label: 'reuse legacy ~/.happy (copy; more isolated)', value: 'legacy-copy' });
+            }
+            options.push({ label: 'do login flow instead', value: 'login' });
+
+            const choice = await withRl(async (rl) => {
+              return await promptSelect(rl, {
+                title:
+                  'We found existing credentials on this machine. How should Happy Stacks main authenticate?',
+                options,
+                defaultIndex: 0,
+              });
+            });
+
+            if (choice === 'legacy-link') {
+              await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['copy-from', 'legacy', '--allow-main', '--link'] });
+              reused = existsSync(accessKey);
+            } else if (choice === 'legacy-copy') {
+              await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['copy-from', 'legacy', '--allow-main'] });
+              reused = existsSync(accessKey);
+            }
+          }
+        }
+
+        if (!reused) {
+          await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['login', `--context=${ctx}`] });
+        }
+
+        if (!existsSync(accessKey)) {
+          // eslint-disable-next-line no-console
+          console.log('[setup] auth: not completed yet (missing access.key). You can retry with: happys auth login');
+        } else {
+          // eslint-disable-next-line no-console
+          console.log('[setup] auth: complete');
+        }
       }
     } else {
       // eslint-disable-next-line no-console

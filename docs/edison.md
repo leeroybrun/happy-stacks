@@ -195,6 +195,11 @@ Evidence must be captured via Edison (snapshot-based, fingerprinted):
 
 - `happys edison --stack=<stack> -- evidence capture <task-id>`
 
+For reviewing evidence, prefer the CLI (it is staleness-aware):
+
+- `happys edison --stack=<stack> -- evidence status <task-id> --preset <preset>`
+- `happys edison --stack=<stack> -- evidence show <task-id> --command <ci-command>`
+
 Evidence commands are configured in:
 
 - `.edison/config/ci.yml`
@@ -224,6 +229,12 @@ Track drift review is intentionally fast:
 
 - `track:coherence` is captured as **command evidence** (`command-track-coherence.txt`).
 - The `track-drift-review` validator should **read that evidence** and should not re-run `track:coherence` unless evidence is missing/broken.
+
+Additionally, for “what changed?” review:
+
+- `command-task-diff.txt` captures the **full per-component diff** computed inside the stack-pinned component repos.
+  - It detects the correct base ref per repo (using the stack’s configured remote default branch, e.g. `upstream/<defaultBranch>`).
+  - Validators should treat this as the canonical “PR diff” view for code review.
 
 ---
 

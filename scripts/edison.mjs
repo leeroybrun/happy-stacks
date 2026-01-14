@@ -9,7 +9,8 @@ import { resolveLocalhostHost } from './utils/localhost_host.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { mkdir, lstat, rename, symlink, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, lstat, rename, symlink, writeFile, readdir, chmod } from 'node:fs/promises';
+import os from 'node:os';
 
 const COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 
@@ -834,6 +835,198 @@ function truncateLines(raw, maxLines) {
   return `${lines.slice(0, n).join('\n')}\n… (${lines.length - n} more lines truncated)`;
 }
 
+function pathListSeparator() {
+  return process.platform === 'win32' ? ';' : ':';
+}
+
+async function maybeInstallCodexWrapper({ rootDir, env }) {
+  // Why this exists:
+  // - Edison validators may run Codex in a restricted sandbox mode.
+  // - Codex still needs to write its own rollout logs under ~/.codex/sessions for resume/history.
+  // - If ~/.codex isn't explicitly allowed as a writable dir, Codex can fail with permission errors.
+  //
+  // Our approach:
+  // - Do NOT override CODEX_HOME or copy credentials.
+  // - Instead, inject a tiny PATH-local wrapper for `codex` that forwards args and appends:
+  //     --add-dir <home>/.codex
+  //   when not already present.
+  //
+  // This applies only to processes launched via this `happys edison` wrapper.
+  let real = '';
+  try {
+    // NOTE: use the current PATH (before we inject our own wrapper) to find the real binary.
+    real = (await runCapture('which', ['codex'], { cwd: rootDir, env })).toString().trim();
+  } catch {
+    real = '';
+  }
+  if (!real) return;
+
+  const addDir = join(os.homedir(), '.codex');
+  const binDir = join(rootDir, '.edison', '_tmp', 'hs-bin');
+  const wrapperPath = join(binDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+  const wrapperJsPath = join(binDir, 'codex-wrapper.mjs');
+
+  await mkdir(binDir, { recursive: true }).catch(() => {});
+
+  const wrapperJs = `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+
+const realBin = process.env.CODEX_REAL_BIN || "";
+if (!realBin) {
+  console.error("[happys edison] CODEX_REAL_BIN is not set; refusing to run codex wrapper.");
+  process.exit(127);
+}
+
+const desiredAddDir = process.env.CODEX_ADD_DIR || path.join(os.homedir(), ".codex");
+const argv = process.argv.slice(2);
+
+// If caller already set --add-dir, don't inject a duplicate.
+let hasAddDir = false;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--add-dir") { hasAddDir = true; break; }
+  if (a.startsWith("--add-dir=")) { hasAddDir = true; break; }
+}
+
+const finalArgs = hasAddDir ? argv : ["--add-dir", desiredAddDir, ...argv];
+
+const child = spawn(realBin, finalArgs, {
+  stdio: "inherit",
+  env: { ...process.env, CODEX_WRAPPER_ACTIVE: "1" },
+});
+
+child.on("exit", (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  process.exit(code ?? 1);
+});
+`;
+
+  await writeFile(wrapperJsPath, wrapperJs, 'utf-8');
+  await chmod(wrapperJsPath, 0o755).catch(() => {});
+
+  if (process.platform === 'win32') {
+    const cmd = `@echo off\r\nsetlocal\r\nnode "%~dp0\\codex-wrapper.mjs" %*\r\n`;
+    await writeFile(wrapperPath, cmd, 'utf-8');
+  } else {
+    const sh = `#!/usr/bin/env bash\nset -euo pipefail\nexec node \"${wrapperJsPath}\" \"$@\"\n`;
+    await writeFile(wrapperPath, sh, 'utf-8');
+    await chmod(wrapperPath, 0o755).catch(() => {});
+  }
+
+  const sep = pathListSeparator();
+  const prevPath = (env.PATH ?? '').toString();
+  env.PATH = `${binDir}${sep}${prevPath}`;
+  env.CODEX_REAL_BIN = real;
+  env.CODEX_ADD_DIR = addDir;
+}
+
+function parseJsonArrayFromEnv(value) {
+  try {
+    const v = JSON.parse(String(value ?? ''));
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function firstExistingPath(paths) {
+  for (const p of paths) {
+    if (typeof p === 'string' && p.trim()) return p.trim();
+  }
+  return '';
+}
+
+async function maybeInstallCodeRabbitWrapper({ rootDir, env }) {
+  // Problem:
+  // - Edison runs the CodeRabbit CLI as a "blocking" validator in happy-local presets.
+  // - The upstream CodeRabbit CLI defaults to an interactive UX and may emit only progress
+  //   lines when run non-interactively, causing Edison to fail-closed.
+  //
+  // Fix:
+  // - Inject a PATH-local wrapper for `coderabbit` so that when Edison calls it with no args,
+  //   we force a deterministic, non-interactive `coderabbit review --plain ...` run and
+  //   provide an instruction file that requires structured findings in stdout.
+  let real = '';
+  try {
+    real = (await runCapture('which', ['coderabbit'], { cwd: rootDir, env })).toString().trim();
+  } catch {
+    real = '';
+  }
+  if (!real) return;
+
+  const binDir = join(rootDir, '.edison', '_tmp', 'hs-bin');
+  const wrapperPath = join(binDir, process.platform === 'win32' ? 'coderabbit.cmd' : 'coderabbit');
+  const wrapperJsPath = join(binDir, 'coderabbit-wrapper.mjs');
+  const configPath = join(rootDir, '.edison', 'validators', 'overlays', 'coderabbit-cli-config.md');
+
+  await mkdir(binDir, { recursive: true }).catch(() => {});
+
+  const wrapperJs = `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+
+const realBin = process.env.CODERABBIT_REAL_BIN || "";
+if (!realBin) {
+  console.error("[happys edison] CODERABBIT_REAL_BIN is not set; refusing to run coderabbit wrapper.");
+  process.exit(127);
+}
+
+const argv = process.argv.slice(2);
+const defaultCwd = process.env.CODERABBIT_CWD || process.cwd();
+const configFile = process.env.CODERABBIT_CONFIG_FILE || "";
+
+// If Edison calls 'coderabbit' with no args, force a deterministic review run.
+// If args are present, pass through unchanged.
+const finalArgs = argv.length
+  ? argv
+  : [
+      "review",
+      "--plain",
+      "--type",
+      "all",
+      "--no-color",
+      "--cwd",
+      defaultCwd,
+      ...(configFile ? ["--config", configFile] : []),
+    ];
+
+const child = spawn(realBin, finalArgs, {
+  stdio: "inherit",
+  env: { ...process.env, CODERABBIT_WRAPPER_ACTIVE: "1" },
+});
+
+child.on("exit", (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  process.exit(code ?? 1);
+});
+`;
+
+  await writeFile(wrapperJsPath, wrapperJs, 'utf-8');
+  await chmod(wrapperJsPath, 0o755).catch(() => {});
+
+  if (process.platform === 'win32') {
+    const cmd = `@echo off\r\nsetlocal\r\nnode "%~dp0\\coderabbit-wrapper.mjs" %*\r\n`;
+    await writeFile(wrapperPath, cmd, 'utf-8');
+  } else {
+    const sh = `#!/usr/bin/env bash\nset -euo pipefail\nexec node \"${wrapperJsPath}\" \"$@\"\n`;
+    await writeFile(wrapperPath, sh, 'utf-8');
+    await chmod(wrapperPath, 0o755).catch(() => {});
+  }
+
+  // Choose a review cwd that matches the task scope as closely as possible.
+  // Happy-stacks sets EDISON_CI__FINGERPRINT__GIT_ROOTS to the targeted component repos.
+  const roots = parseJsonArrayFromEnv(env.EDISON_CI__FINGERPRINT__GIT_ROOTS);
+  const inferredCwd = firstExistingPath(roots) || (env.AGENTS_PROJECT_ROOT ?? '').toString() || rootDir;
+
+  const sep = pathListSeparator();
+  const prevPath = (env.PATH ?? '').toString();
+  env.PATH = `${binDir}${sep}${prevPath}`;
+  env.CODERABBIT_REAL_BIN = real;
+  env.CODERABBIT_CWD = inferredCwd;
+  env.CODERABBIT_CONFIG_FILE = configPath;
+}
+
 async function listTaskFilesAll({ rootDir }) {
   const out = await listTaskFiles({ rootDir });
   const taskStates = ['todo', 'wip', 'done', 'validated', 'blocked'];
@@ -1464,6 +1657,8 @@ async function main() {
     if (stackName) {
       await ensureStackServerPortForWebServerValidation({ rootDir, stackName, env, edisonArgs, json });
     }
+    await maybeInstallCodexWrapper({ rootDir, env });
+    await maybeInstallCodeRabbitWrapper({ rootDir, env });
     if (!(await pathExists(rootDir))) {
       throw new Error(`[edison] missing repo root: ${rootDir}`);
     }

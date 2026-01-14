@@ -158,6 +158,9 @@ export async function maybeAutoCopyAuthFromMainIfNeeded({
 
   const reason = !hasAccessKey ? 'missing_credentials' : 'no_accounts';
   const fromStackName = resolveAuthSeedFromEnv(env);
+  const linkAuth =
+    (env.HAPPY_STACKS_AUTH_LINK ?? env.HAPPY_LOCAL_AUTH_LINK ?? '').toString().trim() === '1' ||
+    (env.HAPPY_STACKS_AUTH_MODE ?? env.HAPPY_LOCAL_AUTH_MODE ?? '').toString().trim() === 'link';
   if (!quiet) {
     console.log(`[local] auth: auto seed from ${fromStackName} for ${stackName} (${reason})`);
   }
@@ -165,10 +168,14 @@ export async function maybeAutoCopyAuthFromMainIfNeeded({
   // Best-effort: copy credentials/master secret + seed accounts from the configured seed stack.
   // Keep this non-fatal; the daemon will emit actionable errors if it still can't authenticate.
   try {
-    const out = await runCapture(process.execPath, [`${rootDir}/scripts/auth.mjs`, 'copy-from', fromStackName, '--json'], {
+    const out = await runCapture(
+      process.execPath,
+      [`${rootDir}/scripts/auth.mjs`, 'copy-from', fromStackName, '--json', ...(linkAuth ? ['--link'] : [])],
+      {
       cwd: rootDir,
       env: authEnv && typeof authEnv === 'object' ? authEnv : env,
-    });
+      }
+    );
     return { ok: true, skipped: false, reason, out: out.trim() ? JSON.parse(out) : null };
   } catch (e) {
     return { ok: false, skipped: false, reason, error: e instanceof Error ? e.message : String(e) };

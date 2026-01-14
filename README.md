@@ -198,9 +198,30 @@ Create a fully isolated PR stack (creates stack + PR worktrees + optional auth s
 happys stack pr pr123 \
   --happy=https://github.com/slopus/happy/pull/123 \
   --happy-cli=https://github.com/slopus/happy-cli/pull/456 \
-  --seed-auth --copy-auth-from=dev-auth \
+  --seed-auth --copy-auth-from=dev-auth --link-auth \
   --dev
 ```
+
+One-shot “install + run PR stack” (best for maintainers who don’t have Happy Stacks set up yet):
+
+```bash
+npx happy-stacks setup pr \
+  --happy=https://github.com/slopus/happy/pull/123 \
+  --happy-cli=https://github.com/slopus/happy-cli/pull/456
+```
+
+You can also run it as:
+
+```bash
+npx happy-stacks setup-pr \
+  --happy=https://github.com/slopus/happy/pull/123 \
+  --happy-cli=https://github.com/slopus/happy-cli/pull/456
+```
+
+Updating when the PR changes:
+
+- Re-run the same command to fast-forward the PR worktrees.
+- If the PR was force-pushed, add `--force`.
 
 Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 

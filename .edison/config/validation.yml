@@ -38,6 +38,7 @@ validation:
         - command-lint.txt
         - command-test.txt
         - command-track-coherence.txt
+        - command-task-diff.txt
       validators:
         - track-drift-review
         - coderabbit
@@ -69,6 +70,7 @@ validation:
         - command-lint.txt
         - command-test.txt
         - command-track-coherence.txt
+        - command-task-diff.txt
       validators:
         - browser-e2e
         - track-drift-review
@@ -103,6 +105,7 @@ validation:
       test: command-test.txt
       build: command-build.txt
       track-coherence: command-track-coherence.txt
+      task-diff: command-task-diff.txt
 
   # Optional web server profiles for validators that need a running stack.
   #

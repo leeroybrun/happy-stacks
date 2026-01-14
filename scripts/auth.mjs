@@ -20,6 +20,7 @@ import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
 import { printAuthLoginInstructions } from './utils/auth_login_ux.mjs';
 import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth_files.mjs';
+import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -137,15 +138,6 @@ function getStackDir(stackName) {
 
 function getStackEnvPath(stackName) {
   return resolveStackEnvPath(stackName).envPath;
-}
-
-function isLegacyAuthSourceName(name) {
-  const s = String(name ?? '').trim().toLowerCase();
-  return s === 'legacy' || s === 'system' || s === 'local-install';
-}
-
-function getLegacyHappyBaseDir() {
-  return join(homedir(), '.happy');
 }
 
 function stackExistsSync(stackName) {
@@ -568,7 +560,9 @@ async function cmdCopyFrom({ argv, json }) {
     flags.has('--link-auth') ||
     (kv.get('--link') ?? '').trim() === '1' ||
     (kv.get('--symlink') ?? '').trim() === '1' ||
-    (kv.get('--auth-mode') ?? '').trim() === 'link';
+    (kv.get('--auth-mode') ?? '').trim() === 'link' ||
+    (process.env.HAPPY_STACKS_AUTH_LINK ?? process.env.HAPPY_LOCAL_AUTH_LINK ?? '').toString().trim() === '1' ||
+    (process.env.HAPPY_STACKS_AUTH_MODE ?? process.env.HAPPY_LOCAL_AUTH_MODE ?? '').toString().trim() === 'link';
   const allowMain = flags.has('--allow-main') || flags.has('--main-ok') || (kv.get('--allow-main') ?? '').trim() === '1';
   const exceptRaw = (kv.get('--except') ?? '').trim();
   const except = new Set(exceptRaw.split(',').map((s) => s.trim()).filter(Boolean));
@@ -1080,17 +1074,17 @@ async function main() {
         '[auth] usage:',
         '  happys auth status [--json]',
         '  happys auth login [--force] [--print] [--json]',
-        '  happys auth copy-from <sourceStack|legacy> --all [--except=main,dev-auth] [--force] [--with-infra] [--json]',
+        '  happys auth copy-from <sourceStack|legacy> --all [--except=main,dev-auth] [--force] [--with-infra] [--link] [--json]',
         '  happys auth dev-key [--print] [--format=base64url|backup] [--set=<base64url>] [--clear] [--json]',
         '',
         'advanced:',
         '  happys auth login --context=selfhost|dev|stack   # UX labels only',
-        '  happys auth copy-from legacy --allow-main [--force]   # import ~/.happy creds into main happy-stacks install',
+        '  happys auth copy-from legacy --allow-main [--link] [--force]   # reuse (symlink) or copy ~/.happy creds into main happy-stacks install',
         '',
         'stack-scoped:',
         '  happys stack auth <name> status [--json]',
         '  happys stack auth <name> login [--force] [--print] [--json]',
-        '  happys stack auth <name> copy-from <sourceStack|legacy> [--force] [--with-infra] [--json]',
+        '  happys stack auth <name> copy-from <sourceStack|legacy> [--force] [--with-infra] [--link] [--json]',
       ].join('\n'),
     });
     return;

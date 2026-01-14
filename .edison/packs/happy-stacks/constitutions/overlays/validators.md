@@ -24,5 +24,43 @@
   - Use the stack-resolved component dirs printed by the wrapper (`[edison] component dirs (from stack env): ...`).
   - If you need git status/diff, run them inside the component worktree directory (or via `happys wt git <component> ...`).
   - If the validator prompt lists “Changed Files (Detected)” in happy-local root that are unrelated to the targeted component repos, **ignore them** for scope/risk decisions.
+
+## Diff review: validate against the correct base branch (MANDATORY)
+
+When reviewing code changes, do **not** rely on `git diff` from the happy-local root.
+
+- **The ONLY acceptable way to review a component’s task diff is command evidence**: `command-task-diff.txt`.
+  - If it is missing, **fail-closed** and instruct the operator to re-run:
+    - `happys edison --stack=<stack> -- evidence capture <task-id> --only task-diff`
+  - Do **not** substitute ad-hoc `git diff` output from other repos/dirs as a replacement.
+
+- **What `command-task-diff.txt` represents**:
+  - A **per-component PR-style diff** computed *inside the stack-pinned component repos*.
+  - The diff base is the stack’s configured remote **default branch** (derived from `HAPPY_STACKS_STACK_REMOTE` and that remote’s `HEAD`/default branch).
+  - Each component section includes `baseRef: <remote>/<defaultBranch>` (examples: `upstream/main`, `origin/main`, `fork/happy-server-light`).
+
+- **Multi-component tasks**:
+  - For `hs_kind=track` tasks, `command-task-diff.txt` includes a section for **every component** listed in the task’s `components:` frontmatter.
+  - This is the intended way to review “the diff for the whole track” across multiple repos.
+
+- **How to view it (MUST use evidence commands; do NOT browse snapshot dirs)**:
+  - Check freshness + completeness:
+    - `happys edison --stack=<stack> -- evidence status <task-id> --preset <preset>`
+  - View the diff evidence:
+    - `happys edison --stack=<stack> -- evidence show <task-id> --command task-diff`
+      - Use `--head N` / `--tail N` if needed.
+
+- **Evidence must NOT be written into component repos/worktrees**:
+  - Do not request “write the diff file in the repo/worktree”.
+  - All evidence artifacts are produced via `edison evidence capture` and should be viewed via `edison evidence show`.
+
+This ensures validators review the change set **as a PR diff on top of the targeted base branch**, rather than whatever happens to be dirty in the orchestration repo.
+
+---
+
+## TDD validation: do NOT police git commits for “TDD markers” (MANDATORY)
+
+- This project enforces **TDD behavior**, not “TDD-looking commit history”.
+- **Do not reject** a task because git commits/messages do not contain explicit “RED/GREEN/REFACTOR” markers.
 <!-- /EXTEND -->
 

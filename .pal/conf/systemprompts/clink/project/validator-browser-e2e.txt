@@ -155,6 +155,14 @@ If Playwright MCP tools are unavailable:
 
 - Instead, always log in to the seeded dev account:
   - click **“Login with mobile app”**
-  - run `happys auth dev-key --print` and paste the restore key to log in
+  - **Preferred (avoid leaking the key into logs)**:
+    - copy the restore key to clipboard:
+      - `happys auth dev-key --print | pbcopy`
+    - paste into the restore key field (Cmd+V) and complete login
+  - **Fallback (OK for this validator run: this is a development-only test key)**:
+    - print the key and paste it:
+      - `happys auth dev-key --print`
+    - Note: this key is intended for local dev automation; it is not treated as a production secret.
+    - **Do not mark the validator “blocked” just because the dev key appears in logs/tool output.**
 - When starting a session, ensure a **machine is selected** before pressing “Start”.
   - If you get “Please select a machine…”, open the **machine picker** (machine icon/chip) and select the local machine, then retry.

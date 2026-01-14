@@ -31,6 +31,9 @@ import { requireDir } from './utils/pm.mjs';
 import { waitForHttpOk } from './utils/server.mjs';
 import { resolveLocalhostHost } from './utils/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
+import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth_files.mjs';
+import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
+import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
@@ -190,23 +193,7 @@ async function readTextIfExists(path) {
   }
 }
 
-async function writeSecretFileIfMissing({ path, secret }) {
-  if (existsSync(path)) return false;
-  await ensureDir(dirname(path));
-  await writeFile(path, secret, { encoding: 'utf-8', mode: 0o600 });
-  return true;
-}
-
-async function copyFileIfMissing({ from, to, mode }) {
-  if (existsSync(to)) return false;
-  if (!existsSync(from)) return false;
-  await ensureDir(dirname(to));
-  await copyFile(from, to);
-  if (mode) {
-    await chmod(to, mode).catch(() => {});
-  }
-  return true;
-}
+// auth file copy/link helpers live in scripts/utils/auth_files.mjs
 
 function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {
   const fromEnv = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').trim();
@@ -219,6 +206,13 @@ function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
 }
 
 async function resolveHandyMasterSecretFromStack({ stackName, requireStackExists }) {
+  if (isLegacyAuthSourceName(stackName)) {
+    const baseDir = getLegacyHappyBaseDir();
+    const legacySecretPath = join(baseDir, 'server-light', 'handy-master-secret.txt');
+    const secret = await readTextIfExists(legacySecretPath);
+    return secret ? { secret, source: legacySecretPath } : { secret: null, source: null };
+  }
+
   if (requireStackExists && !stackExistsSync(stackName)) {
     throw new Error(`[stack] cannot copy auth: source stack "${stackName}" does not exist`);
   }
@@ -254,7 +248,15 @@ async function resolveHandyMasterSecretFromStack({ stackName, requireStackExists
   return { secret: null, source: null };
 }
 
-async function copyAuthFromStackIntoNewStack({ fromStackName, stackName, stackEnv, serverComponent, json, requireSourceStackExists }) {
+async function copyAuthFromStackIntoNewStack({
+  fromStackName,
+  stackName,
+  stackEnv,
+  serverComponent,
+  json,
+  requireSourceStackExists,
+  linkMode = false,
+}) {
   const { secret, source } = await resolveHandyMasterSecretFromStack({
     stackName: fromStackName,
     requireStackExists: requireSourceStackExists,
@@ -266,31 +268,45 @@ async function copyAuthFromStackIntoNewStack({ fromStackName, stackName, stackEn
     if (serverComponent === 'happy-server-light') {
       const dataDir = stackEnv.HAPPY_SERVER_LIGHT_DATA_DIR;
       const target = join(dataDir, 'handy-master-secret.txt');
-      copied.secret = await writeSecretFileIfMissing({ path: target, secret });
+      const sourcePath = source && !String(source).includes('(HANDY_MASTER_SECRET)') ? String(source) : '';
+      copied.secret =
+        linkMode && sourcePath && existsSync(sourcePath)
+          ? await linkFileIfMissing({ from: sourcePath, to: target })
+          : await writeSecretFileIfMissing({ path: target, secret });
     } else if (serverComponent === 'happy-server') {
       const target = stackEnv.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE;
       if (target) {
-        copied.secret = await writeSecretFileIfMissing({ path: target, secret });
+        const sourcePath = source && !String(source).includes('(HANDY_MASTER_SECRET)') ? String(source) : '';
+        copied.secret =
+          linkMode && sourcePath && existsSync(sourcePath)
+            ? await linkFileIfMissing({ from: sourcePath, to: target })
+            : await writeSecretFileIfMissing({ path: target, secret });
       }
     }
   }
 
-  const sourceBaseDir = getStackDir(fromStackName);
-  const sourceEnvRaw = await readExistingEnv(getStackEnvPath(fromStackName));
+  const legacy = isLegacyAuthSourceName(fromStackName);
+  const sourceBaseDir = legacy ? getLegacyHappyBaseDir() : getStackDir(fromStackName);
+  const sourceEnvRaw = legacy ? '' : await readExistingEnv(getStackEnvPath(fromStackName));
   const sourceEnv = parseEnvToObject(sourceEnvRaw);
-  const sourceCli = getCliHomeDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env: sourceEnv });
+  const sourceCli = legacy ? join(sourceBaseDir, 'cli') : getCliHomeDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env: sourceEnv });
   const targetCli = stackEnv.HAPPY_STACKS_CLI_HOME_DIR;
 
-  copied.accessKey = await copyFileIfMissing({
-    from: join(sourceCli, 'access.key'),
-    to: join(targetCli, 'access.key'),
-    mode: 0o600,
-  });
-  copied.settings = await copyFileIfMissing({
-    from: join(sourceCli, 'settings.json'),
-    to: join(targetCli, 'settings.json'),
-    mode: 0o600,
-  });
+  if (linkMode) {
+    copied.accessKey = await linkFileIfMissing({ from: join(sourceCli, 'access.key'), to: join(targetCli, 'access.key') });
+    copied.settings = await linkFileIfMissing({ from: join(sourceCli, 'settings.json'), to: join(targetCli, 'settings.json') });
+  } else {
+    copied.accessKey = await copyFileIfMissing({
+      from: join(sourceCli, 'access.key'),
+      to: join(targetCli, 'access.key'),
+      mode: 0o600,
+    });
+    copied.settings = await copyFileIfMissing({
+      from: join(sourceCli, 'settings.json'),
+      to: join(targetCli, 'settings.json'),
+      mode: 0o600,
+    });
+  }
 
   if (!json) {
     const any = copied.secret || copied.accessKey || copied.settings;
@@ -569,6 +585,15 @@ async function cmdNew({ rootDir, argv, emit = true }) {
     (kv.get('--copy-auth-from') ?? '').trim() ||
     (process.env.HAPPY_STACKS_AUTH_SEED_FROM ?? process.env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').trim() ||
     'main';
+  const linkAuth =
+    flags.has('--link-auth') ||
+    flags.has('--link') ||
+    flags.has('--symlink-auth') ||
+    (kv.get('--link-auth') ?? '').trim() === '1' ||
+    (kv.get('--auth-mode') ?? '').trim() === 'link' ||
+    (kv.get('--copy-auth-mode') ?? '').trim() === 'link' ||
+    (process.env.HAPPY_STACKS_AUTH_LINK ?? process.env.HAPPY_LOCAL_AUTH_LINK ?? '').toString().trim() === '1' ||
+    (process.env.HAPPY_STACKS_AUTH_MODE ?? process.env.HAPPY_LOCAL_AUTH_MODE ?? '').toString().trim() === 'link';
   const forcePort = flags.has('--force-port');
 
   // argv here is already "args after 'new'", so the first positional is the stack name.
@@ -598,7 +623,7 @@ async function cmdNew({ rootDir, argv, emit = true }) {
     throw new Error(
       '[stack] usage: happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
         '[--happy=default|<owner/...>|<path>] [--happy-cli=...] [--happy-server=...] [--happy-server-light=...] ' +
-        '[--copy-auth-from=<stack>] [--no-copy-auth] [--interactive] [--force-port]'
+        '[--copy-auth-from=<stack|legacy>] [--link-auth] [--no-copy-auth] [--interactive] [--force-port]'
     );
   }
   if (stackName === 'main') {
@@ -775,6 +800,7 @@ async function cmdNew({ rootDir, argv, emit = true }) {
       serverComponent,
       json,
       requireSourceStackExists: kv.has('--copy-auth-from'),
+      linkMode: linkAuth,
     }).catch((err) => {
       if (!json && emit) {
         console.warn(`[stack] auth copy skipped: ${err instanceof Error ? err.message : String(err)}`);
@@ -2273,21 +2299,29 @@ async function cmdPrStack({ rootDir, argv }) {
       },
       text: [
         '[stack] usage:',
-        '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
+        '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start]',
+        '    [--seed-auth] [--copy-auth-from=<stack|legacy>] [--link-auth] [--with-infra] [--auth-force]',
+        '    [--remote=upstream] [--deps=none|link|install|link-or-install] [--update] [--force]',
+        '    [--json] [-- <stack dev/start args...>]',
         '',
         'examples:',
         '  # Create stack + check out PRs + start dev UI',
         '  happys stack pr pr123 \\',
         '    --happy=https://github.com/slopus/happy/pull/123 \\',
         '    --happy-cli=https://github.com/slopus/happy-cli/pull/456 \\',
+        '    --seed-auth --copy-auth-from=dev-auth \\',
         '    --dev',
         '',
         '  # Use numeric PR refs (remote defaults to upstream)',
-        '  happys stack pr pr123 --happy=123 --happy-cli=456 --dev',
+        '  happys stack pr pr123 --happy=123 --happy-cli=456 --seed-auth --copy-auth-from=dev-auth --dev',
+        '',
+        '  # Reuse an existing non-stacks Happy install for auth seeding',
+        '  happys stack pr pr123 --happy=123 --seed-auth --copy-auth-from=legacy --link-auth --dev',
         '',
         'notes:',
         '  - This composes existing commands: `happys stack new`, `happys stack wt ...`, and `happys stack auth ...`',
-        '  - For auth seeding, pass `--seed-auth` and optionally `--copy-auth-from=dev-auth`',
+        '  - For auth seeding, pass `--seed-auth` and optionally `--copy-auth-from=dev-auth` (or legacy/main)',
+        '  - `--link-auth` symlinks auth files instead of copying (keeps credentials in sync, but reduces isolation)',
       ].join('\n'),
     });
     return;
@@ -2301,8 +2335,13 @@ async function cmdPrStack({ rootDir, argv }) {
   if (stackName === 'main') {
     throw new Error('[stack] pr: stack name "main" is reserved; pick a unique name for this PR stack');
   }
-  if (stackExistsSync(stackName)) {
-    throw new Error(`[stack] pr: stack already exists: ${stackName}`);
+  const reuseExisting = flags.has('--reuse') || flags.has('--update-existing') || (kv.get('--reuse') ?? '').trim() === '1';
+  const stackExists = stackExistsSync(stackName);
+  if (stackExists && !reuseExisting) {
+    throw new Error(
+      `[stack] pr: stack already exists: ${stackName}\n` +
+        `[stack] tip: re-run with --reuse to update the existing PR worktrees and keep the stack wiring intact`
+    );
   }
 
   const remoteName = (kv.get('--remote') ?? '').trim() || 'upstream';
@@ -2335,15 +2374,102 @@ async function cmdPrStack({ rootDir, argv }) {
     throw new Error('[stack] pr: choose either --dev or --start (not both)');
   }
 
-  const seedAuth =
-    flags.has('--seed-auth') ||
-    ((process.env.HAPPY_STACKS_AUTO_AUTH_SEED ?? process.env.HAPPY_LOCAL_AUTO_AUTH_SEED ?? '').toString().trim() === '1');
-  const authFrom =
-    (kv.get('--copy-auth-from') ?? '').trim() ||
-    (process.env.HAPPY_STACKS_AUTH_SEED_FROM ?? process.env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').toString().trim() ||
-    'main';
+  const seedAuthFlag = flags.has('--seed-auth') ? true : flags.has('--no-seed-auth') ? false : null;
+  const authFromFlag = (kv.get('--copy-auth-from') ?? '').trim();
   const withInfra = flags.has('--with-infra') || flags.has('--ensure-infra') || flags.has('--infra');
   const authForce = flags.has('--auth-force') || flags.has('--force-auth');
+  const authLinkFlag = flags.has('--link-auth') || flags.has('--link') || flags.has('--symlink-auth') ? true : null;
+  const authLinkEnv =
+    (process.env.HAPPY_STACKS_AUTH_LINK ?? process.env.HAPPY_LOCAL_AUTH_LINK ?? '').toString().trim() === '1' ||
+    (process.env.HAPPY_STACKS_AUTH_MODE ?? process.env.HAPPY_LOCAL_AUTH_MODE ?? '').toString().trim() === 'link';
+
+  const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !json;
+
+  const mainAccessKeyPath = join(resolveStackEnvPath('main').baseDir, 'cli', 'access.key');
+  const legacyAccessKeyPath = join(getLegacyHappyBaseDir(), 'cli', 'access.key');
+  const devAuthAccessKeyPath = join(resolveStackEnvPath('dev-auth').baseDir, 'cli', 'access.key');
+
+  const hasMainAccessKey = existsSync(mainAccessKeyPath);
+  const hasLegacyAccessKey = existsSync(legacyAccessKeyPath);
+  const hasDevAuthAccessKey = existsSync(devAuthAccessKeyPath) && existsSync(resolveStackEnvPath('dev-auth').envPath);
+
+  const inferredSeedFromEnv = resolveAuthSeedFromEnv(process.env);
+  const inferredSeedFromAvailability = hasDevAuthAccessKey ? 'dev-auth' : hasMainAccessKey ? 'main' : hasLegacyAccessKey ? 'legacy' : 'main';
+  const defaultAuthFrom = authFromFlag || inferredSeedFromEnv || inferredSeedFromAvailability;
+
+  // Default behavior for stack pr:
+  // - if user explicitly flags --seed-auth/--no-seed-auth, obey
+  // - otherwise in interactive mode: prompt when we have *some* plausible source, default yes
+  // - in non-interactive mode: follow HAPPY_STACKS_AUTO_AUTH_SEED (if set), else default false
+  const envAutoSeed =
+    (process.env.HAPPY_STACKS_AUTO_AUTH_SEED ?? process.env.HAPPY_LOCAL_AUTO_AUTH_SEED ?? '').toString().trim();
+  const autoSeedEnabled = envAutoSeed ? envAutoSeed !== '0' : false;
+
+  let seedAuth = seedAuthFlag != null ? seedAuthFlag : autoSeedEnabled;
+  let authFrom = defaultAuthFrom;
+  let authLink = authLinkFlag != null ? authLinkFlag : authLinkEnv;
+
+  if (seedAuthFlag == null && isInteractive) {
+    const anySource = hasDevAuthAccessKey || hasMainAccessKey || hasLegacyAccessKey;
+    if (anySource) {
+      seedAuth = await withRl(async (rl) => {
+        return await promptSelect(rl, {
+          title: 'Seed authentication into this PR stack so it works without a re-login?',
+          options: [
+            { label: 'yes (recommended)', value: true },
+            { label: 'no (I will login manually for this stack)', value: false },
+          ],
+          defaultIndex: 0,
+        });
+      });
+    } else {
+      seedAuth = false;
+    }
+  }
+
+  if (seedAuth && !authFromFlag && isInteractive) {
+    const options = [];
+    if (hasDevAuthAccessKey) {
+      options.push({ label: 'dev-auth (recommended) — use your dedicated dev auth seed stack', value: 'dev-auth' });
+    }
+    if (hasMainAccessKey) {
+      options.push({ label: 'main — use Happy Stacks main credentials', value: 'main' });
+    }
+    if (hasLegacyAccessKey) {
+      options.push({ label: 'legacy — use ~/.happy credentials (best-effort)', value: 'legacy' });
+    }
+    options.push({ label: 'skip seeding (manual login)', value: 'skip' });
+
+    const defaultIdx = Math.max(
+      0,
+      options.findIndex((o) => o.value === (hasDevAuthAccessKey ? 'dev-auth' : hasMainAccessKey ? 'main' : hasLegacyAccessKey ? 'legacy' : 'skip'))
+    );
+    const picked = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title: 'Which auth source should this PR stack use?',
+        options,
+        defaultIndex: defaultIdx,
+      });
+    });
+    if (picked === 'skip') {
+      seedAuth = false;
+    } else {
+      authFrom = String(picked);
+    }
+  }
+
+  if (seedAuth && authLinkFlag == null && isInteractive) {
+    authLink = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title: 'When seeding, reuse credentials via symlink or copy?',
+        options: [
+          { label: 'symlink (recommended) — stays up to date', value: true },
+          { label: 'copy — more isolated per stack', value: false },
+        ],
+        defaultIndex: authLink ? 0 : 1,
+      });
+    });
+  }
 
   const progress = (line) => {
     // In JSON mode, never pollute stdout (reserved for final JSON).
@@ -2351,14 +2477,28 @@ async function cmdPrStack({ rootDir, argv }) {
     (json ? console.error : console.log)(line);
   };
 
-  // 1) Create the stack (no auth copy here; we'll optionally seed auth via `stack auth copy-from` so DB seeding is consistent).
-  progress(`[stack] pr: creating stack "${stackName}" (server=${serverComponent})...`);
-  const created = await cmdNew({
-    rootDir,
-    argv: [stackName, '--no-copy-auth', `--server=${serverComponent}`, ...(json ? ['--json'] : [])],
-    // Prevent cmdNew from printing in JSON mode (we’ll print the final combined object below).
-    emit: !json,
-  });
+  // 1) Create (or reuse) the stack.
+  let created = null;
+  if (!stackExists) {
+    progress(`[stack] pr: creating stack "${stackName}" (server=${serverComponent})...`);
+    created = await cmdNew({
+      rootDir,
+      argv: [stackName, '--no-copy-auth', `--server=${serverComponent}`, ...(json ? ['--json'] : [])],
+      // Prevent cmdNew from printing in JSON mode (we’ll print the final combined object below).
+      emit: !json,
+    });
+  } else {
+    progress(`[stack] pr: reusing existing stack "${stackName}"...`);
+    // Ensure requested server flavor is compatible with the existing stack.
+    const existing = await cmdInfoInternal({ rootDir, stackName });
+    if (existing.serverComponent !== serverComponent) {
+      throw new Error(
+        `[stack] pr: existing stack "${stackName}" uses server=${existing.serverComponent}, but command requested server=${serverComponent}.\n` +
+          `Fix: create a new stack name, or switch the stack's server flavor first (happys stack srv ${stackName} -- use ...).`
+      );
+    }
+    created = { ok: true, stackName, reused: true, serverComponent: existing.serverComponent };
+  }
 
   // 2) Checkout PR worktrees and pin them to the stack env file.
   const prSpecs = [
@@ -2371,41 +2511,40 @@ async function cmdPrStack({ rootDir, argv }) {
   const worktrees = [];
   for (const { component, pr } of prSpecs) {
     progress(`[stack] pr: ${stackName}: fetching PR for ${component} (${pr})...`);
-    if (json) {
-      const out = await withStackEnv({
-        stackName,
-        fn: async ({ env }) => {
-          const args = [
-            'pr',
-            component,
-            pr,
-            `--remote=${remoteName}`,
-            '--use',
-            ...(depsMode ? [`--deps=${depsMode}`] : []),
-            ...(flags.has('--update') ? ['--update'] : []),
-            ...(flags.has('--force') ? ['--force'] : []),
-            '--json',
-          ];
-          const stdout = await runCapture(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), ...args], { cwd: rootDir, env });
-          return stdout.trim() ? JSON.parse(stdout.trim()) : null;
-        },
-      });
-      worktrees.push(out);
-    } else {
-      await cmdWt({
-        rootDir,
-        stackName,
-        args: [
+    const out = await withStackEnv({
+      stackName,
+      fn: async ({ env }) => {
+        const doUpdate = reuseExisting || flags.has('--update');
+        const args = [
           'pr',
           component,
           pr,
           `--remote=${remoteName}`,
           '--use',
           ...(depsMode ? [`--deps=${depsMode}`] : []),
-          ...(flags.has('--update') ? ['--update'] : []),
+          ...(doUpdate ? ['--update'] : []),
           ...(flags.has('--force') ? ['--force'] : []),
-        ],
-      });
+          '--json',
+        ];
+        const stdout = await runCapture(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), ...args], { cwd: rootDir, env });
+        return stdout.trim() ? JSON.parse(stdout.trim()) : null;
+      },
+    });
+    if (json) {
+      worktrees.push(out);
+    } else if (out) {
+      const short = (sha) => (sha ? String(sha).slice(0, 8) : '');
+      const changed = Boolean(out.updated && out.oldHead && out.newHead && out.oldHead !== out.newHead);
+      if (changed) {
+        // eslint-disable-next-line no-console
+        console.log(`[stack] pr: ${stackName}: ${component}: updated ${short(out.oldHead)} -> ${short(out.newHead)}`);
+      } else if (out.updated) {
+        // eslint-disable-next-line no-console
+        console.log(`[stack] pr: ${stackName}: ${component}: already up to date (${short(out.newHead)})`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(`[stack] pr: ${stackName}: ${component}: checked out (${short(out.newHead)})`);
+      }
     }
   }
 
@@ -2413,7 +2552,13 @@ async function cmdPrStack({ rootDir, argv }) {
   let auth = null;
   if (seedAuth) {
     progress(`[stack] pr: ${stackName}: seeding auth from "${authFrom}"...`);
-    const args = ['copy-from', authFrom, ...(authForce ? ['--force'] : []), ...(withInfra ? ['--with-infra'] : [])];
+    const args = [
+      'copy-from',
+      authFrom,
+      ...(authForce ? ['--force'] : []),
+      ...(withInfra ? ['--with-infra'] : []),
+      ...(authLink ? ['--link'] : []),
+    ];
     if (json) {
       auth = await withStackEnv({
         stackName,
