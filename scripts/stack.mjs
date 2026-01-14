@@ -956,7 +956,11 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
       const existingUiPort = Number(runtimeState?.expo?.webPort);
       const existingPorts =
         runtimeState?.ports && typeof runtimeState.ports === 'object' ? runtimeState.ports : null;
-      if (isPidAlive(existingOwnerPid)) {
+      const wasRunning = isPidAlive(existingOwnerPid);
+      // True restart = there was an active runner for this stack. If the stack is not running,
+      // `--restart` should behave like a normal start (allocate new ephemeral ports if needed).
+      const isTrueRestart = wantsRestart && wasRunning;
+      if (wasRunning) {
         if (!wantsRestart) {
           const serverPart = Number.isFinite(existingPort) && existingPort > 0 ? ` server=${existingPort}` : '';
           const uiPart =
@@ -1023,7 +1027,7 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           return Number.isFinite(n) && n > 0 ? n : null;
         };
         const candidatePorts =
-          wantsRestart && existingPorts
+          isTrueRestart && existingPorts
             ? {
                 server: parsePortOrNull(existingPorts.server),
                 backend: parsePortOrNull(existingPorts.backend),
