@@ -10,7 +10,14 @@ import { parseArgs } from './utils/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc.mjs';
 import { getComponentDir, getComponentsDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
-import { createWorktree, resolveComponentSpecToDir } from './utils/worktrees.mjs';
+import {
+  createWorktree,
+  createWorktreeFromBaseWorktree,
+  inferRemoteNameForOwner,
+  isComponentWorktreePath,
+  resolveComponentSpecToDir,
+  worktreeSpecFromDir,
+} from './utils/worktrees.mjs';
 import { isTty, prompt, promptWorktreeSource, withRl } from './utils/wizard.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
@@ -33,6 +40,19 @@ import {
 } from './utils/stack_runtime_state.mjs';
 import { killPid } from './utils/expo.mjs';
 import { killPidOwnedByStack } from './utils/ownership.mjs';
+
+function getEnvValue(obj, key) {
+  const v = (obj?.[key] ?? '').toString().trim();
+  return v || '';
+}
+
+function getEnvValueAny(obj, keys) {
+  for (const k of keys) {
+    const v = getEnvValue(obj, k);
+    if (v) return v;
+  }
+  return '';
+}
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -540,7 +560,7 @@ async function interactiveEdit({ rootDir, rl, stackName, existingEnv, defaults }
   return out;
 }
 
-async function cmdNew({ rootDir, argv }) {
+async function cmdNew({ rootDir, argv, emit = true }) {
   const { flags, kv } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const json = wantsJson(argv, { flags });
@@ -756,7 +776,7 @@ async function cmdNew({ rootDir, argv }) {
       json,
       requireSourceStackExists: kv.has('--copy-auth-from'),
     }).catch((err) => {
-      if (!json) {
+      if (!json && emit) {
         console.warn(`[stack] auth copy skipped: ${err instanceof Error ? err.message : String(err)}`);
         console.warn(`[stack] tip: you can always run: happys stack auth ${stackName} login`);
       }
@@ -764,16 +784,20 @@ async function cmdNew({ rootDir, argv }) {
   }
 
   const envPath = await writeStackEnv({ stackName, env: stackEnv });
-  printResult({
-    json,
-    data: { stackName, envPath, port: port ?? null, serverComponent, portsMode: port == null ? 'ephemeral' : 'pinned' },
-    text: [
-      `[stack] created ${stackName}`,
-      `[stack] env: ${envPath}`,
-      `[stack] port: ${port == null ? 'ephemeral (picked at start)' : String(port)}`,
-      `[stack] server: ${serverComponent}`,
-    ].join('\n'),
-  });
+  const res = { ok: true, stackName, envPath, port: port ?? null, serverComponent, portsMode: port == null ? 'ephemeral' : 'pinned' };
+  if (emit) {
+    printResult({
+      json,
+      data: res,
+      text: [
+        `[stack] created ${stackName}`,
+        `[stack] env: ${envPath}`,
+        `[stack] port: ${port == null ? 'ephemeral (picked at start)' : String(port)}`,
+        `[stack] server: ${serverComponent}`,
+      ].join('\n'),
+    });
+  }
+  return res;
 }
 
 async function cmdEdit({ rootDir, argv }) {
@@ -1329,10 +1353,6 @@ async function cmdListStacks() {
   } catch {
     console.log('[stack] no stacks found');
   }
-}
-
-function getEnvValue(obj, key) {
-  return (obj?.[key] ?? '').toString().trim();
 }
 
 async function cmdAudit({ rootDir, argv }) {
@@ -2066,6 +2086,461 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
   }
 }
 
+function parseServerComponentFromEnv(env) {
+  const v =
+    (env.HAPPY_STACKS_SERVER_COMPONENT ?? env.HAPPY_LOCAL_SERVER_COMPONENT ?? '').toString().trim() ||
+    'happy-server-light';
+  return v === 'happy-server' ? 'happy-server' : 'happy-server-light';
+}
+
+async function readStackEnvObject(stackName) {
+  const envPath = getStackEnvPath(stackName);
+  const raw = await readExistingEnv(envPath);
+  const env = raw ? parseEnvToObject(raw) : {};
+  return { envPath, env };
+}
+
+function envKeyForComponentDir({ serverComponent, component }) {
+  if (component === 'happy') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY';
+  if (component === 'happy-cli') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI';
+  if (component === 'happy-server') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER';
+  if (component === 'happy-server-light') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT';
+  // Fallback; caller should not use.
+  return `HAPPY_STACKS_COMPONENT_DIR_${component.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+}
+
+function sanitizeSlugPart(s) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+}
+
+async function cmdDuplicate({ rootDir, argv }) {
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const fromStack = (positionals[1] ?? '').trim();
+  const toStack = (positionals[2] ?? '').trim();
+  if (!fromStack || !toStack) {
+    throw new Error('[stack] usage: happys stack duplicate <from> <to> [--duplicate-worktrees] [--deps=...] [--json]');
+  }
+  if (toStack === 'main') {
+    throw new Error('[stack] refusing to duplicate into stack name "main"');
+  }
+  if (!stackExistsSync(fromStack)) {
+    throw new Error(`[stack] duplicate: source stack does not exist: ${fromStack}`);
+  }
+  if (stackExistsSync(toStack)) {
+    throw new Error(`[stack] duplicate: destination stack already exists: ${toStack}`);
+  }
+
+  const duplicateWorktrees =
+    flags.has('--duplicate-worktrees') ||
+    flags.has('--with-worktrees') ||
+    (kv.get('--duplicate-worktrees') ?? '').trim() === '1';
+  const depsMode = (kv.get('--deps') ?? '').trim(); // forwarded to wt new when duplicating worktrees
+
+  const { env: fromEnv } = await readStackEnvObject(fromStack);
+  const serverComponent = parseServerComponentFromEnv(fromEnv);
+
+  // Create the destination stack env with the correct baseDir and defaults (do not copy auth/data).
+  await cmdNew({
+    rootDir,
+    argv: [toStack, '--no-copy-auth', '--server', serverComponent],
+  });
+
+  // Build component dir updates (copy overrides; optionally duplicate worktrees).
+  // Copy all component directory overrides, not just the currently-selected server flavor.
+  // This keeps the duplicated stack fully self-contained even if you later switch server flavor.
+  const components = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
+
+  const updates = [];
+  for (const component of components) {
+    const key = envKeyForComponentDir({ serverComponent, component });
+    const legacyKey = key.replace('HAPPY_STACKS_', 'HAPPY_LOCAL_');
+    const rawDir = (fromEnv[key] ?? fromEnv[legacyKey] ?? '').toString().trim();
+    if (!rawDir) continue;
+
+    let nextDir = rawDir;
+    if (duplicateWorktrees && isComponentWorktreePath({ rootDir, component, dir: rawDir })) {
+      const spec = worktreeSpecFromDir({ rootDir, component, dir: rawDir });
+      if (spec) {
+        const [owner, ...restParts] = spec.split('/').filter(Boolean);
+        const rest = restParts.join('/');
+        const slug = `dup/${sanitizeSlugPart(toStack)}/${rest}`;
+
+        const repoDir = join(getComponentsDir(rootDir), component);
+        const remoteName = await inferRemoteNameForOwner({ repoDir, owner });
+        // Base on the existing worktree's HEAD/branch so we get the same commit.
+        nextDir = await createWorktreeFromBaseWorktree({
+          rootDir,
+          component,
+          slug,
+          baseWorktreeSpec: spec,
+          remoteName,
+          depsMode,
+        });
+      }
+    }
+
+    updates.push({ key, value: nextDir });
+  }
+
+  // Apply component dir overrides to the destination stack env file.
+  const toEnvPath = getStackEnvPath(toStack);
+  if (updates.length) {
+    await ensureEnvFileUpdated({ envPath: toEnvPath, updates });
+  }
+
+  const out = {
+    ok: true,
+    from: fromStack,
+    to: toStack,
+    serverComponent,
+    duplicatedWorktrees: duplicateWorktrees,
+    updatedKeys: updates.map((u) => u.key),
+    envPath: toEnvPath,
+  };
+
+  if (json) {
+    printResult({ json, data: out });
+    return;
+  }
+
+  console.log(`[stack] duplicated: ${fromStack} -> ${toStack}`);
+  console.log(`[stack] env: ${toEnvPath}`);
+  if (duplicateWorktrees) {
+    console.log(`[stack] worktrees: duplicated (deps=${depsMode || 'none'})`);
+  } else {
+    console.log('[stack] worktrees: not duplicated (reusing existing component dirs)');
+  }
+}
+
+async function cmdInfo({ rootDir, argv }) {
+  const { flags } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const stackName = (positionals[1] ?? '').trim();
+  if (!stackName) {
+    throw new Error('[stack] usage: happys stack info <name> [--json]');
+  }
+  if (!stackExistsSync(stackName)) {
+    throw new Error(`[stack] info: stack does not exist: ${stackName}`);
+  }
+
+  const out = await cmdInfoInternal({ rootDir, stackName });
+  if (json) {
+    printResult({ json, data: out });
+    return;
+  }
+
+  console.log(`[stack] info: ${stackName}`);
+  console.log(`- env: ${out.envPath}`);
+  console.log(`- runtime: ${out.runtimeStatePath}`);
+  console.log(`- server: ${out.serverComponent}`);
+  console.log(`- running: ${out.runtime.running ? 'yes' : 'no'}${out.runtime.ownerPid ? ` (pid=${out.runtime.ownerPid})` : ''}`);
+  if (out.ports.server) console.log(`- port: server=${out.ports.server}${out.ports.backend ? ` backend=${out.ports.backend}` : ''}`);
+  if (out.ports.ui) console.log(`- port: ui=${out.ports.ui}`);
+  if (out.urls.uiUrl) console.log(`- ui: ${out.urls.uiUrl}`);
+  if (out.urls.internalServerUrl) console.log(`- internal: ${out.urls.internalServerUrl}`);
+  if (out.pinned.serverPort) console.log(`- pinned: serverPort=${out.pinned.serverPort}`);
+  console.log('- components:');
+  for (const c of out.components) {
+    console.log(`  - ${c.component}: ${c.dir}${c.worktreeSpec ? ` (${c.worktreeSpec})` : ''}`);
+  }
+}
+
+async function cmdPrStack({ rootDir, argv }) {
+  // Supports passing args to the eventual `stack dev/start` via `-- ...`.
+  const sep = argv.indexOf('--');
+  const argv0 = sep >= 0 ? argv.slice(0, sep) : argv;
+  const passthrough = sep >= 0 ? argv.slice(sep + 1) : [];
+
+  const { flags, kv } = parseArgs(argv0);
+  const json = wantsJson(argv0, { flags });
+
+  if (wantsHelp(argv0, { flags })) {
+    printResult({
+      json,
+      data: {
+        usage:
+          'happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--json] [-- <stack dev/start args...>]',
+      },
+      text: [
+        '[stack] usage:',
+        '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
+        '',
+        'examples:',
+        '  # Create stack + check out PRs + start dev UI',
+        '  happys stack pr pr123 \\',
+        '    --happy=https://github.com/slopus/happy/pull/123 \\',
+        '    --happy-cli=https://github.com/slopus/happy-cli/pull/456 \\',
+        '    --dev',
+        '',
+        '  # Use numeric PR refs (remote defaults to upstream)',
+        '  happys stack pr pr123 --happy=123 --happy-cli=456 --dev',
+        '',
+        'notes:',
+        '  - This composes existing commands: `happys stack new`, `happys stack wt ...`, and `happys stack auth ...`',
+        '  - For auth seeding, pass `--seed-auth` and optionally `--copy-auth-from=dev-auth`',
+      ].join('\n'),
+    });
+    return;
+  }
+
+  const positionals = argv0.filter((a) => !a.startsWith('--'));
+  const stackName = (positionals[1] ?? '').trim();
+  if (!stackName) {
+    throw new Error('[stack] pr: missing stack name. Usage: happys stack pr <name> --happy=<pr>');
+  }
+  if (stackName === 'main') {
+    throw new Error('[stack] pr: stack name "main" is reserved; pick a unique name for this PR stack');
+  }
+  if (stackExistsSync(stackName)) {
+    throw new Error(`[stack] pr: stack already exists: ${stackName}`);
+  }
+
+  const remoteName = (kv.get('--remote') ?? '').trim() || 'upstream';
+  const depsMode = (kv.get('--deps') ?? '').trim();
+
+  const prHappy = (kv.get('--happy') ?? '').trim();
+  const prCli = (kv.get('--happy-cli') ?? '').trim();
+  const prServerLight = (kv.get('--happy-server-light') ?? '').trim();
+  const prServer = (kv.get('--happy-server') ?? '').trim();
+
+  if (!prHappy && !prCli && !prServerLight && !prServer) {
+    throw new Error(
+      '[stack] pr: missing PR inputs. Provide at least one of: --happy, --happy-cli, --happy-server-light, --happy-server'
+    );
+  }
+  if (prServerLight && prServer) {
+    throw new Error('[stack] pr: cannot specify both --happy-server and --happy-server-light');
+  }
+
+  const serverFromArg = (kv.get('--server') ?? '').trim();
+  const inferredServer = prServer ? 'happy-server' : prServerLight ? 'happy-server-light' : '';
+  const serverComponent = (serverFromArg || inferredServer || 'happy-server-light').trim();
+  if (serverComponent !== 'happy-server' && serverComponent !== 'happy-server-light') {
+    throw new Error(`[stack] pr: invalid --server: ${serverFromArg || serverComponent}`);
+  }
+
+  const wantsDev = flags.has('--dev') || flags.has('--start-dev');
+  const wantsStart = flags.has('--start') || flags.has('--prod');
+  if (wantsDev && wantsStart) {
+    throw new Error('[stack] pr: choose either --dev or --start (not both)');
+  }
+
+  const seedAuth =
+    flags.has('--seed-auth') ||
+    ((process.env.HAPPY_STACKS_AUTO_AUTH_SEED ?? process.env.HAPPY_LOCAL_AUTO_AUTH_SEED ?? '').toString().trim() === '1');
+  const authFrom =
+    (kv.get('--copy-auth-from') ?? '').trim() ||
+    (process.env.HAPPY_STACKS_AUTH_SEED_FROM ?? process.env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').toString().trim() ||
+    'main';
+  const withInfra = flags.has('--with-infra') || flags.has('--ensure-infra') || flags.has('--infra');
+  const authForce = flags.has('--auth-force') || flags.has('--force-auth');
+
+  const progress = (line) => {
+    // In JSON mode, never pollute stdout (reserved for final JSON).
+    // eslint-disable-next-line no-console
+    (json ? console.error : console.log)(line);
+  };
+
+  // 1) Create the stack (no auth copy here; we'll optionally seed auth via `stack auth copy-from` so DB seeding is consistent).
+  progress(`[stack] pr: creating stack "${stackName}" (server=${serverComponent})...`);
+  const created = await cmdNew({
+    rootDir,
+    argv: [stackName, '--no-copy-auth', `--server=${serverComponent}`, ...(json ? ['--json'] : [])],
+    // Prevent cmdNew from printing in JSON mode (we’ll print the final combined object below).
+    emit: !json,
+  });
+
+  // 2) Checkout PR worktrees and pin them to the stack env file.
+  const prSpecs = [
+    { component: 'happy', pr: prHappy },
+    { component: 'happy-cli', pr: prCli },
+    ...(serverComponent === 'happy-server' ? [{ component: 'happy-server', pr: prServer }] : []),
+    ...(serverComponent === 'happy-server-light' ? [{ component: 'happy-server-light', pr: prServerLight }] : []),
+  ].filter((x) => x.pr);
+
+  const worktrees = [];
+  for (const { component, pr } of prSpecs) {
+    progress(`[stack] pr: ${stackName}: fetching PR for ${component} (${pr})...`);
+    if (json) {
+      const out = await withStackEnv({
+        stackName,
+        fn: async ({ env }) => {
+          const args = [
+            'pr',
+            component,
+            pr,
+            `--remote=${remoteName}`,
+            '--use',
+            ...(depsMode ? [`--deps=${depsMode}`] : []),
+            ...(flags.has('--update') ? ['--update'] : []),
+            ...(flags.has('--force') ? ['--force'] : []),
+            '--json',
+          ];
+          const stdout = await runCapture(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), ...args], { cwd: rootDir, env });
+          return stdout.trim() ? JSON.parse(stdout.trim()) : null;
+        },
+      });
+      worktrees.push(out);
+    } else {
+      await cmdWt({
+        rootDir,
+        stackName,
+        args: [
+          'pr',
+          component,
+          pr,
+          `--remote=${remoteName}`,
+          '--use',
+          ...(depsMode ? [`--deps=${depsMode}`] : []),
+          ...(flags.has('--update') ? ['--update'] : []),
+          ...(flags.has('--force') ? ['--force'] : []),
+        ],
+      });
+    }
+  }
+
+  // 3) Optional: seed auth (copies cli creds + master secret + DB Account rows).
+  let auth = null;
+  if (seedAuth) {
+    progress(`[stack] pr: ${stackName}: seeding auth from "${authFrom}"...`);
+    const args = ['copy-from', authFrom, ...(authForce ? ['--force'] : []), ...(withInfra ? ['--with-infra'] : [])];
+    if (json) {
+      auth = await withStackEnv({
+        stackName,
+        fn: async ({ env }) => {
+          const stdout = await runCapture(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), ...args, '--json'], { cwd: rootDir, env });
+          return stdout.trim() ? JSON.parse(stdout.trim()) : null;
+        },
+      });
+    } else {
+      await cmdAuth({ rootDir, stackName, args });
+      auth = { ok: true, from: authFrom };
+    }
+  }
+
+  // 4) Optional: start dev / start.
+  if (wantsDev) {
+    progress(`[stack] pr: ${stackName}: starting dev...`);
+    const args = passthrough.length ? ['--', ...passthrough] : [];
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'dev.mjs', args });
+  } else if (wantsStart) {
+    progress(`[stack] pr: ${stackName}: starting...`);
+    const args = passthrough.length ? ['--', ...passthrough] : [];
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'run.mjs', args });
+  }
+
+  const info = await cmdInfoInternal({ rootDir, stackName });
+
+  const out = {
+    ok: true,
+    stackName,
+    created,
+    worktrees: worktrees.length ? worktrees : null,
+    auth,
+    info,
+  };
+
+  if (json) {
+    printResult({ json, data: out });
+    return;
+  }
+  // Non-JSON mode already streamed output.
+}
+
+async function cmdInfoInternal({ rootDir, stackName }) {
+  // Minimal extraction from cmdInfo to avoid re-parsing argv/printing. Used by cmdPrStack.
+  const baseDir = getStackDir(stackName);
+  const envPath = getStackEnvPath(stackName);
+  const envRaw = await readExistingEnv(envPath);
+  const stackEnv = envRaw ? parseEnvToObject(envRaw) : {};
+  const runtimeStatePath = getStackRuntimeStatePath(stackName);
+  const runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+
+  const serverComponent =
+    getEnvValueAny(stackEnv, ['HAPPY_STACKS_SERVER_COMPONENT', 'HAPPY_LOCAL_SERVER_COMPONENT']) || 'happy-server-light';
+
+  const pinnedServerPortRaw = getEnvValueAny(stackEnv, ['HAPPY_STACKS_SERVER_PORT', 'HAPPY_LOCAL_SERVER_PORT']);
+  const pinnedServerPort = pinnedServerPortRaw ? Number(pinnedServerPortRaw) : null;
+
+  const ownerPid = Number(runtimeState?.ownerPid);
+  const running = isPidAlive(ownerPid);
+  const runtimePorts = runtimeState?.ports && typeof runtimeState.ports === 'object' ? runtimeState.ports : {};
+  const serverPort =
+    Number.isFinite(pinnedServerPort) && pinnedServerPort > 0
+      ? pinnedServerPort
+      : Number(runtimePorts?.server) > 0
+        ? Number(runtimePorts.server)
+        : null;
+  const backendPort = Number(runtimePorts?.backend) > 0 ? Number(runtimePorts.backend) : null;
+  const uiPort =
+    runtimeState?.expo && typeof runtimeState.expo === 'object' && Number(runtimeState.expo.webPort) > 0
+      ? Number(runtimeState.expo.webPort)
+      : null;
+
+  const host = resolveLocalhostHost({ stackMode: true, stackName });
+  const internalServerUrl = serverPort ? `http://127.0.0.1:${serverPort}` : null;
+  const uiUrl = uiPort ? `http://${host}:${uiPort}` : null;
+
+  const componentSpecs = [
+    { component: 'happy', keys: ['HAPPY_STACKS_COMPONENT_DIR_HAPPY', 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY'] },
+    { component: 'happy-cli', keys: ['HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI', 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI'] },
+    {
+      component: 'happy-server-light',
+      keys: ['HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT', 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT'],
+    },
+    { component: 'happy-server', keys: ['HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER', 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER'] },
+  ];
+
+  const components = componentSpecs.map((c) => {
+    const dir = getEnvValueAny(stackEnv, c.keys) || getComponentDir(rootDir, c.component);
+    const spec = worktreeSpecFromDir({ rootDir, component: c.component, dir }) || null;
+    return { component: c.component, dir, worktreeSpec: spec };
+  });
+
+  return {
+    ok: true,
+    stackName,
+    baseDir,
+    envPath,
+    runtimeStatePath,
+    serverComponent,
+    pinned: {
+      serverPort: Number.isFinite(pinnedServerPort) && pinnedServerPort > 0 ? pinnedServerPort : null,
+    },
+    runtime: {
+      script: typeof runtimeState?.script === 'string' ? runtimeState.script : null,
+      ownerPid: Number.isFinite(ownerPid) && ownerPid > 1 ? ownerPid : null,
+      running,
+      ports: runtimePorts,
+      expo: runtimeState?.expo ?? null,
+      processes: runtimeState?.processes ?? null,
+      startedAt: runtimeState?.startedAt ?? null,
+      updatedAt: runtimeState?.updatedAt ?? null,
+    },
+    urls: {
+      host,
+      internalServerUrl,
+      uiUrl,
+    },
+    ports: {
+      server: serverPort,
+      backend: backendPort,
+      ui: uiPort,
+    },
+    components,
+  };
+}
+
 async function main() {
   const rootDir = getRootDir(import.meta.url);
   // pnpm (legacy) passes an extra leading `--` when forwarding args into scripts. Normalize it away so
@@ -2078,7 +2553,13 @@ async function main() {
   const cmd = positionals[0] || 'help';
   const json = wantsJson(argv, { flags });
 
-  if (wantsHelp(argv, { flags }) || cmd === 'help') {
+  const wantsHelpFlag = wantsHelp(argv, { flags });
+  // Allow subcommand-specific help (so `happys stack pr --help` shows PR stack flags).
+  if (wantsHelpFlag && cmd === 'pr') {
+    await cmdPrStack({ rootDir, argv });
+    return;
+  }
+  if (wantsHelpFlag || cmd === 'help') {
     printResult({
       json,
       data: {
@@ -2088,6 +2569,9 @@ async function main() {
           'list',
           'migrate',
           'audit',
+        'duplicate',
+          'info',
+          'pr',
           'create-dev-auth-seed',
           'auth',
           'dev',
@@ -2113,6 +2597,9 @@ async function main() {
         '  happys stack list [--json]',
         '  happys stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',
         '  happys stack audit [--fix] [--fix-main] [--fix-ports] [--fix-workspace] [--fix-paths] [--unpin-ports] [--unpin-ports-except=stack1,stack2] [--json]',
+        '  happys stack duplicate <from> <to> [--duplicate-worktrees] [--deps=none|link|install|link-or-install] [--json]',
+        '  happys stack info <name> [--json]',
+        '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
         '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--non-interactive] [--json]',
         '  happys stack auth <name> status|login|copy-from [--json]',
         '  happys stack dev <name> [-- ...]',
@@ -2182,6 +2669,18 @@ async function main() {
   }
   if (cmd === 'audit') {
     await cmdAudit({ rootDir, argv });
+    return;
+  }
+  if (cmd === 'duplicate') {
+    await cmdDuplicate({ rootDir, argv });
+    return;
+  }
+  if (cmd === 'info') {
+    await cmdInfo({ rootDir, argv });
+    return;
+  }
+  if (cmd === 'pr') {
+    await cmdPrStack({ rootDir, argv });
     return;
   }
   if (cmd === 'create-dev-auth-seed') {

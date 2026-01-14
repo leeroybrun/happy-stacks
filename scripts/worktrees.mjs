@@ -5,7 +5,7 @@ import { parseArgs } from './utils/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths.mjs';
-import { parseGithubOwner } from './utils/worktrees.mjs';
+import { inferRemoteNameForOwner, parseGithubOwner } from './utils/worktrees.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
@@ -730,6 +730,43 @@ async function cmdNew({ rootDir, argv }) {
     await ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: destPath }] });
   }
   return { component, branch: branchName, path: destPath, base, used: shouldUse, deps };
+}
+
+async function cmdDuplicate({ rootDir, argv }) {
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const component = positionals[1];
+  const fromSpec = positionals[2];
+  const slug = positionals[3];
+  if (!component || !fromSpec || !slug) {
+    throw new Error(
+      '[wt] usage: happys wt duplicate <component> <fromWorktreeSpec|path|active|default> <newSlug> [--remote=<name>] [--deps=none|link|install|link-or-install] [--use] [--json]'
+    );
+  }
+
+  // Prefer inferring the remote from the source spec's owner when possible (owner/<branch...>).
+  const remoteOverride = (kv.get('--remote') ?? '').trim();
+  let remoteName = remoteOverride;
+  if (!remoteName && !isAbsolute(fromSpec)) {
+    const owner = String(fromSpec).trim().split('/')[0];
+    if (owner && owner !== 'active' && owner !== 'default' && owner !== 'main') {
+      const repoRoot = getComponentRepoRoot(rootDir, component);
+      remoteName = await normalizeRemoteName(repoRoot, await inferRemoteNameForOwner({ repoDir: repoRoot, owner }));
+    }
+  }
+
+  const depsMode = (kv.get('--deps') ?? '').trim();
+  const forwarded = ['new', component, slug, `--base-worktree=${fromSpec}`];
+  if (remoteName) forwarded.push(`--remote=${remoteName}`);
+  if (depsMode) forwarded.push(`--deps=${depsMode}`);
+  if (flags.has('--use')) forwarded.push('--use');
+  if (flags.has('--force')) forwarded.push('--force');
+  if (json) forwarded.push('--json');
+
+  // Delegate to cmdNew for the actual implementation (single source of truth).
+  return await cmdNew({ rootDir, argv: forwarded });
 }
 
 async function cmdPr({ rootDir, argv }) {
@@ -1609,6 +1646,7 @@ async function main() {
         '  happys wt sync-all [--remote=<name>] [--json]',
         '  happys wt list <component> [--json]',
         '  happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--force] [--interactive|-i] [--json]',
+        '  happys wt duplicate <component> <fromWorktreeSpec|path|active|default> <newSlug> [--remote=<name>] [--deps=none|link|install|link-or-install] [--use] [--json]',
         '  happys wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
         '  happys wt use <component> <owner/branch|path|default|main> [--force] [--interactive|-i] [--json]',
         '  happys wt status <component> [worktreeSpec|default|path] [--json]',
@@ -1658,6 +1696,15 @@ async function main() {
         text: `[wt] created ${res.component} worktree: ${res.path} (${res.branch} based on ${res.base})`,
       });
     }
+    return;
+  }
+  if (cmd === 'duplicate') {
+    const res = await cmdDuplicate({ rootDir, argv });
+    printResult({
+      json,
+      data: res,
+      text: `[wt] duplicated ${res.component} worktree: ${res.path} (${res.branch} based on ${res.base})`,
+    });
     return;
   }
   if (cmd === 'pr') {

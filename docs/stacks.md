@@ -41,6 +41,42 @@ Auto-pick a port:
 happys stack new exp2
 ```
 
+## Create a PR test stack (copy/paste friendly)
+
+If you want maintainers to be able to try your PR quickly, you can give them a single command that:
+
+- creates an isolated stack
+- checks out PR(s) into worktrees
+- pins those worktrees to the stack
+- optionally seeds auth
+- optionally starts the stack in dev mode
+
+Example (most common):
+
+```bash
+happys stack pr pr123 \
+  --happy=https://github.com/slopus/happy/pull/123 \
+  --happy-cli=https://github.com/slopus/happy-cli/pull/456 \
+  --seed-auth --copy-auth-from=dev-auth \
+  --dev
+```
+
+Notes:
+
+- `--remote` (default `upstream`) controls which Git remote is used to fetch `refs/pull/<n>/head`.
+- `--seed-auth` uses `happys stack auth <stack> copy-from <source>` under the hood, which also best-effort seeds DB Account rows (avoids FK errors like Prisma `P2003`).
+- You can use your existing non-stacks Happy install as an auth seed source with:
+  - `--copy-auth-from=legacy` (reads from `~/.happy/{cli,server-light}` best-effort)
+- For full-server stacks (`happy-server`), seeding may need Docker infra:
+
+```bash
+happys stack pr pr789 \
+  --server=happy-server \
+  --happy-server=https://github.com/slopus/happy-server/pull/789 \
+  --seed-auth --copy-auth-from=dev-auth --with-infra \
+  --dev
+```
+
 Interactive wizard (TTY only):
 
 ```bash

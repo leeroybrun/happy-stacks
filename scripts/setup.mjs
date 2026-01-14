@@ -445,6 +445,52 @@ async function cmdSetup({ rootDir, argv }) {
       if (createStack) {
         await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['new', '--interactive'] });
       }
+
+      // Optional: import existing non-stacks Happy credentials into Happy Stacks main.
+      // This helps maintainers who already have a Happy account on their machine avoid a fresh login.
+      //
+      // Source (legacy): ~/.happy/cli/access.key
+      // Target (Happy Stacks main): ~/.happy/stacks/main/cli/access.key (or legacy base dir if not migrated)
+      try {
+        const legacyAccessKey = join(homedir(), '.happy', 'cli', 'access.key');
+        const mainCliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
+        const mainAccessKey = join(mainCliHomeDir, 'access.key');
+
+        if (existsSync(legacyAccessKey) && !existsSync(mainAccessKey)) {
+          const doImport = await withRl(async (rl) => {
+            return await promptSelect(rl, {
+              title: 'Found an existing Happy install at ~/.happy. Import its credentials into Happy Stacks main?',
+              options: [
+                { label: 'yes (recommended)', value: true },
+                { label: 'no', value: false },
+              ],
+              defaultIndex: 0,
+            });
+          });
+          if (doImport) {
+            // Best-effort: also tries to seed DB account rows if the legacy local DB exists.
+            await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['copy-from', 'legacy', '--allow-main'] });
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // Optional: set up a dedicated dev auth seed stack.
+      // This makes future stacks able to auto-seed auth without re-login.
+      const setupDevAuth = await withRl(async (rl) => {
+        return await promptSelect(rl, {
+          title: 'Set up a dedicated auth seed stack (dev-auth) for development stacks?',
+          options: [
+            { label: 'no (default)', value: false },
+            { label: 'yes', value: true },
+          ],
+          defaultIndex: 0,
+        });
+      });
+      if (setupDevAuth) {
+        await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth'] });
+      }
     }
   } else {
     // Selfhost setup: run non-interactively and keep it simple.

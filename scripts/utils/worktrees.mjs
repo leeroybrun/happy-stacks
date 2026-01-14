@@ -1,5 +1,5 @@
 import { readdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { getComponentsDir } from './paths.mjs';
 import { pathExists } from './fs.mjs';
 import { run, runCapture } from './proc.mjs';
@@ -21,6 +21,62 @@ export function getWorktreesRoot(rootDir) {
 
 export function componentRepoDir(rootDir, component) {
   return join(getComponentsDir(rootDir), component);
+}
+
+export function isComponentWorktreePath({ rootDir, component, dir }) {
+  const raw = String(dir ?? '').trim();
+  if (!raw) return false;
+  const abs = resolve(raw);
+  const root = resolve(join(getWorktreesRoot(rootDir), component)) + '/';
+  return abs.startsWith(root);
+}
+
+export function worktreeSpecFromDir({ rootDir, component, dir }) {
+  const raw = String(dir ?? '').trim();
+  if (!raw) return null;
+  if (!isComponentWorktreePath({ rootDir, component, dir: raw })) return null;
+  const abs = resolve(raw);
+  const root = resolve(join(getWorktreesRoot(rootDir), component)) + '/';
+  const rel = abs.slice(root.length).split('/').filter(Boolean);
+  if (rel.length < 2) return null;
+  // rel = [owner, ...branchParts]
+  return rel.join('/');
+}
+
+export async function inferRemoteNameForOwner({ repoDir, owner }) {
+  const want = String(owner ?? '').trim();
+  if (!want) return 'upstream';
+
+  const candidates = ['upstream', 'origin', 'fork'];
+  for (const remoteName of candidates) {
+    try {
+      const url = (await runCapture('git', ['remote', 'get-url', remoteName], { cwd: repoDir })).trim();
+      const o = parseGithubOwner(url);
+      if (o && o === want) {
+        return remoteName;
+      }
+    } catch {
+      // ignore missing remote
+    }
+  }
+  return 'upstream';
+}
+
+export async function createWorktreeFromBaseWorktree({
+  rootDir,
+  component,
+  slug,
+  baseWorktreeSpec,
+  remoteName = 'upstream',
+  depsMode = '',
+}) {
+  const args = ['wt', 'new', component, slug, `--remote=${remoteName}`, `--base-worktree=${baseWorktreeSpec}`];
+  if (depsMode) args.push(`--deps=${depsMode}`);
+  await run(process.execPath, [join(rootDir, 'bin', 'happys.mjs'), ...args], { cwd: rootDir });
+
+  const repoDir = componentRepoDir(rootDir, component);
+  const owner = await getRemoteOwner({ repoDir, remoteName });
+  return join(getWorktreesRoot(rootDir), component, owner, ...slug.split('/'));
 }
 
 export function resolveComponentSpecToDir({ rootDir, component, spec }) {

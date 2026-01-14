@@ -192,6 +192,16 @@ happys wt pr happy https://github.com/slopus/happy/pull/123 --use
 happys wt pr happy 123 --update --stash
 ```
 
+Create a fully isolated PR stack (creates stack + PR worktrees + optional auth seeding + starts dev):
+
+```bash
+happys stack pr pr123 \
+  --happy=https://github.com/slopus/happy/pull/123 \
+  --happy-cli=https://github.com/slopus/happy-cli/pull/456 \
+  --seed-auth --copy-auth-from=dev-auth \
+  --dev
+```
+
 Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 
 #### Server flavor (server-light vs full server)

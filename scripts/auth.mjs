@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { parseDotenv } from './utils/dotenv.mjs';
@@ -19,6 +19,7 @@ import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/dev_au
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
 import { printAuthLoginInstructions } from './utils/auth_login_ux.mjs';
+import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth_files.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -123,23 +124,7 @@ async function readTextIfExists(path) {
   }
 }
 
-async function writeSecretFileIfMissing({ path, secret, force = false }) {
-  if (!force && existsSync(path)) return false;
-  await ensureDir(dirname(path));
-  await writeFile(path, secret, { encoding: 'utf-8', mode: 0o600 });
-  return true;
-}
-
-async function copyFileIfMissing({ from, to, mode, force = false }) {
-  if (!force && existsSync(to)) return false;
-  if (!existsSync(from)) return false;
-  await ensureDir(dirname(to));
-  await copyFile(from, to);
-  if (mode) {
-    await chmod(to, mode).catch(() => {});
-  }
-  return true;
-}
+// (auth file copy/link helpers live in scripts/utils/auth_files.mjs)
 
 function parseEnvToObject(raw) {
   const parsed = parseDotenv(raw);
@@ -152,6 +137,15 @@ function getStackDir(stackName) {
 
 function getStackEnvPath(stackName) {
   return resolveStackEnvPath(stackName).envPath;
+}
+
+function isLegacyAuthSourceName(name) {
+  const s = String(name ?? '').trim().toLowerCase();
+  return s === 'legacy' || s === 'system' || s === 'local-install';
+}
+
+function getLegacyHappyBaseDir() {
+  return join(homedir(), '.happy');
 }
 
 function stackExistsSync(stackName) {
@@ -171,6 +165,13 @@ function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
 }
 
 async function resolveHandyMasterSecretFromStack({ stackName, requireStackExists }) {
+  if (isLegacyAuthSourceName(stackName)) {
+    const baseDir = getLegacyHappyBaseDir();
+    const legacySecretPath = join(baseDir, 'server-light', 'handy-master-secret.txt');
+    const secret = await readTextIfExists(legacySecretPath);
+    return secret ? { secret, source: legacySecretPath } : { secret: null, source: null };
+  }
+
   if (requireStackExists && !stackExistsSync(stackName)) {
     throw new Error(`[auth] cannot copy auth: source stack "${stackName}" does not exist`);
   }
@@ -541,7 +542,10 @@ async function cmdCopyFrom({ argv, json }) {
   const fromStackName = (positionals[1] ?? '').trim();
   if (!fromStackName) {
     throw new Error(
-      '[auth] usage: happys stack auth <name> copy-from <sourceStack> [--force] [--with-infra] [--json]  OR  happys auth copy-from <sourceStack> --all [--except=main,dev-auth] [--force] [--with-infra] [--json]'
+      '[auth] usage: happys stack auth <name> copy-from <sourceStack|legacy> [--force] [--with-infra] [--json]  OR  happys auth copy-from <sourceStack|legacy> --all [--except=main,dev-auth] [--force] [--with-infra] [--json]\n' +
+        'notes:\n' +
+        '  - sourceStack can be a stack name (e.g. main, dev-auth)\n' +
+        '  - legacy uses ~/.happy/{cli,server-light} as a source (best-effort)'
     );
   }
 
@@ -558,6 +562,14 @@ async function cmdCopyFrom({ argv, json }) {
     flags.has('--infra') ||
     (kv.get('--with-infra') ?? '').trim() === '1' ||
     (kv.get('--ensure-infra') ?? '').trim() === '1';
+  const linkMode =
+    flags.has('--link') ||
+    flags.has('--symlink') ||
+    flags.has('--link-auth') ||
+    (kv.get('--link') ?? '').trim() === '1' ||
+    (kv.get('--symlink') ?? '').trim() === '1' ||
+    (kv.get('--auth-mode') ?? '').trim() === 'link';
+  const allowMain = flags.has('--allow-main') || flags.has('--main-ok') || (kv.get('--allow-main') ?? '').trim() === '1';
   const exceptRaw = (kv.get('--except') ?? '').trim();
   const except = new Set(exceptRaw.split(',').map((s) => s.trim()).filter(Boolean));
 
@@ -605,6 +617,7 @@ async function cmdCopyFrom({ argv, json }) {
             '--json',
             ...(force ? ['--force'] : []),
             ...(withInfra ? ['--with-infra'] : []),
+            ...(linkMode ? ['--link'] : []),
           ],
         });
         const parsed = out.stdout.trim() ? JSON.parse(out.stdout.trim()) : null;
@@ -644,8 +657,11 @@ async function cmdCopyFrom({ argv, json }) {
     return;
   }
 
-  if (stackName === 'main') {
-    throw new Error('[auth] copy-from is intended for stack-scoped usage (e.g. happys stack auth <name> copy-from main), or pass --all');
+  if (stackName === 'main' && !allowMain) {
+    throw new Error(
+      '[auth] copy-from is intended for stack-scoped usage (e.g. happys stack auth <name> copy-from main), or pass --all.\n' +
+        'If you really intend to seed the main Happy Stacks install, re-run with: --allow-main'
+    );
   }
 
   const serverComponent = resolveServerComponentForCurrentStack();
@@ -657,7 +673,11 @@ async function cmdCopyFrom({ argv, json }) {
   const targetSecretFile =
     (process.env.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim() || join(targetBaseDir, 'happy-server', 'handy-master-secret.txt');
 
-  const { secret, source } = await resolveHandyMasterSecretFromStack({ stackName: fromStackName, requireStackExists: true });
+  const isLegacySource = isLegacyAuthSourceName(fromStackName);
+  const { secret, source } = await resolveHandyMasterSecretFromStack({
+    stackName: fromStackName,
+    requireStackExists: !isLegacySource,
+  });
 
   const copied = {
     secret: false,
@@ -672,33 +692,47 @@ async function cmdCopyFrom({ argv, json }) {
 
   if (secret) {
     if (serverComponent === 'happy-server-light') {
-      copied.secret = await writeSecretFileIfMissing({
-        path: join(targetServerLightDataDir, 'handy-master-secret.txt'),
-        secret,
-        force,
-      });
+      const target = join(targetServerLightDataDir, 'handy-master-secret.txt');
+      const sourcePath = source && !String(source).includes('(HANDY_MASTER_SECRET)') ? String(source) : '';
+      if (linkMode && sourcePath && existsSync(sourcePath)) {
+        copied.secret = await linkFileIfMissing({ from: sourcePath, to: target, force });
+      } else {
+        copied.secret = await writeSecretFileIfMissing({ path: target, secret, force });
+      }
     } else if (serverComponent === 'happy-server') {
-      copied.secret = await writeSecretFileIfMissing({ path: targetSecretFile, secret, force });
+      const sourcePath = source && !String(source).includes('(HANDY_MASTER_SECRET)') ? String(source) : '';
+      if (linkMode && sourcePath && existsSync(sourcePath)) {
+        copied.secret = await linkFileIfMissing({ from: sourcePath, to: targetSecretFile, force });
+      } else {
+        copied.secret = await writeSecretFileIfMissing({ path: targetSecretFile, secret, force });
+      }
     }
   }
 
-  const sourceBaseDir = getStackDir(fromStackName);
-  const sourceEnvRaw = await readTextIfExists(getStackEnvPath(fromStackName));
+  const sourceBaseDir = isLegacySource ? getLegacyHappyBaseDir() : getStackDir(fromStackName);
+  const sourceEnvRaw = isLegacySource ? '' : await readTextIfExists(getStackEnvPath(fromStackName));
   const sourceEnv = sourceEnvRaw ? parseEnvToObject(sourceEnvRaw) : {};
-  const sourceCli = getCliHomeDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env: sourceEnv });
+  const sourceCli = isLegacySource
+    ? join(sourceBaseDir, 'cli')
+    : getCliHomeDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env: sourceEnv });
 
-  copied.accessKey = await copyFileIfMissing({
-    from: join(sourceCli, 'access.key'),
-    to: join(targetCli, 'access.key'),
-    mode: 0o600,
-    force,
-  });
-  copied.settings = await copyFileIfMissing({
-    from: join(sourceCli, 'settings.json'),
-    to: join(targetCli, 'settings.json'),
-    mode: 0o600,
-    force,
-  });
+  if (linkMode) {
+    copied.accessKey = await linkFileIfMissing({ from: join(sourceCli, 'access.key'), to: join(targetCli, 'access.key'), force });
+    copied.settings = await linkFileIfMissing({ from: join(sourceCli, 'settings.json'), to: join(targetCli, 'settings.json'), force });
+  } else {
+    copied.accessKey = await copyFileIfMissing({
+      from: join(sourceCli, 'access.key'),
+      to: join(targetCli, 'access.key'),
+      mode: 0o600,
+      force,
+    });
+    copied.settings = await copyFileIfMissing({
+      from: join(sourceCli, 'settings.json'),
+      to: join(targetCli, 'settings.json'),
+      mode: 0o600,
+      force,
+    });
+  }
 
   // Best-effort DB seeding: copy Account rows from source stack DB to target stack DB.
   // This avoids FK failures (e.g., Prisma P2003) when the target DB is fresh but the copied token
@@ -708,7 +742,7 @@ async function cmdCopyFrom({ argv, json }) {
     // IMPORTANT: when running with --json, keep stdout clean (no yarn/prisma chatter).
     await ensureDepsInstalled(serverDirForPrisma, serverComponent, { quiet: json }).catch(() => {});
 
-    const fromServerComponent = resolveServerComponentFromEnv(sourceEnv);
+    const fromServerComponent = isLegacySource ? 'happy-server-light' : resolveServerComponentFromEnv(sourceEnv);
     const fromDatabaseUrl = resolveDatabaseUrlForStackOrThrow({
       env: sourceEnv,
       stackName: fromStackName,
@@ -1046,16 +1080,17 @@ async function main() {
         '[auth] usage:',
         '  happys auth status [--json]',
         '  happys auth login [--force] [--print] [--json]',
-        '  happys auth copy-from <sourceStack> --all [--except=main,dev-auth] [--force] [--with-infra] [--json]',
+        '  happys auth copy-from <sourceStack|legacy> --all [--except=main,dev-auth] [--force] [--with-infra] [--json]',
         '  happys auth dev-key [--print] [--format=base64url|backup] [--set=<base64url>] [--clear] [--json]',
         '',
         'advanced:',
         '  happys auth login --context=selfhost|dev|stack   # UX labels only',
+        '  happys auth copy-from legacy --allow-main [--force]   # import ~/.happy creds into main happy-stacks install',
         '',
         'stack-scoped:',
         '  happys stack auth <name> status [--json]',
         '  happys stack auth <name> login [--force] [--print] [--json]',
-        '  happys stack auth <name> copy-from <sourceStack> [--force] [--with-infra] [--json]',
+        '  happys stack auth <name> copy-from <sourceStack|legacy> [--force] [--with-infra] [--json]',
       ].join('\n'),
     });
     return;
