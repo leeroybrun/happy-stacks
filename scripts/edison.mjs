@@ -5,6 +5,7 @@ import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths.
 import { parseDotenv } from './utils/dotenv.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
+import { resolveLocalhostHost } from './utils/localhost_host.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -1387,6 +1388,11 @@ async function main() {
   }
   // Marker for Edison-core wrapper enforcement in this repo (ensure it survives any env merges).
   env.HAPPY_STACKS_EDISON_WRAPPER = '1';
+  // Provide a stack-scoped localhost hostname for validators and browser flows.
+  // This ensures origin isolation even if ports are reused later (common with ephemeral ports).
+  const localhostHost = resolveLocalhostHost({ stackMode: Boolean(stackName), stackName: stackName || 'main' });
+  env.HAPPY_STACKS_LOCALHOST_HOST = localhostHost;
+  env.HAPPY_LOCAL_LOCALHOST_HOST = localhostHost;
 
   // Forward all args to `edison`.
   //

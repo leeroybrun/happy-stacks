@@ -111,8 +111,10 @@ validation:
   #   so the stack env (including HAPPY_LOCAL_SERVER_PORT / HAPPY_STACKS_SERVER_PORT) is loaded.
   web_servers:
     happy-stack: &happy_stack
-      url: "http://127.0.0.1:${HAPPY_LOCAL_SERVER_PORT}"
-      healthcheck_url: "http://127.0.0.1:${HAPPY_LOCAL_SERVER_PORT}/health"
+      # Use stack-scoped *.localhost hostnames for origin isolation (prevents browser state leakage
+      # across stacks even if ports are reused later).
+      url: "http://${HAPPY_STACKS_LOCALHOST_HOST}:${HAPPY_LOCAL_SERVER_PORT}"
+      healthcheck_url: "http://${HAPPY_STACKS_LOCALHOST_HOST}:${HAPPY_LOCAL_SERVER_PORT}/health"
       ensure_running: true
       stop_after: true
       start:
