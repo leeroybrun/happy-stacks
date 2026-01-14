@@ -17,6 +17,8 @@ import { ensureDepsInstalled, pmExecBin } from './utils/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/dev_auth_key.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
+import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
+import { printAuthLoginInstructions } from './utils/auth_login_ux.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -279,13 +281,9 @@ function authLoginSuggestion(stackName) {
   return stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
 }
 
-function resolveAuthSeedFromEnv() {
-  return (process.env.HAPPY_STACKS_AUTH_SEED_FROM ?? process.env.HAPPY_LOCAL_AUTH_SEED_FROM ?? 'main').trim() || 'main';
-}
-
 function authCopyFromSeedSuggestion(stackName) {
   if (stackName === 'main') return null;
-  const from = resolveAuthSeedFromEnv();
+  const from = resolveAuthSeedFromEnv(process.env);
   return `happys stack auth ${stackName} copy-from ${from}`;
 }
 
@@ -921,6 +919,7 @@ async function cmdStatus({ json }) {
 async function cmdLogin({ argv, json }) {
   const rootDir = getRootDir(import.meta.url);
   const stackName = getStackName();
+  const { kv } = parseArgs(argv);
 
   const { port, url: internalServerUrl } = getInternalServerUrl();
   const defaultPublicUrl = `http://localhost:${port}`;
@@ -934,12 +933,18 @@ async function cmdLogin({ argv, json }) {
   const envWebappUrl = resolveEnvWebappUrlForStack({ stackName });
   const expoWebappUrl = await resolveWebappUrlFromRunningExpo({ rootDir, stackName });
   const webappUrl = envWebappUrl || expoWebappUrl || publicServerUrl;
+  const webappUrlSource = expoWebappUrl ? 'expo' : envWebappUrl ? 'stack env override' : 'server';
 
   const cliHomeDir = resolveCliHomeDir();
   const cliBin = join(getComponentDir(rootDir, 'happy-cli'), 'bin', 'happy.mjs');
 
   const force = !argv.includes('--no-force');
   const wantPrint = argv.includes('--print');
+  const contextRaw =
+    (kv.get('--context') ?? process.env.HAPPY_STACKS_AUTH_LOGIN_CONTEXT ?? process.env.HAPPY_LOCAL_AUTH_LOGIN_CONTEXT ?? '')
+      .toString()
+      .trim();
+  const context = contextRaw || (stackName === 'main' ? 'generic' : 'stack');
 
   const nodeArgs = [cliBin, 'auth', 'login'];
   if (force || argv.includes('--force')) {
@@ -964,9 +969,15 @@ async function cmdLogin({ argv, json }) {
   }
 
   if (!json) {
-    console.log(`[auth] stack: ${stackName}`);
-    console.log(`[auth] launching login...`);
-    console.log(`[auth] webapp: ${webappUrl}${expoWebappUrl ? ' (expo)' : envWebappUrl ? ' (stack env override)' : ' (server)'}`);
+    printAuthLoginInstructions({
+      stackName,
+      context,
+      webappUrl,
+      webappUrlSource,
+      internalServerUrl,
+      publicServerUrl,
+      rerunCmd: authLoginSuggestion(stackName),
+    });
   }
 
   const child = spawn(process.execPath, nodeArgs, {
@@ -1037,6 +1048,9 @@ async function main() {
         '  happys auth login [--force] [--print] [--json]',
         '  happys auth copy-from <sourceStack> --all [--except=main,dev-auth] [--force] [--with-infra] [--json]',
         '  happys auth dev-key [--print] [--format=base64url|backup] [--set=<base64url>] [--clear] [--json]',
+        '',
+        'advanced:',
+        '  happys auth login --context=selfhost|dev|stack   # UX labels only',
         '',
         'stack-scoped:',
         '  happys stack auth <name> status [--json]',

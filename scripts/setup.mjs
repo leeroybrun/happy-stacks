@@ -343,6 +343,11 @@ async function cmdSetup({ rootDir, argv }) {
         });
         return v;
       });
+
+      // Auth requires the stack to be running; if you chose "authenticate now", implicitly start.
+      if (authWanted) {
+        startNow = true;
+      }
     } else if (profile === 'dev') {
       // In dev profile, we don't assume you want to run anything immediately.
       // If you choose to auth now, we’ll also start Happy in the background so login can complete.
@@ -518,13 +523,8 @@ async function cmdSetup({ rootDir, argv }) {
 
     // 8) Optional: auth login (runs interactive browser flow via happy-cli).
     if (authWanted) {
-      // eslint-disable-next-line no-console
-      console.log('');
-      // eslint-disable-next-line no-console
-      console.log('[setup] auth: Happy requires a one-time login so the daemon can register this machine.');
-      // eslint-disable-next-line no-console
-      console.log('[setup] auth: This will open a browser window. You may be asked to sign in / create an account, then approve this terminal.');
-      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['login'] });
+      const ctx = profile === 'selfhost' ? 'selfhost' : 'dev';
+      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['login', `--context=${ctx}`] });
 
       const cliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
       const accessKey = join(cliHomeDir, 'access.key');

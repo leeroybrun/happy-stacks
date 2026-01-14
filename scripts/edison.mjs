@@ -9,7 +9,8 @@ import { resolveLocalhostHost } from './utils/localhost_host.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { mkdir, lstat, rename, symlink, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, lstat, rename, symlink, writeFile, readdir, copyFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 
 const COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 
@@ -90,7 +91,10 @@ async function ensureStackServerPortForWebServerValidation({ rootDir, stackName,
   try {
     const child = spawn(
       process.execPath,
-      [join(rootDir, 'bin', 'happys.mjs'), 'stack', 'start', stackName, '--restart'],
+      // Do NOT force `--restart` here:
+      // - If the prior ephemeral port is still occupied (common after a crash), `--restart` fails closed.
+      // - For validation we prefer to bring up the stack on a fresh port rather than fail preflight.
+      [join(rootDir, 'bin', 'happys.mjs'), 'stack', 'start', stackName],
       { cwd: rootDir, env, stdio: 'ignore', detached: true }
     );
     child.unref();
@@ -1370,6 +1374,27 @@ async function main() {
       env.CODEX_HOME = codexHome;
       try {
         await mkdir(codexHome, { recursive: true });
+        // Preserve existing Codex credentials/config (if any) so codex can run with the same credentials
+        // while using a writable CODEX_HOME.
+        //
+        // IMPORTANT:
+        // - Do not read or log file contents (may contain secrets).
+        // - Best-effort only; if unauthenticated, codex will surface a clear error.
+        const srcDir = join(homedir(), '.codex');
+        try {
+          const candidates = ['config.toml', 'config.json', 'auth.json', 'auth.json.bak'];
+          for (const name of candidates) {
+            const src = join(srcDir, name);
+            const dst = join(codexHome, name);
+            // eslint-disable-next-line no-await-in-loop
+            if ((await pathExists(src)) && !(await pathExists(dst))) {
+              // eslint-disable-next-line no-await-in-loop
+              await copyFile(src, dst);
+            }
+          }
+        } catch {
+          // ignore auth seeding failures (codex will surface a clear error if unauthenticated)
+        }
       } catch {
         // best-effort: codex will surface a clearer error if this path is still unwritable
       }
