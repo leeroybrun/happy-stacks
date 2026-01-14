@@ -1,8 +1,8 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { getComponentDir, getRootDir } from './utils/paths.mjs';
 import { ensureCliBuilt, ensureHappyCliLocalNpmLinked } from './utils/pm.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 
 /**
  * Link the local Happy CLI wrapper into your PATH.

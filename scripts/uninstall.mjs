@@ -2,20 +2,16 @@ import './utils/env.mjs';
 
 import { rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
+import { expandHome } from './utils/canonical_home.mjs';
 import { getHappyStacksHomeDir, getRootDir, getStacksStorageRoot } from './utils/paths.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
 import { getCanonicalHomeEnvPath } from './utils/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
 
 function resolveWorkspaceDir({ rootDir, homeDir }) {
   // Uninstall should never default to deleting the repo root (getWorkspaceDir() can fall back to cliRootDir).

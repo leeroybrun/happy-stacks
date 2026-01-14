@@ -1,5 +1,5 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run } from './utils/proc.mjs';
 import { getComponentDir, getRootDir } from './utils/paths.mjs';
@@ -8,9 +8,9 @@ import { ensureCliBuilt, ensureDepsInstalled, ensureHappyCliLocalNpmLinked } fro
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { installService, uninstallService } from './service.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
-import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
+import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 /**

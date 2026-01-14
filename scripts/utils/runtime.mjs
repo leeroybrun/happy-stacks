@@ -2,9 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
+import { expandHome } from './canonical_home.mjs';
 
 export function getRuntimeDir() {
   const fromEnv = (process.env.HAPPY_STACKS_RUNTIME_DIR ?? '').trim();

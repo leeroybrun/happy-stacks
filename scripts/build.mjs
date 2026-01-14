@@ -1,11 +1,11 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/pm.mjs';
 import { dirname, join } from 'node:path';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tailscaleServeHttpsUrl } from './tailscale.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 
 /**
  * Build a lightweight static web UI bundle (no Expo dev server).

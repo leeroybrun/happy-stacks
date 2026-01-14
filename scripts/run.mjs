@@ -1,5 +1,5 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { killProcessTree, runCapture, spawnProc } from './utils/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { maybeResetTailscaleServe } from './tailscale.mjs';
 import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack_startup.mjs';

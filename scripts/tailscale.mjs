@@ -1,7 +1,8 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { run, runCapture } from './utils/proc.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 
@@ -369,6 +370,13 @@ async function main() {
       return;
     }
     case 'enable': {
+      if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+        throw new Error(
+          '[tailscale] enable is disabled in sandbox mode.\n' +
+            'Reason: Tailscale Serve is global machine state.\n' +
+            'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+        );
+      }
       const res = await tailscaleServeEnable({ internalServerUrl });
       if (res?.enableUrl && !res?.httpsUrl) {
         printResult({
@@ -387,6 +395,13 @@ async function main() {
     }
     case 'disable':
     case 'reset': {
+      if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+        throw new Error(
+          '[tailscale] disable/reset is disabled in sandbox mode.\n' +
+            'Reason: Tailscale Serve is global machine state.\n' +
+            'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+        );
+      }
       await tailscaleServeReset();
       printResult({ json, data: { ok: true }, text: '[local] tailscale serve reset' });
       return;

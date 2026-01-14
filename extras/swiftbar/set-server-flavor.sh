@@ -37,6 +37,9 @@ if [[ ! -x "$HAPPYS_BIN" ]]; then
 fi
 
 restart_main_service_best_effort() {
+  if [[ -n "${HAPPY_STACKS_SANDBOX_DIR:-}" ]]; then
+    return 0
+  fi
   "$HAPPYS_BIN" service:restart >/dev/null 2>&1 || true
   # If the installed LaunchAgent is still legacy/baked, reinstall so it persists only env-file pointer.
   "$HAPPYS_BIN" service:install >/dev/null 2>&1 || true
@@ -44,6 +47,9 @@ restart_main_service_best_effort() {
 
 restart_stack_service_best_effort() {
   local name="$1"
+  if [[ -n "${HAPPY_STACKS_SANDBOX_DIR:-}" ]]; then
+    return 0
+  fi
   "$HAPPYS_BIN" stack service:restart "$name" >/dev/null 2>&1 || true
   "$HAPPYS_BIN" stack service:install "$name" >/dev/null 2>&1 || true
 }

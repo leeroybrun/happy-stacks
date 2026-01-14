@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
 import { parseDotenv } from './utils/dotenv.mjs';
-import { printResult } from './utils/cli.mjs';
+import { printResult } from './utils/cli/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack_runtime_state.mjs';
 

@@ -17,6 +17,10 @@ shorten_path() {
   shorten_text "$pretty" "$max"
 }
 
+swiftbar_is_sandboxed() {
+  [[ -n "${HAPPY_STACKS_SANDBOX_DIR:-}" ]]
+}
+
 swiftbar_profile_enabled() {
   [[ "${HAPPY_STACKS_SWIFTBAR_PROFILE:-}" == "1" || "${HAPPY_LOCAL_SWIFTBAR_PROFILE:-}" == "1" ]]
 }
@@ -240,6 +244,12 @@ resolve_stacks_storage_root() {
     return
   fi
 
+  # In sandbox mode, avoid falling back to the user's real ~/.happy/stacks.
+  if swiftbar_is_sandboxed; then
+    echo "${HAPPY_STACKS_STORAGE_DIR:-${HAPPY_STACKS_SANDBOX_DIR%/}/storage}"
+    return
+  fi
+
   echo "$HOME/.happy/stacks"
 }
 
@@ -254,18 +264,22 @@ resolve_stack_env_file() {
     return
   fi
 
-  local legacy="$HOME/.happy/local/stacks/${stack_name}/env"
-  if [[ -f "$legacy" ]]; then
-    echo "$legacy"
-    return
+  if ! swiftbar_is_sandboxed; then
+    local legacy="$HOME/.happy/local/stacks/${stack_name}/env"
+    if [[ -f "$legacy" ]]; then
+      echo "$legacy"
+      return
+    fi
   fi
 
   # Very old single-stack location (best-effort).
-  if [[ "$stack_name" == "main" ]]; then
-    local legacy_single="$HOME/.happy/local/env"
-    if [[ -f "$legacy_single" ]]; then
-      echo "$legacy_single"
-      return
+  if ! swiftbar_is_sandboxed; then
+    if [[ "$stack_name" == "main" ]]; then
+      local legacy_single="$HOME/.happy/local/env"
+      if [[ -f "$legacy_single" ]]; then
+        echo "$legacy_single"
+        return
+      fi
     fi
   fi
 
@@ -316,6 +330,11 @@ resolve_stack_label() {
     primary="com.happy.stacks.${stack_name}"
     legacy="com.happy.local.${stack_name}"
   fi
+  if swiftbar_is_sandboxed; then
+    # Never inspect global LaunchAgents in sandbox mode.
+    echo "$primary"
+    return
+  fi
   local primary_plist="$HOME/Library/LaunchAgents/${primary}.plist"
   local legacy_plist="$HOME/Library/LaunchAgents/${legacy}.plist"
   if [[ -f "$primary_plist" ]]; then
@@ -345,10 +364,12 @@ resolve_pnpm_bin() {
   fi
 
   local global_happys
-  global_happys="$(command -v happys 2>/dev/null || true)"
-  if [[ -n "$global_happys" ]]; then
-    echo "$global_happys"
-    return
+  if ! swiftbar_is_sandboxed; then
+    global_happys="$(command -v happys 2>/dev/null || true)"
+    if [[ -n "$global_happys" ]]; then
+      echo "$global_happys"
+      return
+    fi
   fi
 
   echo ""
@@ -419,17 +440,19 @@ resolve_main_env_file() {
     echo "$main"
     return
   fi
-  # Legacy stacks location (pre-migration).
-  local legacy="$HOME/.happy/local/stacks/main/env"
-  if [[ -f "$legacy" ]]; then
-    echo "$legacy"
-    return
-  fi
-  # Very old single-stack location (best-effort).
-  local legacy_single="$HOME/.happy/local/env"
-  if [[ -f "$legacy_single" ]]; then
-    echo "$legacy_single"
-    return
+  if ! swiftbar_is_sandboxed; then
+    # Legacy stacks location (pre-migration).
+    local legacy="$HOME/.happy/local/stacks/main/env"
+    if [[ -f "$legacy" ]]; then
+      echo "$legacy"
+      return
+    fi
+    # Very old single-stack location (best-effort).
+    local legacy_single="$HOME/.happy/local/env"
+    if [[ -f "$legacy_single" ]]; then
+      echo "$legacy_single"
+      return
+    fi
   fi
   echo ""
 }

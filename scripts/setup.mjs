@@ -2,8 +2,8 @@ import './utils/env.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTty, promptSelect, withRl } from './utils/wizard.mjs';
 import { getCanonicalHomeDir } from './utils/config.mjs';
@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { installService } from './service.mjs';
 import { getDevAuthKeyPath } from './utils/dev_auth_key.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 function boolFromFlagsOrKv({ flags, kv, onFlag, offFlag, key, defaultValue }) {
   if (flags.has(offFlag)) return false;
@@ -202,13 +203,14 @@ function detectAuthSources() {
   const mainAccessKeyPath = getMainStacksAccessKeyPath();
   const legacyAccessKeyPath = getLegacyHappyAccessKeyPath();
   const devAuthAccessKeyPath = getDevAuthStackAccessKeyPath('dev-auth');
+  const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
   return {
     devKeyPath,
     hasDevKey: existsSync(devKeyPath),
     mainAccessKeyPath,
     hasMainAccessKey: existsSync(mainAccessKeyPath),
     legacyAccessKeyPath,
-    hasLegacyAccessKey: existsSync(legacyAccessKeyPath),
+    hasLegacyAccessKey: allowLegacy && existsSync(legacyAccessKeyPath),
     devAuthAccessKeyPath,
     hasDevAuthAccessKey: Boolean(devAuthAccessKeyPath && existsSync(devAuthAccessKeyPath)),
   };
@@ -693,7 +695,8 @@ async function cmdSetup({ rootDir, argv }) {
         let reused = false;
         if (interactive) {
           const legacyAccessKey = join(homedir(), '.happy', 'cli', 'access.key');
-          const hasLegacy = existsSync(legacyAccessKey);
+          const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
+          const hasLegacy = allowLegacy && existsSync(legacyAccessKey);
 
           if (hasLegacy) {
             const options = [];

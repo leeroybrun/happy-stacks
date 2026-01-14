@@ -1,6 +1,6 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 import { run } from './utils/proc.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';

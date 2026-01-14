@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 

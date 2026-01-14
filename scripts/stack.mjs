@@ -220,6 +220,7 @@ async function copyAuthFromStackIntoNewStack({
   const { secret, source } = await resolveHandyMasterSecretFromStack({
     stackName: fromStackName,
     requireStackExists: requireSourceStackExists,
+    allowLegacyAuthSource: !isSandboxed() || sandboxAllowsGlobalSideEffects(),
     allowLegacyMainFallback: !isSandboxed() || sandboxAllowsGlobalSideEffects(),
   });
 
@@ -247,6 +248,13 @@ async function copyAuthFromStackIntoNewStack({
   }
 
   const legacy = isLegacyAuthSourceName(fromStackName);
+  if (legacy && isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    throw new Error(
+      '[stack] auth copy-from: legacy auth source is disabled in sandbox mode.\n' +
+        'Reason: it reads from ~/.happy (global user state).\n' +
+        'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+    );
+  }
   const sourceBaseDir = legacy ? getLegacyHappyBaseDir() : getStackDir(fromStackName);
   const sourceEnvRaw = legacy ? '' : await readExistingEnv(getStackEnvPath(fromStackName));
   const sourceEnv = parseEnvToObject(sourceEnvRaw);

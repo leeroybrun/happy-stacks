@@ -6,11 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { ensureCanonicalHomeEnvUpdated, ensureHomeEnvUpdated } from './utils/config.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
+import { expandHome } from './utils/canonical_home.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
 
 async function readJsonIfExists(path) {
   try {

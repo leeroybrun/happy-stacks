@@ -1,19 +1,15 @@
 import './utils/env.mjs';
 
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { expandHome } from './utils/canonical_home.mjs';
 import { getComponentsDir, getComponentDir, getHappyStacksHomeDir, getRootDir, getStackLabel, getStackName, getWorkspaceDir, resolveStackEnvPath } from './utils/paths.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
 import { getCanonicalHomeDir, getCanonicalHomeEnvPath } from './utils/config.mjs';
 import { getSandboxDir } from './utils/sandbox.mjs';
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
 
 function getHomeEnvPaths() {
   const homeDir = getHappyStacksHomeDir();

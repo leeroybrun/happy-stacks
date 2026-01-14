@@ -5,21 +5,19 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { runCapture } from './utils/proc.mjs';
-import { getHappysRegistry } from './utils/cli_registry.mjs';
+import { getHappysRegistry } from './utils/cli/cli_registry.mjs';
+import { expandHome } from './utils/canonical_home.mjs';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
 
 function detectShell() {
   const raw = (process.env.SHELL ?? '').toLowerCase();
   if (raw.includes('fish')) return 'fish';
   if (raw.includes('bash')) return 'bash';
   return 'zsh';
-}
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
 }
 
 function parseShellArg({ argv, kv }) {
@@ -217,6 +215,9 @@ function completionPaths({ homeDir, shell }) {
 }
 
 async function ensureShellInstall({ homeDir, shell }) {
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    return { updated: false, path: null, skipped: 'sandbox' };
+  }
   const shellPath = (process.env.SHELL ?? '').toLowerCase();
   const isDarwin = process.platform === 'darwin';
 
@@ -338,7 +339,10 @@ async function main() {
     await writeFile(file, contents, 'utf-8');
 
     // fish loads completions automatically; zsh/bash need a tiny shell config hook.
-    const hook = shell === 'fish' ? { updated: false, path: null } : await ensureShellInstall({ homeDir, shell });
+    const hook =
+      shell === 'fish'
+        ? { updated: false, path: null }
+        : await ensureShellInstall({ homeDir, shell });
 
     printResult({
       json,
@@ -346,6 +350,9 @@ async function main() {
       text: [
         `[completion] installed: ${file}`,
         hook?.path ? (hook.updated ? `[completion] enabled via: ${hook.path}` : `[completion] already enabled in: ${hook.path}`) : null,
+        hook?.skipped === 'sandbox'
+          ? '[completion] note: skipped editing shell rc files (sandbox mode). To enable this, re-run with HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+          : null,
         '[completion] note: restart your terminal (or source your shell config) to pick it up.',
       ]
         .filter(Boolean)

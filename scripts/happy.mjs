@@ -1,15 +1,11 @@
 import './utils/env.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
+import { expandHome } from './utils/canonical_home.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
 
 function resolveCliHomeDir() {
   const fromExplicit = (process.env.HAPPY_HOME_DIR ?? '').trim();

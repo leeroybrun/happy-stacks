@@ -67,10 +67,13 @@ case "$cmd" in
     refresh_stack "main"
     STACKS_DIR="$(resolve_stacks_storage_root)"
     LEGACY_STACKS_DIR="$HOME/.happy/local/stacks"
+    if swiftbar_is_sandboxed; then
+      LEGACY_STACKS_DIR=""
+    fi
     STACK_NAMES="$(
       {
         ls -1 "$STACKS_DIR" 2>/dev/null || true
-        ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
+        [[ -n "$LEGACY_STACKS_DIR" ]] && ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
       } | sort -u
     )"
     while IFS= read -r s; do

@@ -1,5 +1,5 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { runCapture } from './utils/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths.mjs';
@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
 import { assertServerComponentDirMatches } from './utils/validate.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server_urls.mjs';

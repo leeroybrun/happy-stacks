@@ -106,6 +106,10 @@ PNPM_BIN="$(resolve_pnpm_bin)"
 MAIN_PORT="$(resolve_main_port)"
 MAIN_SERVER_COMPONENT="$(resolve_main_server_component)"
 TAILSCALE_URL="$(get_tailscale_url)"
+if swiftbar_is_sandboxed; then
+  # Never probe Tailscale (global machine state) when sandboxing.
+  TAILSCALE_URL=""
+fi
 MAIN_ENV_FILE="$(resolve_main_env_file)"
 MENUBAR_MODE="$(resolve_menubar_mode)"
 
@@ -207,11 +211,14 @@ else
 
   STACKS_DIR="$(resolve_stacks_storage_root)"
   LEGACY_STACKS_DIR="$HOME/.happy/local/stacks"
-  if [[ -d "$STACKS_DIR" ]] || [[ -d "$LEGACY_STACKS_DIR" ]]; then
+  if swiftbar_is_sandboxed; then
+    LEGACY_STACKS_DIR=""
+  fi
+  if [[ -d "$STACKS_DIR" ]] || [[ -n "$LEGACY_STACKS_DIR" && -d "$LEGACY_STACKS_DIR" ]]; then
     STACK_NAMES="$(
       {
         ls -1 "$STACKS_DIR" 2>/dev/null || true
-        ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
+        [[ -n "$LEGACY_STACKS_DIR" ]] && ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
       } | sort -u
     )"
     if [[ -z "$STACK_NAMES" ]]; then

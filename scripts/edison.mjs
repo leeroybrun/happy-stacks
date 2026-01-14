@@ -1,6 +1,6 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { pathExists } from './utils/fs.mjs';
@@ -85,6 +85,58 @@ function isQaValidateCommand(edisonArgs) {
     if (args[i] === 'qa' && args[i + 1] === 'validate') return true;
   }
   return false;
+}
+
+function hasArg(args, flag) {
+  const a = Array.isArray(args) ? args : [];
+  return a.includes(flag) || a.some((x) => typeof x === 'string' && x.startsWith(`${flag}=`));
+}
+
+function getArgValue(args, flag) {
+  const a = Array.isArray(args) ? args : [];
+  for (let i = 0; i < a.length; i++) {
+    const v = a[i];
+    if (v === flag) return a[i + 1] ?? '';
+    if (typeof v === 'string' && v.startsWith(`${flag}=`)) return v.slice(flag.length + 1);
+  }
+  return '';
+}
+
+function enforceValidatePresetPolicy({ edisonArgs }) {
+  // Policy (Happy Stacks):
+  // - CodeRabbit is required for *validation* (qa validate --execute), but must not run automatically.
+  // - We enforce this by requiring a `*-validate` preset in execute mode, which makes CodeRabbit evidence
+  //   required at preflight (command-coderabbit.txt). Preflight will instruct the operator to run
+  //   `evidence capture --only coderabbit` (manual, explicit) when missing.
+  if (!isQaValidateCommand(edisonArgs)) return;
+  const willExecute = hasArg(edisonArgs, '--execute') && !hasArg(edisonArgs, '--dry-run');
+  if (!willExecute) return;
+
+  const preset = String(getArgValue(edisonArgs, '--preset') ?? '').trim();
+  if (!preset) {
+    throw new Error(
+      '[edison] QA validation in happy-local requires an explicit validation preset.\n' +
+        '\n' +
+        'Use one of:\n' +
+        '  - --preset standard-validate\n' +
+        '  - --preset standard-ui-validate\n' +
+        '  - --preset quick (docs-only)\n' +
+        '\n' +
+        'This ensures CodeRabbit evidence is mandatory at preflight but never auto-runs.'
+    );
+  }
+  if (preset === 'quick') return;
+  if (!preset.endsWith('-validate')) {
+    throw new Error(
+      `[edison] Invalid preset for qa validate --execute: ${preset}\n` +
+        '\n' +
+        'In happy-local, execute-mode validation must use a validation-only preset so CodeRabbit evidence is required:\n' +
+        '  - --preset standard-validate\n' +
+        '  - --preset standard-ui-validate\n' +
+        '\n' +
+        'If you intended to capture implementation evidence only, use `evidence capture` (not `qa validate --execute`).'
+    );
+  }
 }
 
 async function ensureStackServerPortForWebServerValidation({ rootDir, stackName, env, edisonArgs, json }) {
@@ -1669,6 +1721,7 @@ async function main() {
   }
   env.AGENTS_PROJECT_ROOT = env.AGENTS_PROJECT_ROOT || rootDir;
   const edisonArgs = forward;
+  enforceValidatePresetPolicy({ edisonArgs });
 
   // Configure Edison evidence fingerprinting to include ONLY repos the task targets (not happy-local itself).
   // This prevents unrelated changes in happy-local scripts/docs from invalidating command evidence

@@ -25,6 +25,10 @@ HAPPY_STACKS_HOME_DIR="${HAPPY_STACKS_HOME_DIR:-$HAPPY_LOCAL_DIR}"
 
 HAPPYS="$HAPPY_LOCAL_DIR/extras/swiftbar/happys.sh"
 if [[ ! -x "$HAPPYS" ]]; then
+  if [[ -n "${HAPPY_STACKS_SANDBOX_DIR:-}" ]]; then
+    echo "missing happys wrapper in sandbox: $HAPPYS" >&2
+    exit 1
+  fi
   HAPPYS="$(command -v happys 2>/dev/null || true)"
 fi
 if [[ -z "$HAPPYS" ]]; then

@@ -140,8 +140,11 @@ echo -e "${YELLOW}Step 3: Installing Happy Stacks plugin...${NC}"
 
 PLUGIN_DEST="$PLUGINS_DIR/$PLUGIN_FILE"
 
-# Remove any legacy happy-local plugins to avoid duplicates.
-rm -f "$PLUGINS_DIR"/happy-local.*.sh 2>/dev/null || true
+# Remove any legacy happy-local plugins to avoid duplicates *only* for the primary plugin.
+# For sandbox installs (separate basenames), never delete other plugins.
+if [[ "$PLUGIN_BASENAME" == "happy-stacks" ]]; then
+    rm -f "$PLUGINS_DIR"/happy-local.*.sh 2>/dev/null || true
+fi
 
 EXISTED=0
 if [[ -f "$PLUGIN_DEST" ]]; then
@@ -168,8 +171,22 @@ if [[ "$SHOULD_INSTALL" == "1" ]]; then
         # Generate a wrapper plugin that pins env vars and executes the real plugin source.
         HOME_DIR_VAL="${HAPPY_STACKS_HOME_DIR:-${HAPPY_LOCAL_DIR:-$HOME/.happy-stacks}}"
         CANONICAL_DIR_VAL="${HAPPY_STACKS_CANONICAL_HOME_DIR:-${HAPPY_LOCAL_CANONICAL_HOME_DIR:-$HOME/.happy-stacks}}"
+        SANDBOX_DIR_VAL="${HAPPY_STACKS_SANDBOX_DIR:-}"
+        WORKSPACE_DIR_VAL="${HAPPY_STACKS_WORKSPACE_DIR:-}"
+        RUNTIME_DIR_VAL="${HAPPY_STACKS_RUNTIME_DIR:-}"
+        STORAGE_DIR_VAL="${HAPPY_STACKS_STORAGE_DIR:-}"
+
+        if [[ -n "$SANDBOX_DIR_VAL" ]]; then
+          [[ -z "$WORKSPACE_DIR_VAL" ]] && WORKSPACE_DIR_VAL="${SANDBOX_DIR_VAL%/}/workspace"
+          [[ -z "$RUNTIME_DIR_VAL" ]] && RUNTIME_DIR_VAL="${SANDBOX_DIR_VAL%/}/runtime"
+          [[ -z "$STORAGE_DIR_VAL" ]] && STORAGE_DIR_VAL="${SANDBOX_DIR_VAL%/}/storage"
+        fi
         HOME_DIR_ESC="$(escape_single_quotes "$HOME_DIR_VAL")"
         CANONICAL_DIR_ESC="$(escape_single_quotes "$CANONICAL_DIR_VAL")"
+        SANDBOX_DIR_ESC="$(escape_single_quotes "$SANDBOX_DIR_VAL")"
+        WORKSPACE_DIR_ESC="$(escape_single_quotes "$WORKSPACE_DIR_VAL")"
+        RUNTIME_DIR_ESC="$(escape_single_quotes "$RUNTIME_DIR_VAL")"
+        STORAGE_DIR_ESC="$(escape_single_quotes "$STORAGE_DIR_VAL")"
         SRC_ESC="$(escape_single_quotes "$PLUGIN_SOURCE")"
         BASENAME_ESC="$(escape_single_quotes "$PLUGIN_BASENAME")"
 
@@ -182,6 +199,23 @@ export HAPPY_STACKS_CANONICAL_HOME_DIR='$CANONICAL_DIR_ESC'
 export HAPPY_LOCAL_CANONICAL_HOME_DIR='$CANONICAL_DIR_ESC'
 export HAPPY_STACKS_SWIFTBAR_PLUGIN_BASENAME='$BASENAME_ESC'
 export HAPPY_LOCAL_SWIFTBAR_PLUGIN_BASENAME='$BASENAME_ESC'
+if [[ -n '$SANDBOX_DIR_ESC' ]]; then
+  export HAPPY_STACKS_SANDBOX_DIR='$SANDBOX_DIR_ESC'
+fi
+if [[ -n '$WORKSPACE_DIR_ESC' ]]; then
+  export HAPPY_STACKS_WORKSPACE_DIR='$WORKSPACE_DIR_ESC'
+  export HAPPY_LOCAL_WORKSPACE_DIR='$WORKSPACE_DIR_ESC'
+fi
+if [[ -n '$RUNTIME_DIR_ESC' ]]; then
+  export HAPPY_STACKS_RUNTIME_DIR='$RUNTIME_DIR_ESC'
+  export HAPPY_LOCAL_RUNTIME_DIR='$RUNTIME_DIR_ESC'
+fi
+if [[ -n '$STORAGE_DIR_ESC' ]]; then
+  export HAPPY_STACKS_STORAGE_DIR='$STORAGE_DIR_ESC'
+  export HAPPY_LOCAL_STORAGE_DIR='$STORAGE_DIR_ESC'
+fi
+# Prevent any re-exec into a "real" install when testing.
+export HAPPY_STACKS_CLI_ROOT_DISABLE="1"
 exec '$SRC_ESC'
 EOF
         chmod +x "$PLUGIN_DEST"

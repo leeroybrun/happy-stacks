@@ -37,11 +37,19 @@ function stackExistsSync(stackName) {
 export async function resolveHandyMasterSecretFromStack({
   stackName,
   requireStackExists = false,
+  allowLegacyAuthSource = true,
   allowLegacyMainFallback = true,
 } = {}) {
   const name = String(stackName ?? '').trim() || 'main';
 
   if (isLegacyAuthSourceName(name)) {
+    if (!allowLegacyAuthSource) {
+      throw new Error(
+        '[auth] legacy auth source is disabled in sandbox mode.\n' +
+          'Reason: it reads from ~/.happy (global user state).\n' +
+          'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+      );
+    }
     const baseDir = getLegacyHappyBaseDir();
     const legacySecretPath = join(baseDir, 'server-light', 'handy-master-secret.txt');
     const secret = await readTextIfExists(legacySecretPath);

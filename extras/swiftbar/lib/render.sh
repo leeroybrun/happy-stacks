@@ -108,9 +108,11 @@ render_component_server() {
     local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     local plist=""
     local svc_installed="0"
-    if [[ -n "$launch_label" ]]; then
-      plist="$HOME/Library/LaunchAgents/${launch_label}.plist"
-      [[ -f "$plist" ]] && svc_installed="1"
+    if ! swiftbar_is_sandboxed; then
+      if [[ -n "$launch_label" ]]; then
+        plist="$HOME/Library/LaunchAgents/${launch_label}.plist"
+        [[ -f "$plist" ]] && svc_installed="1"
+      fi
     fi
 
     print_sep "$p2"
@@ -124,7 +126,7 @@ render_component_server() {
         print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=service:restart dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
       else
         if [[ "$server_status" == "running" ]]; then
-          print_item "$p2" "Stop (kill port listeners) | bash=$PNPM_TERM param1=stack:fix dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+          print_item "$p2" "Stop stack | bash=$PNPM_BIN param1=stack param2=stop param3=main dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
         else
           print_item "$p2" "Start stack (foreground) | bash=$PNPM_TERM param1=start dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
         fi
@@ -139,7 +141,7 @@ render_component_server() {
         print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=stack param2=service:restart param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
       else
         if [[ "$server_status" == "running" ]]; then
-          print_item "$p2" "Stop (kill port listeners) | bash=$PNPM_TERM param1=stack param2=fix param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+          print_item "$p2" "Stop stack | bash=$PNPM_BIN param1=stack param2=stop param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
         else
           print_item "$p2" "Start stack (foreground) | bash=$PNPM_TERM param1=stack param2=start param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
         fi
@@ -208,9 +210,7 @@ render_component_daemon() {
       # Provide a direct "fix" action for the common first-run problem under launchd.
       local auth_helper="$HAPPY_LOCAL_DIR/extras/swiftbar/auth-login.sh"
       local server_url="http://127.0.0.1:$(resolve_main_port)"
-      local webapp_url
-      webapp_url="$(get_tailscale_url)"
-      [[ -z "$webapp_url" ]] && webapp_url="http://localhost:$(resolve_main_port)"
+      local webapp_url="http://localhost:$(resolve_main_port)"
       if [[ "$stack_name" == "main" ]]; then
         print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=main dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
       else
@@ -222,16 +222,17 @@ render_component_daemon() {
         [[ -z "$port" ]] && port="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_PORT")"
         [[ -z "$port" ]] && port="$(resolve_main_port)"
         server_url="http://127.0.0.1:${port}"
-        webapp_url="$(get_tailscale_url)"
-        [[ -z "$webapp_url" ]] && webapp_url="http://localhost:${port}"
+        webapp_url="http://localhost:${port}"
         print_item "$p2" "Auth login (opens browser) | bash=$auth_helper param1=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=false"
       fi
       print_sep "$p2"
     fi
-    if [[ "$stack_name" == "main" ]]; then
-      print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=service:restart dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-    else
-      print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=stack param2=service:restart param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    if ! swiftbar_is_sandboxed; then
+      if [[ "$stack_name" == "main" ]]; then
+        print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=service:restart dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      else
+        print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=stack param2=service:restart param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      fi
     fi
   fi
 }
@@ -244,6 +245,13 @@ render_component_autostart() {
   local autostart_pid="$5"
   local autostart_metrics="$6"
   local logs_dir="$7"
+
+  if swiftbar_is_sandboxed; then
+    print_item "$prefix" "Autostart | sfimage=exclamationmark.triangle sfconfig=light"
+    local p2="${prefix}--"
+    print_item "$p2" "Status: disabled in sandbox"
+    return
+  fi
 
   local level="red"
   if [[ "$launchagent_status" == "loaded" ]]; then level="green"; fi
@@ -327,6 +335,11 @@ render_component_tailscale() {
     print_item "$p2" "Open URL | href=$tailscale_url"
   else
     print_item "$p2" "Status: not configured / unknown"
+  fi
+
+  # Tailscale Serve is global machine state; never offer enable/disable actions in sandbox mode.
+  if swiftbar_is_sandboxed; then
+    return
   fi
 
   if [[ -z "$PNPM_BIN" ]]; then
@@ -751,14 +764,20 @@ collect_stack_status() {
   daemon_uptime="$(get_daemon_uptime "$cli_home_dir")"
   last_heartbeat="$(get_last_heartbeat "$cli_home_dir")"
 
-  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
   local launchagent_status autostart_pid autostart_metrics
-  launchagent_status="$(check_launchagent_status "$label" "$plist_path")"
-  autostart_pid=""
-  autostart_metrics=""
-  if [[ "$launchagent_status" != "not_installed" ]]; then
-    autostart_pid="$(launchagent_pid_for_label "$label")"
-    autostart_metrics="$(get_process_metrics "$autostart_pid")"
+  if swiftbar_is_sandboxed; then
+    launchagent_status="sandbox_disabled"
+    autostart_pid=""
+    autostart_metrics=""
+  else
+    local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+    launchagent_status="$(check_launchagent_status "$label" "$plist_path")"
+    autostart_pid=""
+    autostart_metrics=""
+    if [[ "$launchagent_status" != "not_installed" ]]; then
+      autostart_pid="$(launchagent_pid_for_label "$label")"
+      autostart_metrics="$(get_process_metrics "$autostart_pid")"
+    fi
   fi
 
   local level
@@ -836,9 +855,11 @@ render_stack_info() {
   fi
   print_sep "$p2"
 
-  local plist="$HOME/Library/LaunchAgents/${label}.plist"
   local svc_installed="0"
-  [[ -f "$plist" ]] && svc_installed="1"
+  if ! swiftbar_is_sandboxed; then
+    local plist="$HOME/Library/LaunchAgents/${label}.plist"
+    [[ -f "$plist" ]] && svc_installed="1"
+  fi
   local menu_mode
   menu_mode="$(resolve_menubar_mode)"
 
@@ -856,7 +877,7 @@ render_stack_info() {
       if [[ "${MAIN_LEVEL:-}" == "red" ]]; then
         print_item "$p2" "Start (foreground) | bash=$PNPM_TERM param1=start dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
       else
-        print_item "$p2" "Stop (kill port listeners) | bash=$PNPM_TERM param1=stack:fix dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+        print_item "$p2" "Stop stack | bash=$PNPM_BIN param1=stack param2=stop param3=main dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
       fi
     fi
     if [[ "$menu_mode" != "selfhost" ]]; then
@@ -880,7 +901,7 @@ render_stack_info() {
     if [[ "$STACK_LEVEL" == "red" ]]; then
       print_item "$p2" "Start (foreground) | bash=$PNPM_TERM param1=stack param2=start param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     else
-      print_item "$p2" "Stop (kill port listeners) | bash=$PNPM_TERM param1=stack param2=fix param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      print_item "$p2" "Stop stack | bash=$PNPM_BIN param1=stack param2=stop param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     fi
   fi
   if [[ "$menu_mode" != "selfhost" ]]; then

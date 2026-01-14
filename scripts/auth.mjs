@@ -1,6 +1,6 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths.mjs';
 import { listAllStackNames } from './utils/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
@@ -627,9 +627,17 @@ async function cmdCopyFrom({ argv, json }) {
     (process.env.HAPPY_STACKS_HANDY_MASTER_SECRET_FILE ?? '').trim() || join(targetBaseDir, 'happy-server', 'handy-master-secret.txt');
 
   const isLegacySource = isLegacyAuthSourceName(fromStackName);
+  if (isLegacySource && isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    throw new Error(
+      '[auth] legacy auth source is disabled in sandbox mode.\n' +
+        'Reason: it reads from ~/.happy (global user state).\n' +
+        'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+    );
+  }
   const { secret, source } = await resolveHandyMasterSecretFromStack({
     stackName: fromStackName,
     requireStackExists: !isLegacySource,
+    allowLegacyAuthSource: !isSandboxed() || sandboxAllowsGlobalSideEffects(),
     allowLegacyMainFallback: !isSandboxed() || sandboxAllowsGlobalSideEffects(),
   });
 

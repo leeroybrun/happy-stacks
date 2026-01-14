@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDotenv } from './dotenv.mjs';
-import { getCanonicalHomeEnvPathFromEnv } from './canonical_home.mjs';
+import { expandHome, getCanonicalHomeEnvPathFromEnv } from './canonical_home.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './sandbox.mjs';
 
 async function loadEnvFile(path, { override = false, overridePrefix = null } = {}) {
@@ -61,10 +61,6 @@ async function loadEnvFileIgnoringPrefixes(path, { ignorePrefixes = [] } = {}) {
 const __utilsDir = dirname(fileURLToPath(import.meta.url));
 const __scriptsDir = dirname(__utilsDir);
 const __cliRootDir = dirname(__scriptsDir);
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
 
 function resolveHomeDir() {
   const fromEnv = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim();
@@ -124,7 +120,9 @@ process.env.HAPPY_STACKS_HOME_DIR = process.env.HAPPY_STACKS_HOME_DIR ?? __homeD
 // duplicate them into ~/.happy-stacks/env.local.
 const homeEnv = join(__homeDir, '.env');
 const homeLocal = join(__homeDir, 'env.local');
-const hasHomeConfig = existsSync(homeEnv) || existsSync(homeLocal);
+// In sandbox mode, never load repo env.local (it can contain "real" machine paths/URLs).
+// Treat sandbox runs as having home config even if the sandbox home env files don't exist yet.
+const hasHomeConfig = isSandboxed() || existsSync(homeEnv) || existsSync(homeLocal);
 const repoEnv = join(__cliRootDir, '.env');
 
 // 1) Load defaults first (lowest precedence)

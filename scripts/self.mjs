@@ -2,19 +2,15 @@ import './utils/env.mjs';
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
+import { expandHome } from './utils/canonical_home.mjs';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
-
-function expandHome(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
 
 function cachePaths() {
   const home = getHappyStacksHomeDir();
