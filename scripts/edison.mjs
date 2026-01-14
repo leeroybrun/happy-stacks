@@ -1362,6 +1362,19 @@ async function main() {
       HAPPY_STACKS_EDISON_WRAPPER: '1',
     };
 
+    // Sandbox-safe Codex home:
+    // In some validator environments, writes to $HOME (e.g. /Users/<user>/.codex/...) are denied.
+    // Keep Codex session state inside the workspace so `global-codex` can execute.
+    if (!env.CODEX_HOME) {
+      const codexHome = join(rootDir, '.edison', '_tmp', 'codex-home', stackName);
+      env.CODEX_HOME = codexHome;
+      try {
+        await mkdir(codexHome, { recursive: true });
+      } catch {
+        // best-effort: codex will surface a clearer error if this path is still unwritable
+      }
+    }
+
     // We intentionally DO NOT include the happy-local repo root in evidence fingerprints by default.
     // Fingerprints should reflect only the task's target component repos (happy/happy-cli/etc).
     const componentDirs = resolveComponentDirsFromStackEnv({ rootDir, stackEnv });
