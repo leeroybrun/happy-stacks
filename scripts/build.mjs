@@ -22,17 +22,24 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--tauri', '--no-tauri'], json: true },
+      data: { flags: ['--tauri', '--no-tauri', '--no-ui'], json: true },
       text: [
         '[build] usage:',
         '  happys build [--tauri] [--json]',
         '  (legacy in a cloned repo): pnpm build [-- --tauri] [--json]',
-        '  node scripts/build.mjs [--tauri|--no-tauri] [--json]',
+        '  node scripts/build.mjs [--tauri|--no-tauri] [--no-ui] [--json]',
       ].join('\n'),
     });
     return;
   }
   const rootDir = getRootDir(import.meta.url);
+
+  // Optional: skip building the web UI bundle.
+  //
+  // This is useful for evidence capture flows that validate non-UI components (e.g. `happy-cli`)
+  // but still require a "build" step.
+  const skipUi = flags.has('--no-ui');
+
   const uiDir = getComponentDir(rootDir, 'happy');
   await requireDir('happy', uiDir);
 
@@ -48,6 +55,19 @@ async function main() {
     : join(getDefaultAutostartPaths().baseDir, 'ui');
 
   // UI is served at root; /ui redirects to /.
+
+  if (skipUi) {
+    // Ensure the output dir exists so server-light doesn't crash if used, but do not run Expo export.
+    await rm(outDir, { recursive: true, force: true });
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(outDir, '.happy-stacks-build-skipped'), 'no-ui\n', 'utf-8');
+    if (json) {
+      printResult({ json, data: { ok: true, outDir, skippedUi: true, tauriBuilt: false } });
+    } else {
+      console.log(`[local] skipping UI export (--no-ui); created empty UI dir at ${outDir}`);
+    }
+    return;
+  }
 
   await ensureDepsInstalled(uiDir, 'happy');
 
