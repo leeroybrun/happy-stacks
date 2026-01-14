@@ -1,10 +1,13 @@
 import './utils/env.mjs';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
-import { getRootDir } from './utils/paths.mjs';
+import { parseDotenv } from './utils/dotenv.mjs';
+import { printResult } from './utils/cli.mjs';
+import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
+import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack_runtime_state.mjs';
 
 function stripAnsi(s) {
   // eslint-disable-next-line no-control-regex
@@ -27,12 +30,19 @@ function nowTs() {
   return d.toISOString().slice(11, 19);
 }
 
-function mkPane(id, title) {
-  return { id, title, lines: [], scroll: 0 };
-}
-
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function mkPane(id, title, { visible = true, kind = 'log' } = {}) {
+  return { id, title, kind, visible, lines: [], scroll: 0 };
+}
+
+function pushLine(pane, line, { maxLines = 4000 } = {}) {
+  pane.lines.push(line);
+  if (pane.lines.length > maxLines) {
+    pane.lines.splice(0, pane.lines.length - maxLines);
+  }
 }
 
 function drawBox({ x, y, w, h, title, lines, scroll }) {
@@ -80,14 +90,123 @@ function drawBox({ x, y, w, h, title, lines, scroll }) {
   return { out, maxScroll };
 }
 
+function isTuiHelp(argv) {
+  if (!argv.length) return true;
+  if (argv.length === 1 && (argv[0] === '--help' || argv[0] === 'help')) return true;
+  return false;
+}
+
+function inferStackNameFromForwardedArgs(args) {
+  // Primary: stack-scoped usage: `happys tui stack <subcmd> <name> ...`
+  const i = args.indexOf('stack');
+  if (i >= 0) {
+    const name = args[i + 2];
+    if (name && !name.startsWith('-')) return name;
+  }
+  // Fallback: use current environment stack (or main).
+  return (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+}
+
+async function readEnvObject(path) {
+  try {
+    if (!path || !existsSync(path)) return {};
+    const raw = await readFile(path, 'utf-8');
+    return Object.fromEntries(parseDotenv(raw).entries());
+  } catch {
+    return {};
+  }
+}
+
+function formatComponentRef({ rootDir, component, dir }) {
+  const raw = String(dir ?? '').trim();
+  if (!raw) return '(unset)';
+
+  const abs = resolve(raw);
+  const defaultDir = resolve(join(rootDir, 'components', component));
+  const worktreesPrefix = resolve(join(rootDir, 'components', '.worktrees', component)) + sep;
+
+  if (abs === defaultDir) return 'default';
+  if (abs.startsWith(worktreesPrefix)) {
+    return abs.slice(worktreesPrefix.length);
+  }
+  return abs;
+}
+
+function getEnvVal(env, k1, k2) {
+  const a = String(env?.[k1] ?? '').trim();
+  if (a) return a;
+  return String(env?.[k2] ?? '').trim();
+}
+
+async function buildStackSummaryLines({ rootDir, stackName }) {
+  const { envPath, baseDir } = resolveStackEnvPath(stackName);
+  const env = await readEnvObject(envPath);
+  const runtimePath = getStackRuntimeStatePath(stackName);
+  const runtime = await readStackRuntimeStateFile(runtimePath);
+
+  const serverComponent =
+    getEnvVal(env, 'HAPPY_STACKS_SERVER_COMPONENT', 'HAPPY_LOCAL_SERVER_COMPONENT') || 'happy-server-light';
+
+  const ports = runtime?.ports && typeof runtime.ports === 'object' ? runtime.ports : {};
+  const expoWebPort = runtime?.expo && typeof runtime.expo === 'object' ? runtime.expo.webPort : null;
+  const processes = runtime?.processes && typeof runtime.processes === 'object' ? runtime.processes : {};
+
+  const components = [
+    { key: 'happy', envKey: 'HAPPY_STACKS_COMPONENT_DIR_HAPPY', legacyKey: 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY' },
+    { key: 'happy-cli', envKey: 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI', legacyKey: 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI' },
+    {
+      key: serverComponent === 'happy-server' ? 'happy-server' : 'happy-server-light',
+      envKey:
+        serverComponent === 'happy-server'
+          ? 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER'
+          : 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT',
+      legacyKey:
+        serverComponent === 'happy-server'
+          ? 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER'
+          : 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT',
+    },
+  ];
+
+  const lines = [];
+  lines.push(`stack: ${stackName}`);
+  lines.push(`server: ${serverComponent}`);
+  lines.push(`baseDir: ${baseDir}`);
+  lines.push(`env: ${envPath}`);
+  lines.push(`runtime: ${runtimePath}${runtime ? '' : ' (missing)'}`);
+  if (runtime?.startedAt) lines.push(`startedAt: ${runtime.startedAt}`);
+  if (runtime?.updatedAt) lines.push(`updatedAt: ${runtime.updatedAt}`);
+  if (runtime?.ownerPid) lines.push(`ownerPid: ${runtime.ownerPid}`);
+
+  lines.push('');
+  lines.push('ports:');
+  lines.push(`  server: ${ports?.server ?? '(unknown)'}`);
+  if (expoWebPort) lines.push(`  ui: ${expoWebPort}`);
+  if (ports?.backend) lines.push(`  backend: ${ports.backend}`);
+
+  lines.push('');
+  lines.push('pids:');
+  if (processes?.serverPid) lines.push(`  serverPid: ${processes.serverPid}`);
+  if (processes?.expoWebPid) lines.push(`  expoWebPid: ${processes.expoWebPid}`);
+  if (processes?.daemonPid) lines.push(`  daemonPid: ${processes.daemonPid}`);
+  if (processes?.uiGatewayPid) lines.push(`  uiGatewayPid: ${processes.uiGatewayPid}`);
+
+  lines.push('');
+  lines.push('components:');
+  for (const c of components) {
+    const dir = getEnvVal(env, c.envKey, c.legacyKey);
+    lines.push(`  ${padRight(c.key, 16)} ${formatComponentRef({ rootDir, component: c.key, dir })}`);
+  }
+
+  return lines;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
-  const { flags } = parseArgs(argv);
-  const json = wantsJson(argv, { flags });
-  if (wantsHelp(argv, { flags })) {
+
+  if (isTuiHelp(argv)) {
     printResult({
-      json,
-      data: { usage: 'happys tui <happys args...>', json: true },
+      json: false,
+      data: { usage: 'happys tui <happys args...>', json: false },
       text: [
         '[tui] usage:',
         '  happys tui <happys args...>',
@@ -95,15 +214,26 @@ async function main() {
         'examples:',
         '  happys tui stack dev resume-upstream',
         '  happys tui stack start resume-upstream',
+        '  happys tui stack auth dev-auth login',
+        '',
+        'layouts:',
+        '  single  : one pane (focused)',
+        '  split   : two panes (left=orchestration, right=focused)',
+        '  columns : multiple panes stacked in two columns (toggle visibility per pane)',
         '',
         'keys:',
-        '  tab / shift+tab: switch pane',
-        '  1..9: jump to pane',
-        '  v: toggle single/split layout',
-        '  c: clear focused pane',
-        '  p: pause/resume rendering',
-        '  ↑/↓, PgUp/PgDn, Home/End: scroll focused pane',
-        '  q / Ctrl+C: quit',
+        '  tab / shift+tab : focus next/prev (visible panes only)',
+        '  1..9            : jump to pane index',
+        '  v               : cycle layout (single → split → columns)',
+        '  m               : toggle focused pane visibility (columns layout)',
+        '  c               : clear focused pane',
+        '  p               : pause/resume rendering',
+        '  ↑/↓, PgUp/PgDn   : scroll focused pane',
+        '  Home/End        : jump bottom/top (focused pane)',
+        '  q / Ctrl+C      : quit (sends SIGINT to child)',
+        '',
+        'panes (default):',
+        '  orchestration | summary | local | server | ui | daemon | stack logs',
       ].join('\n'),
     });
     return;
@@ -116,39 +246,42 @@ async function main() {
   const rootDir = getRootDir(import.meta.url);
   const happysBin = join(rootDir, 'bin', 'happys.mjs');
   const forwarded = argv;
-  if (!forwarded.length) {
-    throw new Error('[tui] expected a happys command to run (e.g. `happys tui stack dev <stack>`).');
-  }
+
+  const stackName = inferStackNameFromForwardedArgs(forwarded);
 
   const panes = [
-    mkPane('orch', 'orchestration'),
-    mkPane('local', 'local'),
-    mkPane('server', 'server'),
-    mkPane('ui', 'ui'),
-    mkPane('daemon', 'daemon'),
-    mkPane('stack', 'stack'),
+    mkPane('orch', 'orchestration', { visible: true, kind: 'log' }),
+    mkPane('summary', `stack summary (${stackName})`, { visible: true, kind: 'summary' }),
+    mkPane('local', 'local', { visible: true, kind: 'log' }),
+    mkPane('server', 'server', { visible: true, kind: 'log' }),
+    mkPane('ui', 'ui', { visible: true, kind: 'log' }),
+    mkPane('daemon', 'daemon', { visible: true, kind: 'log' }),
+    mkPane('stacklog', 'stack logs', { visible: true, kind: 'log' }),
   ];
-  const paneById = new Map(panes.map((p, i) => [p.id, i]));
+
+  const paneIndexById = new Map(panes.map((p, i) => [p.id, i]));
 
   const routeLine = (line) => {
     const label = parsePrefixedLabel(line);
     const normalized = label ? label.toLowerCase() : '';
+
     let paneId = 'local';
     if (normalized.includes('server')) paneId = 'server';
     else if (normalized === 'ui') paneId = 'ui';
     else if (normalized.includes('daemon')) paneId = 'daemon';
-    else if (normalized === 'stack') paneId = 'stack';
+    else if (normalized === 'stack') paneId = 'stacklog';
     else if (normalized === 'local') paneId = 'local';
-    const idx = paneById.get(paneId) ?? 1;
-    panes[idx].lines.push(line);
+
+    const idx = paneIndexById.get(paneId) ?? paneIndexById.get('local');
+    pushLine(panes[idx], line);
   };
 
   const logOrch = (msg) => {
-    panes[0].lines.push(`[${nowTs()}] ${msg}`);
+    pushLine(panes[paneIndexById.get('orch')], `[${nowTs()}] ${msg}`);
   };
 
-  let layout = 'split'; // split | single
-  let focused = 1; // default focus: local
+  let layout = 'columns'; // single | split | columns
+  let focused = 2; // local
   let paused = false;
   let renderScheduled = false;
 
@@ -190,6 +323,23 @@ async function main() {
     scheduleRender();
   });
 
+  async function refreshSummary() {
+    const idx = paneIndexById.get('summary');
+    try {
+      const lines = await buildStackSummaryLines({ rootDir, stackName });
+      panes[idx].lines = lines;
+    } catch (e) {
+      panes[idx].lines = [`summary error: ${e instanceof Error ? e.message : String(e)}`];
+    }
+    scheduleRender();
+  }
+
+  const summaryTimer = setInterval(() => {
+    if (!paused) {
+      void refreshSummary();
+    }
+  }, 1000);
+
   function scheduleRender() {
     if (paused) return;
     if (renderScheduled) return;
@@ -198,6 +348,53 @@ async function main() {
       renderScheduled = false;
       render();
     }, 16);
+  }
+
+  function visiblePaneIndexes() {
+    return panes
+      .map((p, idx) => ({ p, idx }))
+      .filter(({ p }) => p.visible)
+      .map(({ idx }) => idx);
+  }
+
+  function focusNext(delta) {
+    const visible = visiblePaneIndexes();
+    if (!visible.length) return;
+    const pos = Math.max(0, visible.indexOf(focused));
+    const next = (pos + delta + visible.length) % visible.length;
+    focused = visible[next];
+    scheduleRender();
+  }
+
+  function scrollFocused(delta) {
+    const pane = panes[focused];
+    pane.scroll = Math.max(0, pane.scroll + delta);
+    scheduleRender();
+  }
+
+  function clearFocused() {
+    const pane = panes[focused];
+    if (pane.kind === 'summary') return;
+    pane.lines = [];
+    pane.scroll = 0;
+    scheduleRender();
+  }
+
+  function cycleLayout() {
+    layout = layout === 'single' ? 'split' : layout === 'split' ? 'columns' : 'single';
+    scheduleRender();
+  }
+
+  function toggleFocusedVisibility() {
+    if (layout !== 'columns') return;
+    const pane = panes[focused];
+    if (pane.id === 'orch') return; // always visible
+    pane.visible = !pane.visible;
+    if (!pane.visible) {
+      // Move focus to next visible pane.
+      focusNext(+1);
+    }
+    scheduleRender();
   }
 
   function render() {
@@ -220,11 +417,12 @@ async function main() {
       const box = drawBox({ x: 0, y: bodyY, w: cols, h: bodyH, title: pane.title, lines: pane.lines, scroll: pane.scroll });
       pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
       drawWrites.push(...box.out);
-    } else {
+    } else if (layout === 'split') {
       const leftW = Math.floor(cols / 2);
       const rightW = cols - leftW;
-      const leftPane = panes[0];
-      const rightPane = panes[focused === 0 ? 1 : focused];
+
+      const leftPane = panes[paneIndexById.get('orch')];
+      const rightPane = panes[focused === paneIndexById.get('orch') ? paneIndexById.get('local') : focused];
 
       const leftBox = drawBox({ x: 0, y: bodyY, w: leftW, h: bodyH, title: leftPane.title, lines: leftPane.lines, scroll: leftPane.scroll });
       leftPane.scroll = clamp(leftPane.scroll, 0, leftBox.maxScroll);
@@ -233,37 +431,51 @@ async function main() {
       const rightBox = drawBox({ x: leftW, y: bodyY, w: rightW, h: bodyH, title: rightPane.title, lines: rightPane.lines, scroll: rightPane.scroll });
       rightPane.scroll = clamp(rightPane.scroll, 0, rightBox.maxScroll);
       drawWrites.push(...rightBox.out);
+    } else {
+      // columns: render all visible panes in two columns, stacked.
+      const visible = visiblePaneIndexes().map((idx) => panes[idx]);
+      const leftW = Math.floor(cols / 2);
+      const rightW = cols - leftW;
+
+      const leftPanes = [];
+      const rightPanes = [];
+      for (let i = 0; i < visible.length; i++) {
+        (i % 2 === 0 ? leftPanes : rightPanes).push(visible[i]);
+      }
+
+      const layoutColumn = (colX, colW, colPanes) => {
+        if (!colPanes.length) return;
+        const n = colPanes.length;
+        const base = Math.max(3, Math.floor(bodyH / n));
+        let y = bodyY;
+        for (let i = 0; i < n; i++) {
+          const pane = colPanes[i];
+          const remaining = bodyY + bodyH - y;
+          const h = i === n - 1 ? remaining : Math.min(base, remaining);
+          if (h < 3) break;
+          const box = drawBox({ x: colX, y, w: colW, h, title: pane.title, lines: pane.lines, scroll: pane.scroll });
+          pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
+          drawWrites.push(...box.out);
+          y += h;
+        }
+      };
+
+      layoutColumn(0, leftW, leftPanes);
+      layoutColumn(leftW, rightW, rightPanes);
     }
 
     for (const w of drawWrites) {
       process.stdout.write(`\x1b[${w.row + 1};${w.col + 1}H${w.text}`);
     }
 
-    const footer = 'tab:next  shift+tab:prev  v:layout  c:clear  p:pause  arrows:scroll  q/Ctrl+C:quit';
+    const footer =
+      'tab:next  shift+tab:prev  1..9:jump  v:layout  m:toggle-pane  c:clear  p:pause  arrows:scroll  q/Ctrl+C:quit';
     process.stdout.write(`\x1b[${footerY + 1};1H` + padRight(footer, cols));
     process.stdout.write('\x1b[?25h');
   }
 
-  function focusNext(delta) {
-    const n = panes.length;
-    focused = (focused + delta + n) % n;
-    scheduleRender();
-  }
-
-  function scrollFocused(delta) {
-    const pane = panes[focused];
-    pane.scroll = Math.max(0, pane.scroll + delta);
-    scheduleRender();
-  }
-
-  function clearFocused() {
-    const pane = panes[focused];
-    pane.lines = [];
-    pane.scroll = 0;
-    scheduleRender();
-  }
-
   function shutdown() {
+    clearInterval(summaryTimer);
     try {
       process.stdin.setRawMode(false);
     } catch {
@@ -282,18 +494,14 @@ async function main() {
     } catch {
       // ignore
     }
-    process.stdout.write('\x1b[2J\x1b[H');
+    process.stdout.write('\x1b[2J\x1b[H\x1b[?25h');
   }
 
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on('data', (d) => {
     const s = d.toString('utf-8');
-    if (s === '\u0003') {
-      shutdown();
-      process.exit(0);
-    }
-    if (s === 'q') {
+    if (s === '\u0003' || s === 'q') {
       shutdown();
       process.exit(0);
     }
@@ -302,20 +510,22 @@ async function main() {
     if (s >= '1' && s <= '9') {
       const idx = Number(s) - 1;
       if (idx >= 0 && idx < panes.length) {
-        focused = idx;
-        scheduleRender();
+        if (panes[idx].visible) {
+          focused = idx;
+          scheduleRender();
+        }
       }
       return;
     }
-    if (s === 'v') {
-      layout = layout === 'split' ? 'single' : 'split';
-      scheduleRender();
-      return;
-    }
+    if (s === 'v') return cycleLayout();
+    if (s === 'm') return toggleFocusedVisibility();
     if (s === 'c') return clearFocused();
     if (s === 'p') {
       paused = !paused;
-      if (!paused) scheduleRender();
+      if (!paused) {
+        void refreshSummary();
+        scheduleRender();
+      }
       return;
     }
 
@@ -335,6 +545,7 @@ async function main() {
     }
   });
 
+  await refreshSummary();
   render();
   await new Promise(() => {});
 }

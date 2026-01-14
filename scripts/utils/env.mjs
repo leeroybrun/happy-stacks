@@ -37,6 +37,23 @@ async function loadEnvFile(path, { override = false, overridePrefix = null } = {
   }
 }
 
+async function loadEnvFileIgnoringPrefixes(path, { ignorePrefixes = [] } = {}) {
+  try {
+    const contents = await readFile(path, 'utf-8');
+    const parsed = parseDotenv(contents);
+    for (const [k, v] of parsed.entries()) {
+      if (ignorePrefixes.some((p) => k.startsWith(p))) {
+        continue;
+      }
+      if (process.env[k] == null || process.env[k] === '') {
+        process.env[k] = v;
+      }
+    }
+  } catch {
+    // ignore missing/invalid env file
+  }
+}
+
 // Load happy-stacks env (optional). This is intentionally lightweight and does not require extra deps.
 // This file lives under scripts/utils/, so repo root is two directories up.
 const __utilsDir = dirname(fileURLToPath(import.meta.url));
@@ -123,7 +140,14 @@ if (hasHomeConfig) {
 // If the repo has a .env, load it without overriding anything already set by the environment or home config.
 // Note: we intentionally do NOT load repo env.local here, because env.local is treated as higher-precedence
 // overrides and could unexpectedly fight with stack/home configuration when present.
-await loadEnvFile(repoEnv, { override: false });
+if (hasHomeConfig) {
+  // IMPORTANT:
+  // When home config exists, do not let repo-local .env set HAPPY_STACKS_* / HAPPY_LOCAL_* keys.
+  // Otherwise a cloned repo's .env can accidentally leak global URLs/ports into every stack.
+  await loadEnvFileIgnoringPrefixes(repoEnv, { ignorePrefixes: ['HAPPY_STACKS_', 'HAPPY_LOCAL_'] });
+} else {
+  await loadEnvFile(repoEnv, { override: false });
+}
 
 // If no explicit env file is set, and we're on the default "main" stack, prefer the stack-scoped env file
 // if it exists: ~/.happy/stacks/main/env

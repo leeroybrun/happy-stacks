@@ -220,8 +220,26 @@ async function maybeStartDockerDaemon() {
   }
 }
 
-async function dockerCompose({ composePath, projectName, args, options = {} }) {
-  await run('docker', ['compose', '-f', composePath, '-p', projectName, ...args], options);
+async function dockerCompose({ composePath, projectName, args, options = {}, quiet = false, retries = 0 }) {
+  const cmdArgs = ['compose', '-f', composePath, '-p', projectName, ...args];
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      if (quiet) {
+        // Capture stderr so callers can surface it in structured JSON errors.
+        await runCapture('docker', cmdArgs, { timeoutMs: 120_000, ...options });
+      } else {
+        await run('docker', cmdArgs, { ...options, stdio: options?.stdio ?? 'inherit' });
+      }
+      return;
+    } catch (e) {
+      if (attempt >= retries) throw e;
+      attempt += 1;
+      // eslint-disable-next-line no-await-in-loop
+      await delay(800);
+    }
+  }
 }
 
 async function waitForHealthyPostgres({ composePath, projectName, pgUser, pgDb }) {
@@ -262,6 +280,25 @@ async function waitForHealthyRedis({ composePath, projectName }) {
   throw new Error('[infra] timed out waiting for redis to become ready');
 }
 
+async function waitForMinioReady({ composePath, projectName }) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      // Minio doesn't ship a healthcheck in our compose; exec'ing a trivial command is a good enough
+      // readiness proxy for running/accepting execs before we run minio-init.
+      await runCapture('docker', ['compose', '-f', composePath, '-p', projectName, 'exec', '-T', 'minio', 'sh', '-lc', 'echo ok'], {
+        timeoutMs: 5_000,
+      });
+      return;
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(600);
+  }
+  throw new Error('[infra] timed out waiting for minio to become ready');
+}
+
 export async function ensureHappyServerManagedInfra({
   stackName,
   baseDir,
@@ -269,6 +306,8 @@ export async function ensureHappyServerManagedInfra({
   publicServerUrl,
   envPath,
   env = process.env,
+  quiet = false,
+  skipMinioInit = false,
 }) {
   await ensureDockerCompose();
 
@@ -336,7 +375,18 @@ export async function ensureHappyServerManagedInfra({
   const s3PublicUrl = `${pub}/files`;
 
   if (envPath) {
-    const ephemeralPorts = (env.HAPPY_STACKS_EPHEMERAL_PORTS ?? env.HAPPY_LOCAL_EPHEMERAL_PORTS ?? '').toString().trim() === '1';
+    // Ephemeral stacks should not pin ports in env files. In stack runtime, callers set
+    // HAPPY_STACKS_EPHEMERAL_PORTS=1 (via stack.runtime.json overlay) while the stack owner is alive.
+    //
+    // For offline tooling (e.g. auth seeding) we still want to preserve the invariant:
+    // - non-main stacks are ephemeral-by-default unless the user explicitly pinned ports already.
+    const runtimeEphemeral = (env.HAPPY_STACKS_EPHEMERAL_PORTS ?? env.HAPPY_LOCAL_EPHEMERAL_PORTS ?? '').toString().trim() === '1';
+    const alreadyPinnedPorts =
+      Boolean((existingEnv.HAPPY_STACKS_PG_PORT ?? '').trim()) ||
+      Boolean((existingEnv.HAPPY_STACKS_REDIS_PORT ?? '').trim()) ||
+      Boolean((existingEnv.HAPPY_STACKS_MINIO_PORT ?? '').trim()) ||
+      Boolean((existingEnv.HAPPY_STACKS_MINIO_CONSOLE_PORT ?? '').trim());
+    const ephemeralPorts = runtimeEphemeral || (stackName !== 'main' && !alreadyPinnedPorts);
     await ensureEnvFileUpdated({
       envPath,
       updates: [
@@ -385,12 +435,28 @@ export async function ensureHappyServerManagedInfra({
   });
   await writeFile(composePath, yaml, 'utf-8');
 
-  await dockerCompose({ composePath, projectName, args: ['up', '-d', '--remove-orphans'], options: { cwd: baseDir } });
+  await dockerCompose({
+    composePath,
+    projectName,
+    args: ['up', '-d', '--remove-orphans'],
+    options: { cwd: baseDir, stdio: quiet ? 'ignore' : 'inherit' },
+    quiet,
+  });
   await waitForHealthyPostgres({ composePath, projectName, pgUser, pgDb });
   await waitForHealthyRedis({ composePath, projectName });
 
-  // Ensure bucket exists (idempotent)
-  await dockerCompose({ composePath, projectName, args: ['run', '--rm', 'minio-init'], options: { cwd: baseDir } });
+  if (!skipMinioInit) {
+    // Ensure bucket exists (idempotent). This can race with Minio startup; retry a few times.
+    await waitForMinioReady({ composePath, projectName });
+    await dockerCompose({
+      composePath,
+      projectName,
+      args: ['run', '--rm', '--no-deps', 'minio-init'],
+      options: { cwd: baseDir, stdio: quiet ? 'ignore' : 'inherit' },
+      quiet,
+      retries: 3,
+    });
+  }
 
   return {
     composePath,
@@ -411,8 +477,8 @@ export async function ensureHappyServerManagedInfra({
   };
 }
 
-export async function applyHappyServerMigrations({ serverDir, env }) {
+export async function applyHappyServerMigrations({ serverDir, env, quiet = false }) {
   // Non-interactive + idempotent. Safe for dev; also safe for managed stacks on start.
-  await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['migrate', 'deploy'], env });
+  await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['migrate', 'deploy'], env, quiet });
 }
 
