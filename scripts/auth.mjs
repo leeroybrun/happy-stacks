@@ -607,6 +607,11 @@ async function cmdLogin({ argv, json }) {
 
   if (!json) {
     console.log(`[auth] stack: ${stackName}`);
+    console.log('[auth] this will open Happy in your browser.');
+    console.log('[auth] steps:');
+    console.log('  1) Sign in / create an account (if needed)');
+    console.log('  2) Approve this terminal/machine connection');
+    console.log('  3) Return here — the CLI will finish automatically');
     console.log(`[auth] launching login...`);
   }
 

@@ -11,7 +11,7 @@ import { run, runCapture } from './utils/proc.mjs';
 import { getComponentDir, getComponentsDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
 import { createWorktree, resolveComponentSpecToDir } from './utils/worktrees.mjs';
-import { isTty, prompt, promptWorktreeSource, withRl } from './utils/wizard.mjs';
+import { isTty, prompt, promptSelect, promptWorktreeSource, withRl } from './utils/wizard.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env_file.mjs';
@@ -452,6 +452,28 @@ async function interactiveNew({ rootDir, rl, defaults }) {
     out.port = want ? Number(want) : null;
   }
 
+  // Auth strategy (how should this stack get credentials?)
+  if (out.copyAuth == null) {
+    const picked = await promptSelect(rl, {
+      title: 'Authentication for this stack:',
+      options: [
+        {
+          label: 'copy from main (default; avoids re-login if main is already authenticated)',
+          value: { copyAuth: true, copyAuthFrom: 'main', migrateCredentials: true, autoCopyFromMain: true },
+        },
+        {
+          label: 'fresh auth (no copying; requires login)',
+          value: { copyAuth: false, copyAuthFrom: 'main', migrateCredentials: false, autoCopyFromMain: false },
+        },
+      ],
+      defaultIndex: 0,
+    });
+    out.copyAuth = picked.copyAuth;
+    out.copyAuthFrom = picked.copyAuthFrom;
+    out.migrateCredentials = picked.migrateCredentials;
+    out.autoCopyFromMain = picked.autoCopyFromMain;
+  }
+
   // Remote for creating new worktrees (used by all "create new worktree" choices)
   if (!out.createRemote) {
     out.createRemote = await prompt(rl, 'Git remote for creating new worktrees (default: upstream): ', { defaultValue: 'upstream' });
@@ -535,8 +557,8 @@ async function cmdNew({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const json = wantsJson(argv, { flags });
-  const copyAuth = !(flags.has('--no-copy-auth') || flags.has('--fresh-auth'));
-  const copyAuthFrom = (kv.get('--copy-auth-from') ?? '').trim() || 'main';
+  let copyAuth = !(flags.has('--no-copy-auth') || flags.has('--fresh-auth'));
+  let copyAuthFrom = (kv.get('--copy-auth-from') ?? '').trim() || 'main';
   const forcePort = flags.has('--force-port');
 
   // argv here is already "args after 'new'", so the first positional is the stack name.
@@ -548,6 +570,11 @@ async function cmdNew({ rootDir, argv }) {
     port: kv.get('--port')?.trim() ? Number(kv.get('--port')) : null,
     serverComponent: (kv.get('--server') ?? '').trim() || '',
     createRemote: (kv.get('--remote') ?? '').trim() || '',
+    // Only used for interactive prompts (flags remain authoritative when provided).
+    copyAuth: null,
+    copyAuthFrom: 'main',
+    migrateCredentials: null,
+    autoCopyFromMain: null,
     components: {
       happy: kv.get('--happy')?.trim() || null,
       'happy-cli': kv.get('--happy-cli')?.trim() || null,
@@ -561,12 +588,21 @@ async function cmdNew({ rootDir, argv }) {
     config = await withRl((rl) => interactiveNew({ rootDir, rl, defaults }));
   }
 
+  const copyAuthExplicit = flags.has('--no-copy-auth') || flags.has('--fresh-auth') || kv.has('--copy-auth-from');
+  if (interactive && !copyAuthExplicit) {
+    if (config.copyAuth === true) copyAuth = true;
+    if (config.copyAuth === false) copyAuth = false;
+    if (typeof config.copyAuthFrom === 'string' && config.copyAuthFrom.trim()) {
+      copyAuthFrom = config.copyAuthFrom.trim();
+    }
+  }
+
   stackName = config.stackName?.trim() ? config.stackName.trim() : '';
   if (!stackName) {
     throw new Error(
       '[stack] usage: happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
         '[--happy=default|<owner/...>|<path>] [--happy-cli=...] [--happy-server=...] [--happy-server-light=...] ' +
-        '[--copy-auth-from=main] [--no-copy-auth] [--interactive] [--force-port]'
+        '[--copy-auth-from=main] [--no-copy-auth|--fresh-auth] [--interactive] [--force-port]'
     );
   }
   if (stackName === 'main') {
@@ -621,6 +657,11 @@ async function cmdNew({ rootDir, argv }) {
     HAPPY_STACKS_UI_BUILD_DIR: uiBuildDir,
     HAPPY_STACKS_CLI_HOME_DIR: cliHomeDir,
     HAPPY_STACKS_STACK_REMOTE: config.createRemote?.trim() ? config.createRemote.trim() : 'upstream',
+    // Credential behavior (optional):
+    // - HAPPY_STACKS_MIGRATE_CREDENTIALS=0 disables best-effort credential migration from main/legacy locations.
+    // - HAPPY_STACKS_AUTO_COPY_FROM_MAIN=0 disables best-effort auth seeding from main when starting in non-interactive contexts.
+    HAPPY_STACKS_MIGRATE_CREDENTIALS: '1',
+    HAPPY_STACKS_AUTO_COPY_FROM_MAIN: '1',
     ...defaultComponentDirs,
   };
   if (port != null) {
@@ -684,6 +725,19 @@ async function cmdNew({ rootDir, argv }) {
       stackEnv.S3_USE_SSL = 'false';
       stackEnv.S3_PUBLIC_URL = s3PublicUrl;
     }
+  }
+
+  // Apply interactive auth choices (if flags didn't already decide them).
+  if (interactive && !copyAuthExplicit) {
+    const migrate = config.migrateCredentials == null ? true : Boolean(config.migrateCredentials);
+    const autoCopy = config.autoCopyFromMain == null ? true : Boolean(config.autoCopyFromMain);
+    stackEnv.HAPPY_STACKS_MIGRATE_CREDENTIALS = migrate ? '1' : '0';
+    stackEnv.HAPPY_STACKS_AUTO_COPY_FROM_MAIN = autoCopy ? '1' : '0';
+  }
+  // If the user requested a "fresh auth" stack explicitly, disable all copying.
+  if (flags.has('--fresh-auth') || flags.has('--no-copy-auth')) {
+    stackEnv.HAPPY_STACKS_MIGRATE_CREDENTIALS = '0';
+    stackEnv.HAPPY_STACKS_AUTO_COPY_FROM_MAIN = '0';
   }
 
   // happy
@@ -759,6 +813,7 @@ async function cmdNew({ rootDir, argv }) {
       `[stack] env: ${envPath}`,
       `[stack] port: ${port == null ? 'ephemeral (picked at start)' : String(port)}`,
       `[stack] server: ${serverComponent}`,
+      !copyAuth ? `[stack] auth: not copied. After starting this stack, run: happys stack auth ${stackName} login` : null,
     ].join('\n'),
   });
 }
@@ -1782,7 +1837,7 @@ async function main() {
       },
       text: [
         '[stack] usage:',
-        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=main] [--no-copy-auth] [--force-port] [--json]',
+        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=main] [--no-copy-auth|--fresh-auth] [--force-port] [--json]',
         '  happys stack edit <name> --interactive [--json]',
         '  happys stack list [--json]',
         '  happys stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',

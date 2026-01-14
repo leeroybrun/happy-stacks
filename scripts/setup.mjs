@@ -16,6 +16,17 @@ import { homedir } from 'node:os';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { installService } from './service.mjs';
 
+function boolFromFlagsOrKv({ flags, kv, onFlag, offFlag, key, defaultValue }) {
+  if (flags.has(offFlag)) return false;
+  if (flags.has(onFlag)) return true;
+  if (key && kv.has(key)) {
+    const raw = String(kv.get(key) ?? '').trim().toLowerCase();
+    if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'y') return true;
+    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'n') return false;
+  }
+  return defaultValue;
+}
+
 function normalizeProfile(raw) {
   const v = (raw ?? '').trim().toLowerCase();
   if (!v) return '';
@@ -163,6 +174,12 @@ async function spawnDetachedNodeScript({ rootDir, rel, args = [], env = process.
   return child.pid;
 }
 
+function mainCliHomeDirForEnvPath(envPath) {
+  const { baseDir } = resolveStackEnvPath('main');
+  // Prefer stack base dir; envPath is informational and can be legacy/new.
+  return join(baseDir, 'cli');
+}
+
 async function cmdSetup({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
@@ -176,6 +193,7 @@ async function cmdSetup({ rootDir, argv }) {
           '--server=happy-server-light|happy-server',
           '--install-path',
           '--start-now',
+          '--auth|--no-auth',
           '--tailscale|--no-tailscale',
           '--autostart|--no-autostart',
           '--menubar|--no-menubar',
@@ -187,6 +205,8 @@ async function cmdSetup({ rootDir, argv }) {
         '  happys setup',
         '  happys setup --profile=selfhost',
         '  happys setup --profile=dev',
+        '  happys setup --auth',
+        '  happys setup --no-auth',
         '',
         'notes:',
         '  - selfhost profile is a guided installer for running Happy locally (optionally with Tailscale + autostart).',
@@ -245,6 +265,14 @@ async function cmdSetup({ rootDir, argv }) {
   let menubarWanted = boolFromFlags({ flags, onFlag: '--menubar', offFlag: '--no-menubar', defaultValue: defaultMenubar });
   let startNow = boolFromFlags({ flags, onFlag: '--start-now', offFlag: '--no-start-now', defaultValue: defaultStartNow });
   let installPath = flags.has('--install-path') ? true : defaultInstallPath;
+  let authWanted = boolFromFlagsOrKv({
+    flags,
+    kv,
+    onFlag: '--auth',
+    offFlag: '--no-auth',
+    key: '--auth',
+    defaultValue: profile === 'selfhost',
+  });
 
   if (interactive) {
     if (profile === 'selfhost') {
@@ -303,6 +331,36 @@ async function cmdSetup({ rootDir, argv }) {
         });
         return v;
       });
+
+      authWanted = await withRl(async (rl) => {
+        const v = await promptSelect(rl, {
+          title: 'Authenticate now? (recommended)',
+          options: [
+            { label: 'yes (default) — enables Happy UI + mobile access', value: true },
+            { label: 'no — I will authenticate later', value: false },
+          ],
+          defaultIndex: authWanted ? 0 : 1,
+        });
+        return v;
+      });
+    } else if (profile === 'dev') {
+      // In dev profile, we don't assume you want to run anything immediately.
+      // If you choose to auth now, we’ll also start Happy in the background so login can complete.
+      const authNow = await withRl(async (rl) => {
+        const v = await promptSelect(rl, {
+          title: 'Complete authentication now? (optional)',
+          options: [
+            { label: 'no (default) — I will do this later', value: false },
+            { label: 'yes — start Happy in background and login', value: true },
+          ],
+          defaultIndex: 0,
+        });
+        return v;
+      });
+      authWanted = authNow;
+      if (authNow) {
+        startNow = true;
+      }
     }
 
     installPath = await withRl(async (rl) => {
@@ -329,6 +387,7 @@ async function cmdSetup({ rootDir, argv }) {
     platform,
     interactive,
     serverComponent,
+    authWanted,
     tailscaleWanted,
     autostartWanted,
     menubarWanted,
@@ -456,9 +515,42 @@ async function cmdSetup({ rootDir, argv }) {
         openTarget = https.replace(/\/+$/, '') + '/';
       }
     }
+
+    // 8) Optional: auth login (runs interactive browser flow via happy-cli).
+    if (authWanted) {
+      // eslint-disable-next-line no-console
+      console.log('');
+      // eslint-disable-next-line no-console
+      console.log('[setup] auth: Happy requires a one-time login so the daemon can register this machine.');
+      // eslint-disable-next-line no-console
+      console.log('[setup] auth: This will open a browser window. You may be asked to sign in / create an account, then approve this terminal.');
+      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['login'] });
+
+      const cliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
+      const accessKey = join(cliHomeDir, 'access.key');
+      if (!existsSync(accessKey)) {
+        // eslint-disable-next-line no-console
+        console.log('[setup] auth: not completed yet (missing access.key). You can retry with: happys auth login');
+      } else {
+        // eslint-disable-next-line no-console
+        console.log('[setup] auth: complete');
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('[setup] tip: when you are ready, authenticate with: happys auth login');
+    }
+
     await openUrl(openTarget);
     // eslint-disable-next-line no-console
     console.log(`[setup] open: ${openTarget}`);
+  }
+  if (authWanted && !startNow) {
+    // eslint-disable-next-line no-console
+    console.log('[setup] auth: skipped because Happy was not started. When ready:');
+    // eslint-disable-next-line no-console
+    console.log('  happys start');
+    // eslint-disable-next-line no-console
+    console.log('  happys auth login');
   }
 
   // Final tips (keep short).

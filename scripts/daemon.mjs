@@ -379,7 +379,10 @@ export async function startLocalDaemonWithAuth({
 
   // If this is a migrated/new stack home dir, seed credentials from the user's existing login (best-effort)
   // to avoid requiring an interactive auth flow under launchd.
-  await seedCredentialsIfMissing({ cliHomeDir });
+  const migrateCreds = (baseEnv.HAPPY_STACKS_MIGRATE_CREDENTIALS ?? baseEnv.HAPPY_LOCAL_MIGRATE_CREDENTIALS ?? '1').trim() !== '0';
+  if (migrateCreds) {
+    await seedCredentialsIfMissing({ cliHomeDir });
+  }
 
   const existing = checkDaemonState(cliHomeDir);
   if (!forceRestart && (existing.status === 'running' || existing.status === 'starting')) {
