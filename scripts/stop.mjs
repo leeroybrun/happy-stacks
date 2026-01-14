@@ -2,8 +2,8 @@ import './utils/env.mjs';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
 
