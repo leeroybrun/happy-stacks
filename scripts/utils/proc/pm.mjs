@@ -306,13 +306,23 @@ exec node "${resolveInstalledPath(rootDir, 'bin/happys.mjs')}" "$@"
   return { ok: true, cliRoot, binDir, happyShim, happysShim };
 }
 
-export async function pmExecBin(dir, bin, args, { env = process.env } = {}) {
+export async function pmExecBin(dirOrOpts, binArg, argsArg, optsArg) {
+  const usesObjectStyle = typeof dirOrOpts === 'object' && dirOrOpts !== null;
+
+  const dir = usesObjectStyle ? dirOrOpts.dir : dirOrOpts;
+  const bin = usesObjectStyle ? dirOrOpts.bin : binArg;
+  const args = usesObjectStyle ? (dirOrOpts.args ?? []) : (argsArg ?? []);
+
+  const env = usesObjectStyle ? (dirOrOpts.env ?? process.env) : (optsArg?.env ?? process.env);
+  const quiet = usesObjectStyle ? Boolean(dirOrOpts.quiet) : Boolean(optsArg?.quiet);
+  const stdio = quiet ? 'ignore' : 'inherit';
+
   const pm = await getComponentPm(dir);
   if (pm.name === 'yarn') {
-    await run(pm.cmd, ['run', bin, ...args], { cwd: dir, env });
+    await run(pm.cmd, ['run', bin, ...args], { cwd: dir, env, stdio });
     return;
   }
-  await run(pm.cmd, ['exec', bin, ...args], { cwd: dir, env });
+  await run(pm.cmd, ['exec', bin, ...args], { cwd: dir, env, stdio });
 }
 
 export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = {}) {
