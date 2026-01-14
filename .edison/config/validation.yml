@@ -18,24 +18,51 @@ validation:
 
     fast:
       name: fast
-      description: "Typecheck + build + lint (stack-scoped) + browser UI validation"
+      description: "Typecheck + build + lint (stack-scoped)"
       required_evidence:
         - command-type-check.txt
         - command-build.txt
         - command-lint.txt
+        - command-track-coherence.txt
       validators:
-        - browser-e2e
+        - track-drift-review
 
     standard:
       name: standard
-      description: "Fast + tests (stack-scoped) + browser UI validation"
+      description: "Fast + tests (stack-scoped)"
       required_evidence:
         - command-type-check.txt
         - command-build.txt
         - command-lint.txt
         - command-test.txt
+        - command-track-coherence.txt
+      validators:
+        - track-drift-review
+
+    fast-ui:
+      name: fast-ui
+      description: "Fast + browser UI validation (for tasks that include component happy)"
+      required_evidence:
+        - command-type-check.txt
+        - command-build.txt
+        - command-lint.txt
+        - command-track-coherence.txt
       validators:
         - browser-e2e
+        - track-drift-review
+
+    standard-ui:
+      name: standard-ui
+      description: "Standard + browser UI validation (for tasks that include component happy)"
+      required_evidence:
+        - command-type-check.txt
+        - command-build.txt
+        - command-lint.txt
+        - command-test.txt
+        - command-track-coherence.txt
+      validators:
+        - browser-e2e
+        - track-drift-review
 
   presetInference:
     rules:
@@ -54,12 +81,14 @@ validation:
       - command-type-check.txt
       - command-build.txt
       - command-lint.txt
+      - command-track-coherence.txt
     # Command name -> evidence filename mapping (used by evidence capture filtering).
     files:
       type-check: command-type-check.txt
       lint: command-lint.txt
       test: command-test.txt
       build: command-build.txt
+      track-coherence: command-track-coherence.txt
 
   # Optional web server profiles for validators that need a running stack.
   #
@@ -93,3 +122,19 @@ validation:
     browser-e2e:
       web_server:
         ref: browser-e2e
+
+    # Cross-track drift review (Happy Stacks).
+    #
+    # Lightweight: it reviews drift between tracks (upstream vs fork/integration) using
+    # `happys edison track:coherence` output and git diffs/range-diff.
+    #
+    # Included in `fast`, `standard`, `fast-ui`, and `standard-ui` as a mandatory blocking check.
+    track-drift-review:
+      name: "Track Drift Review (Happy Stacks)"
+      engine: codex-cli
+      fallback_engine: pal-mcp
+      prompt: ".edison/validators/track-drift-review.md"
+      wave: comprehensive
+      always_run: false
+      blocking: true
+      timeout: 6000
