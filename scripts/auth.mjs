@@ -502,6 +502,13 @@ async function cmdCopyFrom({ argv, json }) {
 
   const { flags, kv } = parseArgs(argv);
   const all = flags.has('--all');
+  if (isLegacyAuthSourceName(fromStackName) && isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    throw new Error(
+      '[auth] legacy auth source is disabled in sandbox mode.\n' +
+        'Reason: it reads from ~/.happy (global user state).\n' +
+        'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+    );
+  }
   const force =
     flags.has('--force') ||
     flags.has('--overwrite') ||

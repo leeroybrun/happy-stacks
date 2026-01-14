@@ -3,8 +3,8 @@ import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createRequire } from 'node:module';
 
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { ensureEnvFileUpdated } from './utils/env_file.mjs';
 import { resolveStackEnvPath } from './utils/paths.mjs';
