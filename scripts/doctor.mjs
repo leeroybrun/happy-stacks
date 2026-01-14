@@ -15,7 +15,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { assertServerComponentDirMatches } from './utils/validate.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
-import { resolveStackContext } from './utils/stack_context.mjs';
+import { resolveStackContext } from './utils/stack/context.mjs';
 
 /**
  * Doctor script for common happy-stacks failure modes.

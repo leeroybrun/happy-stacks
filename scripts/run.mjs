@@ -14,9 +14,9 @@ import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './da
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
-import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack_startup.mjs';
-import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack_runtime_state.mjs';
-import { resolveStackContext } from './utils/stack_context.mjs';
+import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack/startup.mjs';
+import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
+import { resolveStackContext } from './utils/stack/context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';

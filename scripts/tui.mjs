@@ -7,7 +7,7 @@ import { join, resolve, sep } from 'node:path';
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { printResult } from './utils/cli/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack_runtime_state.mjs';
+import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 
 function stripAnsi(s) {
   // eslint-disable-next-line no-control-regex

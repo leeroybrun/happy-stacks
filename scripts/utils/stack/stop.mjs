@@ -2,12 +2,12 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { getComponentDir } from './paths/paths.mjs';
-import { isPidAlive, readPidState } from './expo.mjs';
-import { stopLocalDaemon } from '../daemon.mjs';
-import { stopHappyServerManagedInfra } from './server/infra/happy_server_infra.mjs';
-import { deleteStackRuntimeStateFile, getStackRuntimeStatePath, readStackRuntimeStateFile } from './stack_runtime_state.mjs';
-import { killPidOwnedByStack, killProcessGroupOwnedByStack, listPidsWithEnvNeedle } from './ownership.mjs';
+import { getComponentDir } from '../paths/paths.mjs';
+import { isPidAlive, readPidState } from '../expo.mjs';
+import { stopLocalDaemon } from '../../daemon.mjs';
+import { stopHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
+import { deleteStackRuntimeStateFile, getStackRuntimeStatePath, readStackRuntimeStateFile } from './runtime_state.mjs';
+import { killPidOwnedByStack, killProcessGroupOwnedByStack, listPidsWithEnvNeedle } from '../proc/ownership.mjs';
 
 function parseIntOrNull(raw) {
   const s = String(raw ?? '').trim();

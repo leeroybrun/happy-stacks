@@ -6,7 +6,7 @@ import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/p
 import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/proc/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo.mjs';
-import { killProcessGroupOwnedByStack } from './utils/ownership.mjs';
+import { killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.

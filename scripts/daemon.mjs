@@ -1,5 +1,5 @@
 import { spawnProc, run, runCapture } from './utils/proc/proc.mjs';
-import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
+import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getStacksStorageRoot } from './utils/paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';

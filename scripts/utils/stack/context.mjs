@@ -1,5 +1,5 @@
-import { getStackName, resolveStackEnvPath } from './paths/paths.mjs';
-import { getStackRuntimeStatePath } from './stack_runtime_state.mjs';
+import { getStackName, resolveStackEnvPath } from '../paths/paths.mjs';
+import { getStackRuntimeStatePath } from './runtime_state.mjs';
 
 export function resolveStackContext({ env = process.env, autostart = null } = {}) {
   const explicitStack = (env.HAPPY_STACKS_STACK ?? env.HAPPY_LOCAL_STACK ?? '').toString().trim();

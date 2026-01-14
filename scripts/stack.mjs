@@ -22,8 +22,8 @@ import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
-import { listAllStackNames } from './utils/stacks.mjs';
-import { stopStackWithEnv } from './utils/stack_stop.mjs';
+import { listAllStackNames } from './utils/stack/stacks.mjs';
+import { stopStackWithEnv } from './utils/stack/stop.mjs';
 import { writeDevAuthKey } from './utils/dev_auth_key.mjs';
 import { startDevServer } from './utils/dev_server.mjs';
 import { startDevExpoWebUi } from './utils/dev_expo_web.mjs';
@@ -33,7 +33,7 @@ import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth_files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
-import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
+import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getHomeEnvLocalPath } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
@@ -43,9 +43,9 @@ import {
   isPidAlive,
   recordStackRuntimeStart,
   readStackRuntimeStateFile,
-} from './utils/stack_runtime_state.mjs';
+} from './utils/stack/runtime_state.mjs';
 import { killPid } from './utils/expo.mjs';
-import { killPidOwnedByStack } from './utils/ownership.mjs';
+import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
 
 function getEnvValue(obj, key) {
   const v = (obj?.[key] ?? '').toString().trim();

@@ -2,8 +2,8 @@ import { readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { getLegacyStorageRoot, getStacksStorageRoot } from './paths/paths.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './env/sandbox.mjs';
+import { getLegacyStorageRoot, getStacksStorageRoot } from '../paths/paths.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from '../env/sandbox.mjs';
 
 export async function listAllStackNames() {
   const names = new Set(['main']);

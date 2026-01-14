@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 import { ensureCliBuilt, ensureDepsInstalled } from './proc/pm.mjs';
 import { watchDebounced } from './watch.mjs';
-import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './stack_startup.mjs';
+import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './stack/startup.mjs';
 import { startLocalDaemonWithAuth } from '../daemon.mjs';
 
 export async function ensureDevCliReady({ cliDir, buildCli }) {
