@@ -26,6 +26,8 @@ validation:
         - command-track-coherence.txt
       validators:
         - track-drift-review
+      blocking_validators:
+        - track-drift-review
 
     standard:
       name: standard
@@ -38,6 +40,10 @@ validation:
         - command-track-coherence.txt
       validators:
         - track-drift-review
+        - coderabbit
+      blocking_validators:
+        - track-drift-review
+        - coderabbit
 
     fast-ui:
       name: fast-ui
@@ -48,6 +54,9 @@ validation:
         - command-lint.txt
         - command-track-coherence.txt
       validators:
+        - browser-e2e
+        - track-drift-review
+      blocking_validators:
         - browser-e2e
         - track-drift-review
 
@@ -63,6 +72,11 @@ validation:
       validators:
         - browser-e2e
         - track-drift-review
+        - coderabbit
+      blocking_validators:
+        - browser-e2e
+        - track-drift-review
+        - coderabbit
 
   presetInference:
     rules:
@@ -138,3 +152,10 @@ validation:
       always_run: false
       blocking: true
       timeout: 6000
+
+    # Make CodeRabbit blocking in happy-local.
+    #
+    # NOTE: Edison core defines `coderabbit` as non-blocking by default. Happy-local
+    # requires it to block promotion when included by preset.
+    coderabbit:
+      blocking: true

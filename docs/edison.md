@@ -215,9 +215,9 @@ Configured in:
 Presets:
 
 - **fast**: typecheck + build + lint + **track drift review**
-- **standard**: fast + tests + **track drift review**
+- **standard**: standard evidence + **track drift review** + **CodeRabbit** (blocking)
 - **fast-ui**: fast + **browser UI validation** + **track drift review** (for tasks that include component `happy`)
-- **standard-ui**: standard + **browser UI validation** + **track drift review** (for tasks that include component `happy`)
+- **standard-ui**: standard + **browser UI validation** + **track drift review** + **CodeRabbit** (blocking)
 - **quick**: docs-only (no command evidence)
 
 Track drift review is intentionally fast:
