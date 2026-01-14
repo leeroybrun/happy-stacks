@@ -211,6 +211,28 @@ async function inferStackFromArgs({ rootDir, edisonArgs }) {
   return '';
 }
 
+async function inferTaskIdFromArgs({ rootDir, edisonArgs }) {
+  const args = Array.isArray(edisonArgs) ? edisonArgs : [];
+  for (const a of args) {
+    if (!a || a.startsWith('-')) continue;
+    const id = String(a).trim();
+    if (!id) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const taskPath = await resolveTaskFilePath({ rootDir, taskId: id });
+    if (taskPath) return id;
+    // eslint-disable-next-line no-await-in-loop
+    const qaPath = await resolveQaFilePath({ rootDir, qaId: id });
+    if (qaPath) {
+      // Some commands might pass a QA id; use its task_id to determine targeted components.
+      // eslint-disable-next-line no-await-in-loop
+      const fm = await readFrontmatterFile(qaPath);
+      const tid = String(fm?.task_id ?? fm?.taskId ?? '').trim();
+      if (tid) return tid;
+    }
+  }
+  return '';
+}
+
 function parseEnvToObject(raw) {
   const parsed = parseDotenv(raw);
   return Object.fromEntries(parsed.entries());
@@ -883,6 +905,55 @@ function resolveComponentDirFromStackEnv({ rootDir, stackEnv, component }) {
   return String(dirs[idx] ?? '').trim();
 }
 
+async function resolveTargetComponentsForTask({ rootDir, taskId }) {
+  const id = String(taskId ?? '').trim();
+  if (!id) return [];
+  const mdPath = await resolveTaskFilePath({ rootDir, taskId: id });
+  if (!mdPath) return [];
+  const fm = await readFrontmatterFile(mdPath);
+  const hsKind = String(fm?.hs_kind ?? '').trim().toLowerCase();
+
+  const readComponents = (v) => {
+    if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+    if (typeof v === 'string') return v.split(',').map((p) => p.trim()).filter(Boolean);
+    return [];
+  };
+
+  if (hsKind === 'component') {
+    const c = String(fm?.component ?? '').trim();
+    const comps = c ? [c] : readComponents(fm?.components);
+    return comps;
+  }
+
+  // Track/parent: can declare multiple components.
+  return readComponents(fm?.components);
+}
+
+async function resolveFingerprintGitRoots({ rootDir, stackEnv, edisonArgs }) {
+  // Default: include only the stack's component repos (never include the happy-local orchestration repo).
+  const fallback = resolveComponentDirsFromStackEnv({ rootDir, stackEnv }).filter(Boolean);
+
+  const taskId = await inferTaskIdFromArgs({ rootDir, edisonArgs });
+  if (!taskId) return fallback;
+
+  const targets = await resolveTargetComponentsForTask({ rootDir, taskId });
+  if (!targets.length) return fallback;
+
+  const dirs = [];
+  for (const c of targets) {
+    // Allow tasks to explicitly target the orchestration repo (happy-local) by declaring it.
+    // Otherwise, keep happy-local out of evidence fingerprints to avoid invalidating evidence
+    // when editing wrapper scripts/docs unrelated to the component task under review.
+    if (c === 'happy-local' || c === 'happy-stacks' || c === 'happy_local' || c === 'happyStacks') {
+      dirs.push(rootDir);
+      continue;
+    }
+    const d = resolveComponentDirFromStackEnv({ rootDir, stackEnv, component: c });
+    if (d) dirs.push(d);
+  }
+  return dirs.length ? dirs : fallback;
+}
+
 async function cmdTrackCoherence({ rootDir, argv, json }) {
   const { flags, kv } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));
@@ -1290,12 +1361,9 @@ async function main() {
       HAPPY_STACKS_EDISON_WRAPPER: '1',
     };
 
-    // Configure Edison multi-repo evidence fingerprinting to include the actual component dirs
-    // this stack points at (worktrees or defaults), plus the stack env file itself.
+    // We intentionally DO NOT include the happy-local repo root in evidence fingerprints by default.
+    // Fingerprints should reflect only the task's target component repos (happy/happy-cli/etc).
     const componentDirs = resolveComponentDirsFromStackEnv({ rootDir, stackEnv });
-    const roots = [rootDir, ...componentDirs];
-    env.EDISON_CI__FINGERPRINT__GIT_ROOTS = JSON.stringify(roots);
-    env.EDISON_CI__FINGERPRINT__EXTRA_FILES = JSON.stringify([envPath]);
 
     if (!json) {
       const pretty = COMPONENTS.map((name, i) => {
@@ -1341,6 +1409,20 @@ async function main() {
   }
   env.AGENTS_PROJECT_ROOT = env.AGENTS_PROJECT_ROOT || rootDir;
   const edisonArgs = forward;
+
+  // Configure Edison evidence fingerprinting to include ONLY repos the task targets (not happy-local itself).
+  // This prevents unrelated changes in happy-local scripts/docs from invalidating command evidence
+  // for tasks that target component repos (happy, happy-cli, etc).
+  if (stackName) {
+    const { envPath } = resolveStackEnvPath(stackName);
+    const raw = await readExistingEnv(envPath);
+    const stackEnv = parseEnvToObject(raw);
+
+    const roots = await resolveFingerprintGitRoots({ rootDir, stackEnv, edisonArgs });
+    env.EDISON_CI__FINGERPRINT__GIT_ROOTS = JSON.stringify(roots);
+    // Stack env file still matters for stack-scoped commands (component dir overrides, server URLs, etc).
+    env.EDISON_CI__FINGERPRINT__EXTRA_FILES = JSON.stringify([envPath]);
+  }
 
   // Best-effort: if `edison` is not installed, print a helpful message.
   try {
