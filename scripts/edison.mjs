@@ -87,6 +87,14 @@ function isQaValidateCommand(edisonArgs) {
   return false;
 }
 
+function isQaRunCommand(edisonArgs) {
+  const args = Array.isArray(edisonArgs) ? edisonArgs : [];
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === 'qa' && args[i + 1] === 'run') return true;
+  }
+  return false;
+}
+
 function hasArg(args, flag) {
   const a = Array.isArray(args) ? args : [];
   return a.includes(flag) || a.some((x) => typeof x === 'string' && x.startsWith(`${flag}=`));
@@ -137,6 +145,60 @@ function enforceValidatePresetPolicy({ edisonArgs }) {
         'If you intended to capture implementation evidence only, use `evidence capture` (not `qa validate --execute`).'
     );
   }
+}
+
+async function enforceQaRunPreflightPolicy({ rootDir, env, edisonArgs }) {
+  // `edison qa run <validator> <task>` executes a single validator directly (no preset support).
+  // In happy-local, we still want "validation-grade" prerequisites to be enforced and surfaced
+  // *before* execution, without auto-running heavier evidence like CodeRabbit.
+  //
+  // Policy:
+  // - For execute-mode qa run (i.e. not --dry-run), require validation-only evidence to be satisfied.
+  // - This makes CodeRabbit evidence mandatory (via the validation-only preset), but does not run it automatically.
+  if (!isQaRunCommand(edisonArgs)) return;
+  if (hasArg(edisonArgs, '--dry-run')) return;
+
+  // Extract positional args: qa run <validator_id> <task_id>
+  const args = Array.isArray(edisonArgs) ? edisonArgs : [];
+  let validatorId = '';
+  let taskId = '';
+  for (let i = 0; i < args.length - 3; i++) {
+    if (args[i] === 'qa' && args[i + 1] === 'run') {
+      validatorId = String(args[i + 2] ?? '').trim();
+      taskId = String(args[i + 3] ?? '').trim();
+      break;
+    }
+  }
+  if (!validatorId || !taskId) return;
+
+  // Pick the validation-only preset for the scope:
+  // - browser-e2e runs in the UI validate preset
+  // - everything else uses the standard validate preset
+  const preset = validatorId === 'browser-e2e' ? 'standard-ui-validate' : 'standard-validate';
+
+  // Preflight by checking evidence status (fail-closed if required evidence is missing).
+  let status = null;
+  try {
+    const raw = await runCapture('edison', ['evidence', 'status', taskId, '--preset', preset, '--json'], {
+      cwd: rootDir,
+      env,
+    });
+    status = JSON.parse(String(raw ?? '').trim() || 'null');
+  } catch {
+    status = null;
+  }
+  const ok = Boolean(status?.success);
+  if (ok) return;
+
+  const missing = Array.isArray(status?.missingCommands) ? status.missingCommands.filter(Boolean) : [];
+  const missingHint = missing.length ? ` --only ${missing.join(',')}` : '';
+  throw new Error(
+    `[edison] Refusing to run qa run without validation-only evidence (preset=${preset}).\n\n` +
+      `Fix:\n` +
+      `  happys edison --stack=$HAPPY_STACKS_STACK -- evidence capture ${taskId} --preset ${preset}${missingHint}\n\n` +
+      `Rationale:\n` +
+      `  This keeps CodeRabbit evidence mandatory for validation while ensuring it never runs automatically.\n`
+  );
 }
 
 async function ensureStackServerPortForWebServerValidation({ rootDir, stackName, env, edisonArgs, json }) {
@@ -1017,14 +1079,12 @@ async function resolveRealBinary({ rootDir, env, name, ignorePrefix }) {
 
 async function maybeInstallCodeRabbitWrapper({ rootDir, env, componentDirs = [] }) {
   // Problem:
-  // - Edison runs the CodeRabbit CLI as a "blocking" validator in happy-local presets.
-  // - The upstream CodeRabbit CLI defaults to an interactive UX and may emit only progress
-  //   lines when run non-interactively, causing Edison to fail-closed.
+  // - Some tools may call `coderabbit` without args in non-interactive mode, which can yield
+  //   progress-only output. Provide a deterministic default invocation in that case.
   //
   // Fix:
   // - Inject a PATH-local wrapper for `coderabbit` so that when Edison calls it with no args,
-  //   we force a deterministic, non-interactive `coderabbit review --plain ...` run and
-  //   provide an instruction file that requires structured findings in stdout.
+  //   we force a deterministic, non-interactive `coderabbit review --plain ...` run.
   const binDir = join(rootDir, '.edison', '_tmp', 'hs-bin');
   const real = await resolveRealBinary({ rootDir, env, name: 'coderabbit', ignorePrefix: binDir });
   if (!real) return;
@@ -1055,7 +1115,7 @@ const finalArgs = argv.length
       "review",
       "--plain",
       "--type",
-      "committed",
+      "all",
       "--no-color",
       "--cwd",
       defaultCwd,
@@ -1746,6 +1806,7 @@ async function main() {
     }
     await maybeInstallCodexWrapper({ rootDir, env });
     await maybeInstallCodeRabbitWrapper({ rootDir, env });
+    await enforceQaRunPreflightPolicy({ rootDir, env, edisonArgs });
     if (!(await pathExists(rootDir))) {
       throw new Error(`[edison] missing repo root: ${rootDir}`);
     }

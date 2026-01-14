@@ -238,6 +238,11 @@ Presets:
 happys edison --stack=<stack> -- evidence capture <task-id> --preset standard-validate --only coderabbit
 ```
 
+Note: `qa run` (single-validator execution) also enforces validation-only evidence in happy-local:
+
+- `happys edison --stack=<stack> -- qa run <validator> <task-id>`
+- If required evidence (including CodeRabbit for the `*-validate` presets) is missing, the wrapper will refuse and tell you exactly which `evidence capture` command to run.
+
 Track drift review is intentionally fast:
 
 - `track:coherence` is captured as **command evidence** (`command-track-coherence.txt`).
