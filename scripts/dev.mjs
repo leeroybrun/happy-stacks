@@ -1,5 +1,5 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree } from './utils/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
 import { killPortListeners } from './utils/ports.mjs';
@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
 import { isDaemonRunning, stopLocalDaemon } from './daemon.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/validate.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
 import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeStart } from './utils/stack_runtime_state.mjs';
