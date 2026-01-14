@@ -1,10 +1,10 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { getRootDir } from './utils/paths.mjs';
 import { ensureEnvFileUpdated } from './utils/env_file.mjs';
 import { resolveUserConfigEnvPath } from './utils/config.mjs';
-import { isTty, promptSelect, withRl } from './utils/wizard.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 
 const FLAVORS = [
   { label: 'happy-server-light (recommended default, serves UI)', value: 'happy-server-light' },

@@ -6,7 +6,7 @@ import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths.mjs';
 import { inferRemoteNameForOwner, parseGithubOwner } from './utils/worktrees.mjs';
-import { isTty, prompt, promptSelect, withRl } from './utils/wizard.mjs';
+import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { ensureEnvFileUpdated } from './utils/env_file.mjs';

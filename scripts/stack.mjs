@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 
-import { parseArgs } from './utils/args.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc.mjs';
 import { getComponentDir, getComponentsDir, getHappyStacksHomeDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
@@ -18,9 +18,9 @@ import {
   resolveComponentSpecToDir,
   worktreeSpecFromDir,
 } from './utils/worktrees.mjs';
-import { isTty, prompt, promptWorktreeSource, withRl } from './utils/wizard.mjs';
+import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env_file.mjs';
 import { listAllStackNames } from './utils/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack_stop.mjs';
@@ -2753,6 +2753,7 @@ async function main() {
     try {
       const stacksDir = getStacksStorageRoot();
       const legacyStacksDir = join(getLegacyStorageRoot(), 'stacks');
+      const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
       const namesSet = new Set();
       const entries = await readdir(stacksDir, { withFileTypes: true });
       for (const e of entries) {
@@ -2761,10 +2762,12 @@ async function main() {
         namesSet.add(e.name);
       }
       try {
-        const legacyEntries = await readdir(legacyStacksDir, { withFileTypes: true });
-        for (const e of legacyEntries) {
-          if (!e.isDirectory()) continue;
-          namesSet.add(e.name);
+        if (allowLegacy) {
+          const legacyEntries = await readdir(legacyStacksDir, { withFileTypes: true });
+          for (const e of legacyEntries) {
+            if (!e.isDirectory()) continue;
+            namesSet.add(e.name);
+          }
         }
       } catch {
         // ignore

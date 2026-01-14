@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
-import { isTty, promptSelect, withRl } from './utils/wizard.mjs';
+import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { getCanonicalHomeDir } from './utils/config.mjs';
 import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 import { run, runCapture } from './utils/proc.mjs';

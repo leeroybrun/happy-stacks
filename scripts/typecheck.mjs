@@ -1,6 +1,6 @@
 import './utils/env.mjs';
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getRootDir } from './utils/paths.mjs';
 import { ensureDepsInstalled, requirePnpm } from './utils/pm.mjs';
 import { pathExists } from './utils/fs.mjs';

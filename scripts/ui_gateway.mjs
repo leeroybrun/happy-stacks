@@ -4,8 +4,8 @@ import net from 'node:net';
 import { extname, resolve, sep } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 
-import { parseArgs } from './utils/args.mjs';
-import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { parseArgs } from './utils/cli/args.mjs';
+import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 
 function usage() {
   return [
