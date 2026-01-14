@@ -114,7 +114,10 @@ validation:
       # Use stack-scoped *.localhost hostnames for origin isolation (prevents browser state leakage
       # across stacks even if ports are reused later).
       url: "http://${HAPPY_STACKS_LOCALHOST_HOST}:${HAPPY_LOCAL_SERVER_PORT}"
-      healthcheck_url: "http://${HAPPY_STACKS_LOCALHOST_HOST}:${HAPPY_LOCAL_SERVER_PORT}/health"
+      # IMPORTANT:
+      # Use 127.0.0.1 for health probing to avoid hostname-specific resolver/IPv6 edge cases.
+      # The browser validator still navigates to `url` (stack-scoped hostname) for origin isolation.
+      healthcheck_url: "http://127.0.0.1:${HAPPY_LOCAL_SERVER_PORT}/health"
       ensure_running: true
       stop_after: true
       start:
