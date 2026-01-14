@@ -8,13 +8,13 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commandHelpArgs, renderHappysRootHelp, resolveHappysCommand } from '../scripts/utils/cli/cli_registry.mjs';
-import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../scripts/utils/canonical_home.mjs';
+import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../scripts/utils/paths/canonical_home.mjs';
 
 function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
-// expandHome is imported from scripts/utils/canonical_home.mjs
+// expandHome is imported from scripts/utils/paths/canonical_home.mjs
 
 function dotenvGetQuick(envPath, key) {
   try {

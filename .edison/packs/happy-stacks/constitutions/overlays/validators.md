@@ -58,6 +58,14 @@ This ensures validators review the change set **as a PR diff on top of the targe
 
 ---
 
+## Git command ban for validators (MANDATORY)
+
+- **Do not run `git status` / `git diff` / `git log` / `git range-diff`** during validation in happy-local.
+- Validators must use **trusted evidence** instead:
+  - `command-task-diff.txt` for diffs
+  - `command-track-coherence.txt` for cross-track patch checks
+  - `command-type-check.txt`, `command-lint.txt`, `command-build.txt`, `command-test.txt` for automation
+
 ## TDD validation: do NOT police git commits for “TDD markers” (MANDATORY)
 
 - This project enforces **TDD behavior**, not “TDD-looking commit history”.

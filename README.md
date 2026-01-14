@@ -23,13 +23,6 @@ Recommended:
 npx happy-stacks setup --profile=selfhost
 ```
 
-Alternative (global install):
-
-```bash
-npm install -g happy-stacks
-happys setup --profile=selfhost
-```
-
 `setup` can optionally start Happy and guide you through authentication.
 
 ### Step 2: Start Happy
@@ -192,7 +185,10 @@ happys wt pr happy https://github.com/slopus/happy/pull/123 --use
 happys wt pr happy 123 --update --stash
 ```
 
-Create a fully isolated PR stack (creates stack + PR worktrees + optional auth seeding + starts dev):
+##### Developer quickstart: create a PR stack (isolated ports/dirs; idempotent updates)
+
+This creates (or reuses) a named stack, checks out PR worktrees for the selected components, optionally seeds auth, and starts the stack.
+Re-run with `--reuse` to update the existing worktrees when the PR changes.
 
 ```bash
 happys stack pr pr123 \
@@ -202,15 +198,27 @@ happys stack pr pr123 \
   --dev
 ```
 
-One-shot “install + run PR stack” (best for maintainers who don’t have Happy Stacks set up yet):
+Optional: run it in a self-contained sandbox folder (delete it to uninstall completely):
 
 ```bash
-npx happy-stacks setup pr \
-  --happy=https://github.com/slopus/happy/pull/123 \
-  --happy-cli=https://github.com/slopus/happy-cli/pull/456
+SANDBOX="$(mktemp -d /tmp/happy-stacks-sandbox.XXXXXX)"
+happys --sandbox-dir "$SANDBOX" stack pr pr123 --happy=123 --happy-cli=456 --dev
+rm -rf "$SANDBOX"
 ```
 
-You can also run it as:
+Update when the PR changes:
+
+- Re-run with `--reuse` to fast-forward worktrees when possible.
+- If the PR was force-pushed, add `--force`.
+
+```bash
+happys stack pr pr123 --happy=123 --happy-cli=456 --reuse
+happys stack pr pr123 --happy=123 --happy-cli=456 --reuse --force
+```
+
+##### Maintainer quickstart: one-shot “install + run PR stack” (idempotent)
+
+This is the maintainer-friendly entrypoint. It is safe to re-run and will keep the PR stack wiring intact.
 
 ```bash
 npx happy-stacks setup-pr \
@@ -218,10 +226,35 @@ npx happy-stacks setup-pr \
   --happy-cli=https://github.com/slopus/happy-cli/pull/456
 ```
 
-Updating when the PR changes:
+Optional: run it in a self-contained sandbox folder (delete it to uninstall completely):
+
+```bash
+SANDBOX="$(mktemp -d /tmp/happy-stacks-sandbox.XXXXXX)"
+npx happy-stacks --sandbox-dir "$SANDBOX" setup-pr --happy=123 --happy-cli=456
+rm -rf "$SANDBOX"
+```
+
+Short form (PR numbers):
+
+```bash
+npx happy-stacks setup-pr --happy=123 --happy-cli=456
+```
+
+Override stack name (optional):
+
+```bash
+npx happy-stacks setup-pr --name=pr123 --happy=123 --happy-cli=456
+```
+
+Update when the PR changes:
 
 - Re-run the same command to fast-forward the PR worktrees.
 - If the PR was force-pushed, add `--force`.
+
+```bash
+npx happy-stacks setup-pr --happy=123 --happy-cli=456
+npx happy-stacks setup-pr --happy=123 --happy-cli=456 --force
+```
 
 Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 
@@ -352,19 +385,23 @@ Notes:
 
 ### Sandbox / test installs (fully isolated)
 
-If you want to test the full setup flow (including PR stacks) without impacting your “real” install, run with:
+If you want to test the full setup flow (including PR stacks) without impacting your “real” install, run everything with `--sandbox-dir`.
+To fully uninstall the test run, stop the sandbox stacks and delete the sandbox folder.
 
 ```bash
-npx happy-stacks --sandbox-dir /tmp/happy-stacks-sandbox setup pr --happy=123 --happy-cli=456
+SANDBOX="$(mktemp -d /tmp/happy-stacks-sandbox.XXXXXX)"
+
+# Run a PR stack (fully isolated install)
+npx happy-stacks --sandbox-dir "$SANDBOX" setup-pr --happy=123 --happy-cli=456
+
+# Tear down + uninstall
+npx happy-stacks --sandbox-dir "$SANDBOX" stop --yes --no-service
+rm -rf "$SANDBOX"
 ```
 
-To reset completely, just delete the sandbox folder:
+Notes:
 
-```bash
-rm -rf /tmp/happy-stacks-sandbox
-```
-
-Sandbox mode disables global OS side effects (PATH edits, SwiftBar plugin install, LaunchAgents/systemd services) by default.
-To explicitly allow them for testing, set `HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1`.
+- Sandbox mode disables global OS side effects (**PATH edits**, **SwiftBar plugin install**, **LaunchAgents/systemd services**, **Tailscale Serve enable/disable**) by default.
+- To explicitly allow those for testing, set `HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1` (still recommended to clean up after).
 
 For contributor/LLM workflow expectations: `[AGENTS.md](AGENTS.md)`.
