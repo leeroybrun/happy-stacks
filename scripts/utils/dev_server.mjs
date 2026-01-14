@@ -1,9 +1,9 @@
 import { join, resolve } from 'node:path';
 
 import { ensureDepsInstalled, pmSpawnScript } from './proc/pm.mjs';
-import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './happy_server_infra.mjs';
-import { waitForServerReady } from './server.mjs';
-import { isTcpPortFree, pickNextFreeTcpPort } from './ports.mjs';
+import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './server/infra/happy_server_infra.mjs';
+import { waitForServerReady } from './server/server.mjs';
+import { isTcpPortFree, pickNextFreeTcpPort } from './net/ports.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from './stack_runtime_state.mjs';
 import { killProcessGroupOwnedByStack } from './ownership.mjs';
 import { watchDebounced } from './watch.mjs';

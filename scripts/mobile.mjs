@@ -1,6 +1,6 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { pickNextFreeTcpPort } from './utils/ports.mjs';
+import { pickNextFreeTcpPort } from './utils/net/ports.mjs';
 import { run, runCapture, spawnProc } from './utils/proc/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/proc/pm.mjs';

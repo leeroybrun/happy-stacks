@@ -3,8 +3,8 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { runCapture } from './utils/proc/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { killPortListeners } from './utils/ports.mjs';
-import { getServerComponentName } from './utils/server.mjs';
+import { killPortListeners } from './utils/net/ports.mjs';
+import { getServerComponentName } from './utils/server/server.mjs';
 import { daemonStatusSummary } from './daemon.mjs';
 import { tailscaleServeStatus } from './tailscale.mjs';
 import { homedir } from 'node:os';
@@ -14,7 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { assertServerComponentDirMatches } from './utils/validate.mjs';
-import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server_urls.mjs';
+import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveStackContext } from './utils/stack_context.mjs';
 
 /**

@@ -9,7 +9,7 @@ import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { fetchHappyHealth } from './utils/server.mjs';
+import { fetchHappyHealth } from './utils/server/server.mjs';
 import { tailscaleServeEnable, tailscaleServeHttpsUrlForInternalServerUrl } from './tailscale.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { readFile } from 'node:fs/promises';

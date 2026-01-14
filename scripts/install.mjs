@@ -3,7 +3,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
-import { getServerComponentName } from './utils/server.mjs';
+import { getServerComponentName } from './utils/server/server.mjs';
 import { ensureCliBuilt, ensureDepsInstalled, ensureHappyCliLocalNpmLinked } from './utils/proc/pm.mjs';
 import { dirname, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';

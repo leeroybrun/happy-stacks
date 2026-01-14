@@ -4,7 +4,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { listAllStackNames } from './utils/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
-import { resolveServerPortFromEnv } from './utils/server_urls.mjs';
+import { resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -14,7 +14,7 @@ import { dirname } from 'node:path';
 
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
-import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
+import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/dev_auth_key.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';

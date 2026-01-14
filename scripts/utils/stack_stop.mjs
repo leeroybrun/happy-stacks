@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { getComponentDir } from './paths/paths.mjs';
 import { isPidAlive, readPidState } from './expo.mjs';
 import { stopLocalDaemon } from '../daemon.mjs';
-import { stopHappyServerManagedInfra } from './happy_server_infra.mjs';
+import { stopHappyServerManagedInfra } from './server/infra/happy_server_infra.mjs';
 import { deleteStackRuntimeStateFile, getStackRuntimeStatePath, readStackRuntimeStateFile } from './stack_runtime_state.mjs';
 import { killPidOwnedByStack, killProcessGroupOwnedByStack, listPidsWithEnvNeedle } from './ownership.mjs';
 

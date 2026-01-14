@@ -9,9 +9,9 @@ import { parseDotenv } from './utils/env/dotenv.mjs';
 import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled } from './utils/proc/pm.mjs';
-import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './utils/happy_server_infra.mjs';
+import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './utils/server/infra/happy_server_infra.mjs';
 import { runCapture } from './utils/proc/proc.mjs';
-import { pickNextFreeTcpPort } from './utils/ports.mjs';
+import { pickNextFreeTcpPort } from './utils/net/ports.mjs';
 
 function usage() {
   return [

@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc/proc.mjs';
 import { getComponentDir, getComponentsDir, getHappyStacksHomeDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
+import { isTcpPortFree, pickNextFreeTcpPort } from './utils/net/ports.mjs';
 import {
   createWorktree,
   createWorktreeFromBaseWorktree,
@@ -28,7 +28,7 @@ import { writeDevAuthKey } from './utils/dev_auth_key.mjs';
 import { startDevServer } from './utils/dev_server.mjs';
 import { startDevExpoWebUi } from './utils/dev_expo_web.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
-import { waitForHttpOk } from './utils/server.mjs';
+import { waitForHttpOk } from './utils/server/server.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth_files.mjs';

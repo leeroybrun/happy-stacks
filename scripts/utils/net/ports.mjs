@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import net from 'node:net';
-import { runCapture } from './proc/proc.mjs';
+import { runCapture } from '../proc/proc.mjs';
 
 async function listListenPids(port) {
   if (!Number.isFinite(port) || port <= 0) return [];
@@ -102,3 +102,4 @@ export async function pickNextFreeTcpPort(startPort, { reservedPorts = new Set()
   }
   throw new Error(`[local] unable to find a free TCP port starting at ${startPort}`);
 }
+
