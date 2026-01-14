@@ -14,6 +14,7 @@
     "scripts/"
   ],
   "scripts": {
+    "setup": "node ./scripts/setup.mjs",
     "init": "node ./scripts/init.mjs",
     "uninstall": "node ./scripts/uninstall.mjs",
     "where": "node ./scripts/where.mjs",

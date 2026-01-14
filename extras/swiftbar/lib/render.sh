@@ -839,6 +839,8 @@ render_stack_info() {
   local plist="$HOME/Library/LaunchAgents/${label}.plist"
   local svc_installed="0"
   [[ -f "$plist" ]] && svc_installed="1"
+  local menu_mode
+  menu_mode="$(resolve_menubar_mode)"
 
   if [[ "$stack_name" == "main" ]]; then
     local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
@@ -857,7 +859,9 @@ render_stack_info() {
         print_item "$p2" "Stop (kill port listeners) | bash=$PNPM_TERM param1=stack:fix dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
       fi
     fi
-    print_item "$p2" "Dev mode | bash=$PNPM_TERM param1=dev dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    if [[ "$menu_mode" != "selfhost" ]]; then
+      print_item "$p2" "Dev mode | bash=$PNPM_TERM param1=dev dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    fi
     print_item "$p2" "Build UI | bash=$PNPM_TERM param1=build dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     print_item "$p2" "Doctor | bash=$PNPM_TERM param1=stack:doctor dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     return
@@ -879,14 +883,18 @@ render_stack_info() {
       print_item "$p2" "Stop (kill port listeners) | bash=$PNPM_TERM param1=stack param2=fix param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
     fi
   fi
-  print_item "$p2" "Dev mode | bash=$PNPM_TERM param1=stack param2=dev param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  if [[ "$menu_mode" != "selfhost" ]]; then
+    print_item "$p2" "Dev mode | bash=$PNPM_TERM param1=stack param2=dev param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  fi
   print_item "$p2" "Build UI | bash=$PNPM_TERM param1=stack param2=build param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   print_item "$p2" "Doctor | bash=$PNPM_TERM param1=stack param2=doctor param3=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  print_item "$p2" "Edit stack (interactive) | bash=$PNPM_TERM param1=stack param2=edit param3=$stack_name param4=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  print_item "$p2" "Select worktrees (interactive) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  if [[ "$menu_mode" != "selfhost" ]]; then
+    print_item "$p2" "Edit stack (interactive) | bash=$PNPM_TERM param1=stack param2=edit param3=$stack_name param4=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    print_item "$p2" "Select worktrees (interactive) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  fi
 
   local pr_helper="$HAPPY_LOCAL_DIR/extras/swiftbar/wt-pr.sh"
-  if [[ -x "$pr_helper" ]]; then
+  if [[ "$menu_mode" != "selfhost" && -x "$pr_helper" ]]; then
     print_item "$p2" "PR worktree into this stack (prompt) | bash=$pr_helper param1=_prompt_ param2=$stack_name dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
   fi
 }

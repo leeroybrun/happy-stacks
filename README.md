@@ -14,28 +14,29 @@ happy-stacks allows to:
 - safely access it remotely (HTTPS secure context) via Tailscale
 - manage **worktrees** for clean upstream PRs while keeping a patched fork
 - run **multiple isolated stacks** (ports + dirs + component overrides)
-- optionally manage autostart (macOS LaunchAgent) and a SwiftBar menu bar control panel
+- optionally manage autostart (macOS launchd / Linux systemd user) and a SwiftBar menu bar control panel
 
 ## Quickstart
 
-### Step 1: Install / bootstrap
+### Step 1: Setup (guided)
 
 Recommended:
 
 ```bash
-npx happy-stacks init
-export PATH="$HOME/.happy-stacks/bin:$PATH"
+npx happy-stacks setup
 ```
 
 Alternative (global install):
 
 ```bash
 npm install -g happy-stacks
-happys init
-export PATH="$HOME/.happy-stacks/bin:$PATH"
+happys setup
 ```
 
-(`init` will run `bootstrap` automatically. Use `--no-bootstrap` if you only want to write config and shims.)
+`setup` will ask your goal:
+
+- **Self-host**: install + run Happy locally (optionally enable Tailscale, autostart, menubar)
+- **Dev**: bootstrap a development workspace (worktrees/stacks)
 
 Developer mode (clone this repo):
 
@@ -43,9 +44,7 @@ Developer mode (clone this repo):
 git clone https://github.com/leeroybrun/happy-stacks.git
 cd happy-stacks
 
-node ./bin/happys.mjs bootstrap --interactive
-# legacy:
-# pnpm bootstrap -- --interactive
+node ./bin/happys.mjs setup --profile=dev
 ```
 
 Notes:
@@ -121,7 +120,7 @@ Details (secure context, phone instructions, automation knobs): `[docs/remote-ac
 
 ## Why this exists
 
-- **Automated setup**: `happys init` + `happys start` gets the whole stack up and running.
+- **Automated setup**: `happys setup` + `happys start` gets the whole stack up and running.
 - **No hosted dependency**: run the full stack on your own computer.
 - **Lower latency**: localhost/LAN is typically much faster than remote hosted servers.
 - **Custom forks**: easily use forks of the Happy UI + CLI (e.g. `leeroybrun/*`) while still contributing upstream to `slopus/*`.
@@ -274,10 +273,9 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
 ## Commands (high-signal)
 
 - **Setup**:
-  - `happys init`
-  - `happys bootstrap --interactive` (wizard)
-  - `happys bootstrap --forks|--upstream`
-  - `happys bootstrap --server=happy-server|happy-server-light|both`
+  - `happys setup` (guided; selfhost or dev)
+  - (advanced) `happys init` (plumbing: shims/runtime/pointer env)
+  - (advanced) `happys bootstrap --interactive` (component installer wizard)
 - **Run**:
   - `happys start` (production-like; serves built UI via server-light)
   - `happys dev` (dev; Expo web dev server for UI)

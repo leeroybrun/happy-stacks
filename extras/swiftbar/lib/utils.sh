@@ -604,3 +604,35 @@ resolve_main_server_component() {
 
   echo "happy-server-light"
 }
+
+resolve_menubar_mode() {
+  # selfhost | dev (default: dev)
+  local raw=""
+  if [[ -n "${HAPPY_LOCAL_MENUBAR_MODE:-}" ]]; then
+    raw="$HAPPY_LOCAL_MENUBAR_MODE"
+  elif [[ -n "${HAPPY_STACKS_MENUBAR_MODE:-}" ]]; then
+    raw="$HAPPY_STACKS_MENUBAR_MODE"
+  fi
+
+  local env_file
+  env_file="$(resolve_main_env_file)"
+  if [[ -z "$raw" && -n "$env_file" ]]; then
+    raw="$(dotenv_get "$env_file" "HAPPY_LOCAL_MENUBAR_MODE")"
+    [[ -z "$raw" ]] && raw="$(dotenv_get "$env_file" "HAPPY_STACKS_MENUBAR_MODE")"
+  fi
+
+  if [[ -z "$raw" ]]; then
+    raw="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "HAPPY_LOCAL_MENUBAR_MODE")"
+    [[ -z "$raw" ]] && raw="$(dotenv_get "$HAPPY_LOCAL_DIR/env.local" "HAPPY_STACKS_MENUBAR_MODE")"
+  fi
+  if [[ -z "$raw" ]]; then
+    raw="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "HAPPY_LOCAL_MENUBAR_MODE")"
+    [[ -z "$raw" ]] && raw="$(dotenv_get "$HAPPY_LOCAL_DIR/.env" "HAPPY_STACKS_MENUBAR_MODE")"
+  fi
+
+  raw="$(echo "${raw:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$raw" in
+    selfhost|self-host|self_host|host) echo "selfhost" ;;
+    *) echo "dev" ;;
+  esac
+}

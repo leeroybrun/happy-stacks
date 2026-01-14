@@ -379,6 +379,8 @@ async function main() {
     }
   }
 
+  const invokedBySetup = (process.env.HAPPY_STACKS_SETUP_CHILD ?? '').trim() === '1';
+
   console.log('[init] complete');
   console.log(`[init] home:      ${homeDir}`);
   console.log(`[init] workspace:  ${workspaceDir}`);
@@ -422,13 +424,18 @@ async function main() {
 
   if (wantBootstrap && alreadyBootstrapped && !bootstrapExplicit) {
     console.log('[init] bootstrap: already set up; skipping');
-    console.log('[init] tip: to re-run setup: happys bootstrap --interactive');
+    console.log('[init] tip: for guided onboarding: happys setup');
     console.log('');
+  }
+
+  // When `happys setup` drives init, avoid printing confusing “next steps”.
+  if (invokedBySetup) {
+    return;
   }
 
   console.log('[init] next steps:');
   console.log(`  export PATH=\"${homeDir}/bin:$PATH\"`);
-  console.log('  happys bootstrap --interactive');
+  console.log('  happys setup');
 }
 
 main().catch((err) => {

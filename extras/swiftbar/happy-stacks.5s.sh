@@ -105,6 +105,7 @@ MAIN_PORT="$(resolve_main_port)"
 MAIN_SERVER_COMPONENT="$(resolve_main_server_component)"
 TAILSCALE_URL="$(get_tailscale_url)"
 MAIN_ENV_FILE="$(resolve_main_env_file)"
+MENUBAR_MODE="$(resolve_menubar_mode)"
 
 ensure_launchctl_cache
 
@@ -142,6 +143,21 @@ echo "---"
 echo "Happy Stacks | size=14 font=SF Pro Display"
 echo "---"
 
+# Mode (selfhost vs dev)
+if [[ "$MENUBAR_MODE" == "selfhost" ]]; then
+  echo "Mode: Selfhost | sfimage=house"
+else
+  echo "Mode: Dev | sfimage=hammer"
+fi
+if [[ -n "$PNPM_BIN" ]]; then
+  if [[ "$MENUBAR_MODE" == "selfhost" ]]; then
+    echo "--Switch to Dev mode | bash=$PNPM_BIN param1=menubar param2=mode param3=dev dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  else
+    echo "--Switch to Selfhost mode | bash=$PNPM_BIN param1=menubar param2=mode param3=selfhost dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  fi
+fi
+echo "---"
+
 # Main stack (inline)
 echo "Main stack"
 echo "---"
@@ -153,89 +169,115 @@ render_component_autostart "" "main" "$MAIN_LABEL" "$MAIN_LAUNCHAGENT_STATUS" "$
 render_component_tailscale "" "main" "$TAILSCALE_URL"
 
 echo "---"
-echo "Stacks | sfimage=server.rack"
-STACKS_PREFIX="--"
-
-if [[ -n "$PNPM_BIN" ]]; then
-  HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
-  echo "${STACKS_PREFIX}New stack (interactive) | bash=$HAPPYS_TERM param1=stack param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "${STACKS_PREFIX}List stacks | bash=$HAPPYS_TERM param1=stack param2=list dir=$HAPPY_LOCAL_DIR terminal=false"
-  print_sep "$STACKS_PREFIX"
-fi
-
-STACKS_DIR="$(resolve_stacks_storage_root)"
-LEGACY_STACKS_DIR="$HOME/.happy/local/stacks"
-if [[ -d "$STACKS_DIR" ]] || [[ -d "$LEGACY_STACKS_DIR" ]]; then
-  STACK_NAMES="$(
-    {
-      ls -1 "$STACKS_DIR" 2>/dev/null || true
-      ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
-    } | sort -u
-  )"
-  if [[ -z "$STACK_NAMES" ]]; then
-    echo "${STACKS_PREFIX}No stacks found | color=$GRAY"
+if [[ "$MENUBAR_MODE" == "selfhost" ]]; then
+  echo "Maintenance | sfimage=wrench.and.screwdriver"
+  if [[ -n "$PNPM_BIN" ]]; then
+    UPDATE_JSON="${HAPPY_LOCAL_DIR}/cache/update.json"
+    update_available=""
+    latest=""
+    current=""
+    if [[ -f "$UPDATE_JSON" ]]; then
+      update_available="$(grep -oE '\"updateAvailable\"[[:space:]]*:[[:space:]]*(true|false)' "$UPDATE_JSON" 2>/dev/null | head -1 | grep -oE '(true|false)' || true)"
+      latest="$(grep -oE '\"latest\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' "$UPDATE_JSON" 2>/dev/null | head -1 | sed -E 's/.*\"latest\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\1/' || true)"
+      current="$(grep -oE '\"current\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' "$UPDATE_JSON" 2>/dev/null | head -1 | sed -E 's/.*\"current\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\1/' || true)"
+    fi
+    if [[ "$update_available" == "true" && -n "$latest" ]]; then
+      echo "--Update available: ${current:-current} → ${latest} | color=$YELLOW"
+    else
+      echo "--Updates: up to date | color=$GRAY"
+    fi
+    echo "--Check for updates | bash=$PNPM_BIN param1=self param2=check dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Update happy-stacks runtime | bash=$PNPM_BIN param1=self param2=update dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Doctor | bash=$PNPM_BIN param1=doctor dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  else
+    echo "--⚠️ happys not found (run: npx happy-stacks setup)" 
   fi
-  for s in $STACK_NAMES; do
-    env_file="$(resolve_stack_env_file "$s")"
-    [[ -f "$env_file" ]] || continue
+else
+  echo "Stacks | sfimage=server.rack"
+  STACKS_PREFIX="--"
 
-    # Ports may be ephemeral (runtime-only). Do not skip stacks if the env file does not pin a port.
-    port="$(resolve_stack_server_port "$s" "$env_file")"
+  if [[ -n "$PNPM_BIN" ]]; then
+    HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+    echo "${STACKS_PREFIX}New stack (interactive) | bash=$HAPPYS_TERM param1=stack param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "${STACKS_PREFIX}List stacks | bash=$HAPPYS_TERM param1=stack param2=list dir=$HAPPY_LOCAL_DIR terminal=false"
+    print_sep "$STACKS_PREFIX"
+  fi
 
-    server_component="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_COMPONENT")"
-    [[ -z "$server_component" ]] && server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
-    [[ -n "$server_component" ]] || server_component="happy-server-light"
+  STACKS_DIR="$(resolve_stacks_storage_root)"
+  LEGACY_STACKS_DIR="$HOME/.happy/local/stacks"
+  if [[ -d "$STACKS_DIR" ]] || [[ -d "$LEGACY_STACKS_DIR" ]]; then
+    STACK_NAMES="$(
+      {
+        ls -1 "$STACKS_DIR" 2>/dev/null || true
+        ls -1 "$LEGACY_STACKS_DIR" 2>/dev/null || true
+      } | sort -u
+    )"
+    if [[ -z "$STACK_NAMES" ]]; then
+      echo "${STACKS_PREFIX}No stacks found | color=$GRAY"
+    fi
+    for s in $STACK_NAMES; do
+      env_file="$(resolve_stack_env_file "$s")"
+      [[ -f "$env_file" ]] || continue
 
-    base_dir="$(resolve_stack_base_dir "$s" "$env_file")"
-    cli_home_dir="$(resolve_stack_cli_home_dir "$s" "$env_file")"
-    label="$(resolve_stack_label "$s")"
+      # Ports may be ephemeral (runtime-only). Do not skip stacks if the env file does not pin a port.
+      port="$(resolve_stack_server_port "$s" "$env_file")"
 
-    COLLECT="$(collect_stack_status "$port" "$cli_home_dir" "$label" "$base_dir")"
-    IFS=$'\t' read -r LEVEL SERVER_STATUS SERVER_PID SERVER_METRICS DAEMON_STATUS DAEMON_PID DAEMON_METRICS DAEMON_UPTIME LAST_HEARTBEAT LAUNCHAGENT_STATUS AUTOSTART_PID AUTOSTART_METRICS <<<"$COLLECT"
-    for v in SERVER_PID SERVER_METRICS DAEMON_PID DAEMON_METRICS DAEMON_UPTIME LAST_HEARTBEAT AUTOSTART_PID AUTOSTART_METRICS; do
-      if [[ "${!v}" == "-" ]]; then
-        printf -v "$v" '%s' ""
-      fi
+      server_component="$(dotenv_get "$env_file" "HAPPY_STACKS_SERVER_COMPONENT")"
+      [[ -z "$server_component" ]] && server_component="$(dotenv_get "$env_file" "HAPPY_LOCAL_SERVER_COMPONENT")"
+      [[ -n "$server_component" ]] || server_component="happy-server-light"
+
+      base_dir="$(resolve_stack_base_dir "$s" "$env_file")"
+      cli_home_dir="$(resolve_stack_cli_home_dir "$s" "$env_file")"
+      label="$(resolve_stack_label "$s")"
+
+      COLLECT="$(collect_stack_status "$port" "$cli_home_dir" "$label" "$base_dir")"
+      IFS=$'\t' read -r LEVEL SERVER_STATUS SERVER_PID SERVER_METRICS DAEMON_STATUS DAEMON_PID DAEMON_METRICS DAEMON_UPTIME LAST_HEARTBEAT LAUNCHAGENT_STATUS AUTOSTART_PID AUTOSTART_METRICS <<<"$COLLECT"
+      for v in SERVER_PID SERVER_METRICS DAEMON_PID DAEMON_METRICS DAEMON_UPTIME LAST_HEARTBEAT AUTOSTART_PID AUTOSTART_METRICS; do
+        if [[ "${!v}" == "-" ]]; then
+          printf -v "$v" '%s' ""
+        fi
+      done
+
+      render_stack_overview_item "Stack: $s" "$LEVEL" "$STACKS_PREFIX"
+      export STACK_LEVEL="$LEVEL"
+      render_stack_info "${STACKS_PREFIX}--" "$s" "$port" "$server_component" "$base_dir" "$cli_home_dir" "$label" "$env_file" ""
+      render_component_server "${STACKS_PREFIX}--" "$s" "$port" "$server_component" "$SERVER_STATUS" "$SERVER_PID" "$SERVER_METRICS" "" "$label"
+      render_component_daemon "${STACKS_PREFIX}--" "$DAEMON_STATUS" "$DAEMON_PID" "$DAEMON_METRICS" "$DAEMON_UPTIME" "$LAST_HEARTBEAT" "$cli_home_dir/daemon.state.json" "$s"
+      render_component_autostart "${STACKS_PREFIX}--" "$s" "$label" "$LAUNCHAGENT_STATUS" "$AUTOSTART_PID" "$AUTOSTART_METRICS" "$base_dir/logs"
+      render_component_tailscale "${STACKS_PREFIX}--" "$s" ""
+      render_components_menu "${STACKS_PREFIX}--" "stack" "$s" "$env_file"
     done
+  else
+    echo "${STACKS_PREFIX}No stacks dir found at: $(shorten_path "$STACKS_DIR" 52) | color=$GRAY"
+  fi
 
-    render_stack_overview_item "Stack: $s" "$LEVEL" "$STACKS_PREFIX"
-    export STACK_LEVEL="$LEVEL"
-    render_stack_info "${STACKS_PREFIX}--" "$s" "$port" "$server_component" "$base_dir" "$cli_home_dir" "$label" "$env_file" ""
-    render_component_server "${STACKS_PREFIX}--" "$s" "$port" "$server_component" "$SERVER_STATUS" "$SERVER_PID" "$SERVER_METRICS" "" "$label"
-    render_component_daemon "${STACKS_PREFIX}--" "$DAEMON_STATUS" "$DAEMON_PID" "$DAEMON_METRICS" "$DAEMON_UPTIME" "$LAST_HEARTBEAT" "$cli_home_dir/daemon.state.json" "$s"
-    render_component_autostart "${STACKS_PREFIX}--" "$s" "$label" "$LAUNCHAGENT_STATUS" "$AUTOSTART_PID" "$AUTOSTART_METRICS" "$base_dir/logs"
-    render_component_tailscale "${STACKS_PREFIX}--" "$s" ""
-    render_components_menu "${STACKS_PREFIX}--" "stack" "$s" "$env_file"
-  done
-else
-  echo "${STACKS_PREFIX}No stacks dir found at: $(shorten_path "$STACKS_DIR" 52) | color=$GRAY"
-fi
+  echo "---"
+  render_components_menu "" "main" "main" "$MAIN_ENV_FILE"
 
-echo "---"
-render_components_menu "" "main" "main" "$MAIN_ENV_FILE"
+  echo "Worktrees | sfimage=arrow.triangle.branch"
+  if [[ -z "$PNPM_BIN" ]]; then
+    echo "--⚠️ happys not found (run: npx happy-stacks setup)"
+  else
+    HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+    echo "--Use (interactive) | bash=$HAPPYS_TERM param1=wt param2=use param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--New (interactive) | bash=$HAPPYS_TERM param1=wt param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--PR worktree (prompt) | bash=$HAPPY_LOCAL_DIR/extras/swiftbar/wt-pr.sh dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Sync mirrors (all) | bash=$PNPM_BIN param1=wt param2=sync-all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Update all (dry-run) | bash=$HAPPYS_TERM param1=wt param2=update-all param3=--dry-run dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Update all (apply) | bash=$PNPM_BIN param1=wt param2=update-all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+  fi
 
-echo "Worktrees | sfimage=arrow.triangle.branch"
-if [[ -z "$PNPM_BIN" ]]; then
-  echo "--⚠️ happys not found (run: npx happy-stacks init, or install happy-stacks globally)"
-else
-  HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
-  echo "--Use (interactive) | bash=$HAPPYS_TERM param1=wt param2=use param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--New (interactive) | bash=$HAPPYS_TERM param1=wt param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--PR worktree (prompt) | bash=$HAPPY_LOCAL_DIR/extras/swiftbar/wt-pr.sh dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--Sync mirrors (all) | bash=$PNPM_BIN param1=wt param2=sync-all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--Update all (dry-run) | bash=$HAPPYS_TERM param1=wt param2=update-all param3=--dry-run dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--Update all (apply) | bash=$PNPM_BIN param1=wt param2=update-all dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-fi
-
-echo "---"
-echo "Setup / Tools"
-if [[ -z "$PNPM_BIN" ]]; then
-  echo "--⚠️ happys not found (run: npx happy-stacks init, or install happy-stacks globally)"
-else
-  HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
-  echo "--Bootstrap (clone/install) | bash=$HAPPYS_TERM param1=bootstrap dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--CLI link (install happy wrapper) | bash=$HAPPYS_TERM param1=cli:link dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-  echo "--Mobile dev helper | bash=$HAPPYS_TERM param1=mobile dir=$HAPPY_LOCAL_DIR terminal=false"
+  echo "---"
+  echo "Setup / Tools"
+  if [[ -z "$PNPM_BIN" ]]; then
+    echo "--⚠️ happys not found (run: npx happy-stacks setup)"
+  else
+    HAPPYS_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
+    echo "--Setup (guided) | bash=$HAPPYS_TERM param1=setup dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Bootstrap (clone/install) | bash=$HAPPYS_TERM param1=bootstrap dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--CLI link (install happy wrapper) | bash=$HAPPYS_TERM param1=cli:link dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    echo "--Mobile dev helper | bash=$HAPPYS_TERM param1=mobile dir=$HAPPY_LOCAL_DIR terminal=false"
+  fi
 fi
 
 echo "---"

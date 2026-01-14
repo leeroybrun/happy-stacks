@@ -34,6 +34,25 @@ SwiftBar runs a script on an interval and renders its output as native macOS men
   - Shows **origin** and **upstream** comparisons for the component repo’s main branch (based on your last `git fetch`)
   - Uses a **Git cache** by default so SwiftBar refresh stays fast even with many stacks/worktrees
 
+## Modes: selfhost vs dev
+
+The menu supports two modes:
+
+- **Selfhost mode** (`selfhost`): lightweight “control panel” for running Happy.
+  - Shows only the main stack essentials (Server/Daemon/Autostart/Tailscale) plus a small **Maintenance** section.
+  - Hides developer-oriented sections like stacks enumeration, components git/worktrees, and worktree tooling.
+- **Dev mode** (`dev`): full happy-stacks control plane (stacks + components + worktrees).
+
+### How to switch modes
+
+- In the menu, use the **Mode** section at the top, or
+- From a terminal:
+
+```bash
+happys menubar mode selfhost
+happys menubar mode dev
+```
+
 ## Stacks (multiple instances)
 
 If you create additional stacks (see `docs/stacks.md`), the plugin shows:
@@ -150,6 +169,15 @@ Notes:
 
 - Cached git info can be stale; it’s meant for at-a-glance signal.
 - Actions like worktree switching/build/dev are always live (they use `happys`); only *displayed git status* is cached.
+
+## Maintenance (selfhost mode)
+
+In **selfhost** mode, the menu includes a **Maintenance** section that can:
+
+- show whether a `happy-stacks` update is available (from cached `~/.happy-stacks/cache/update.json`)
+- run:
+  - `happys self check`
+  - `happys self update`
 
 ## Terminal preference for interactive actions
 

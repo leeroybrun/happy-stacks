@@ -20,6 +20,14 @@ export function getHappysRegistry() {
       rootUsage:
         'happys init [--home-dir=PATH] [--workspace-dir=PATH] [--runtime-dir=PATH] [--install-path] [--no-runtime] [--no-bootstrap] [--] [bootstrap args...]',
       description: 'Initialize ~/.happy-stacks (runtime + shims)',
+      hidden: true,
+    },
+    {
+      name: 'setup',
+      kind: 'node',
+      scriptRelPath: 'scripts/setup.mjs',
+      rootUsage: 'happys setup [--profile=selfhost|dev] [--json]',
+      description: 'Guided setup (selfhost or dev)',
     },
     {
       name: 'uninstall',
@@ -42,6 +50,7 @@ export function getHappysRegistry() {
       scriptRelPath: 'scripts/install.mjs',
       rootUsage: 'happys bootstrap [-- ...]',
       description: 'Clone/install components and deps',
+      hidden: true,
     },
     {
       name: 'start',

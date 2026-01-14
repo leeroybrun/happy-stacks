@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
 import { parseArgs } from './utils/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
+import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
 
 async function ensureSwiftbarAssets({ cliRootDir }) {
   const homeDir = getHappyStacksHomeDir();
@@ -45,6 +46,14 @@ function removeSwiftbarPlugins() {
   return out || null;
 }
 
+function normalizeMenubarMode(raw) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!v) return '';
+  if (v === 'selfhost' || v === 'self-host' || v === 'self_host' || v === 'host') return 'selfhost';
+  if (v === 'dev' || v === 'developer') return 'dev';
+  return '';
+}
+
 async function main() {
   const rawArgv = process.argv.slice(2);
   const argv = rawArgv[0] === 'menubar' ? rawArgv.slice(1) : rawArgv;
@@ -55,12 +64,14 @@ async function main() {
   if (wantsHelp(argv, { flags }) || cmd === 'help') {
     printResult({
       json,
-      data: { commands: ['install', 'uninstall', 'open'] },
+      data: { commands: ['install', 'uninstall', 'open', 'mode', 'status'] },
       text: [
         '[menubar] usage:',
         '  happys menubar install [--json]',
         '  happys menubar uninstall [--json]',
         '  happys menubar open [--json]',
+        '  happys menubar mode <selfhost|dev> [--json]',
+        '  happys menubar status [--json]',
         '',
         'notes:',
         '  - installs SwiftBar plugin into the active SwiftBar plugin folder',
@@ -84,6 +95,30 @@ async function main() {
   if (cmd === 'menubar:uninstall' || cmd === 'uninstall') {
     const dir = removeSwiftbarPlugins();
     printResult({ json, data: { ok: true, pluginsDir: dir }, text: dir ? `[menubar] removed plugins from ${dir}` : '[menubar] no plugins dir found' });
+    return;
+  }
+
+  if (cmd === 'status') {
+    const mode = (process.env.HAPPY_STACKS_MENUBAR_MODE ?? process.env.HAPPY_LOCAL_MENUBAR_MODE ?? 'dev').trim() || 'dev';
+    printResult({ json, data: { ok: true, mode }, text: `[menubar] mode: ${mode}` });
+    return;
+  }
+
+  if (cmd === 'mode') {
+    const positionals = argv.filter((a) => !a.startsWith('--'));
+    const raw = positionals[1] ?? '';
+    const mode = normalizeMenubarMode(raw);
+    if (!mode) {
+      throw new Error('[menubar] usage: happys menubar mode <selfhost|dev> [--json]');
+    }
+    await ensureEnvLocalUpdated({
+      rootDir: cliRootDir,
+      updates: [
+        { key: 'HAPPY_STACKS_MENUBAR_MODE', value: mode },
+        { key: 'HAPPY_LOCAL_MENUBAR_MODE', value: mode },
+      ],
+    });
+    printResult({ json, data: { ok: true, mode }, text: `[menubar] mode set: ${mode}` });
     return;
   }
 
