@@ -9,8 +9,7 @@ import { resolveLocalhostHost } from './utils/localhost_host.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { mkdir, lstat, rename, symlink, writeFile, readdir, copyFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir, lstat, rename, symlink, writeFile, readdir } from 'node:fs/promises';
 
 const COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 
@@ -56,6 +55,29 @@ function inferServerPortFromRuntimeState(runtimeState) {
   }
 }
 
+function isPidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 1) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRuntimeStateAlive(runtimeState) {
+  try {
+    const ownerPid = runtimeState?.ownerPid;
+    if (isPidAlive(ownerPid)) return true;
+    // fallback: if ownerPid missing, accept if serverPid is alive
+    const serverPid = runtimeState?.processes?.serverPid;
+    return isPidAlive(serverPid);
+  } catch {
+    return false;
+  }
+}
+
 function isQaValidateCommand(edisonArgs) {
   const args = Array.isArray(edisonArgs) ? edisonArgs : [];
   for (let i = 0; i < args.length - 1; i++) {
@@ -74,7 +96,8 @@ async function ensureStackServerPortForWebServerValidation({ rootDir, stackName,
 
   const existing = await readJsonIfExists(runtimePath);
   const existingPort = inferServerPortFromRuntimeState(existing);
-  if (existingPort) {
+  const existingAlive = existingPort && isRuntimeStateAlive(existing);
+  if (existingPort && existingAlive) {
     env.HAPPY_STACKS_SERVER_PORT = String(existingPort);
     env.HAPPY_LOCAL_SERVER_PORT = String(existingPort);
     return;
@@ -1365,40 +1388,6 @@ async function main() {
       // Marker for Edison-core wrapper enforcement in this repo.
       HAPPY_STACKS_EDISON_WRAPPER: '1',
     };
-
-    // Sandbox-safe Codex home:
-    // In some validator environments, writes to $HOME (e.g. /Users/<user>/.codex/...) are denied.
-    // Keep Codex session state inside the workspace so `global-codex` can execute.
-    if (!env.CODEX_HOME) {
-      const codexHome = join(rootDir, '.edison', '_tmp', 'codex-home', stackName);
-      env.CODEX_HOME = codexHome;
-      try {
-        await mkdir(codexHome, { recursive: true });
-        // Preserve existing Codex credentials/config (if any) so codex can run with the same credentials
-        // while using a writable CODEX_HOME.
-        //
-        // IMPORTANT:
-        // - Do not read or log file contents (may contain secrets).
-        // - Best-effort only; if unauthenticated, codex will surface a clear error.
-        const srcDir = join(homedir(), '.codex');
-        try {
-          const candidates = ['config.toml', 'config.json', 'auth.json', 'auth.json.bak'];
-          for (const name of candidates) {
-            const src = join(srcDir, name);
-            const dst = join(codexHome, name);
-            // eslint-disable-next-line no-await-in-loop
-            if ((await pathExists(src)) && !(await pathExists(dst))) {
-              // eslint-disable-next-line no-await-in-loop
-              await copyFile(src, dst);
-            }
-          }
-        } catch {
-          // ignore auth seeding failures (codex will surface a clear error if unauthenticated)
-        }
-      } catch {
-        // best-effort: codex will surface a clearer error if this path is still unwritable
-      }
-    }
 
     // We intentionally DO NOT include the happy-local repo root in evidence fingerprints by default.
     // Fingerprints should reflect only the task's target component repos (happy/happy-cli/etc).
