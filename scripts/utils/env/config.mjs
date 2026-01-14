@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { ensureEnvFileUpdated } from './env_file.mjs';
-import { getHappyStacksHomeDir, resolveStackEnvPath } from './paths.mjs';
-import { getCanonicalHomeDirFromEnv } from './canonical_home.mjs';
+import { getHappyStacksHomeDir, resolveStackEnvPath } from '../paths/paths.mjs';
+import { getCanonicalHomeDirFromEnv } from '../paths/canonical_home.mjs';
 
 export function getHomeEnvPath() {
   return join(getHappyStacksHomeDir(), '.env');
@@ -50,3 +50,4 @@ export async function ensureUserConfigEnvUpdated({ cliRootDir, updates }) {
   await ensureEnvFileUpdated({ envPath, updates });
   return envPath;
 }
+

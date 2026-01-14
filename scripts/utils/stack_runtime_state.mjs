@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { resolveStackEnvPath } from './paths.mjs';
+import { resolveStackEnvPath } from './paths/paths.mjs';
 
 export function getStackRuntimeStatePath(stackName) {
   const { baseDir } = resolveStackEnvPath(stackName);

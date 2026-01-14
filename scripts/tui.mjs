@@ -1,12 +1,12 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
-import { parseDotenv } from './utils/dotenv.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
 import { printResult } from './utils/cli/cli.mjs';
-import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
+import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack_runtime_state.mjs';
 
 function stripAnsi(s) {

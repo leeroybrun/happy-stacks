@@ -1,11 +1,11 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { pathExists } from './utils/fs.mjs';
-import { killProcessTree, runCapture, spawnProc } from './utils/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { pathExists } from './utils/fs/fs.mjs';
+import { killProcessTree, runCapture, spawnProc } from './utils/proc/proc.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/ports.mjs';
 import { getServerComponentName, isHappyServerRunning, waitForServerReady } from './utils/server.mjs';
-import { ensureCliBuilt, ensureDepsInstalled, pmExecBin, pmSpawnScript, requireDir } from './utils/pm.mjs';
+import { ensureCliBuilt, ensureDepsInstalled, pmExecBin, pmSpawnScript, requireDir } from './utils/proc/pm.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -18,7 +18,7 @@ import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from
 import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack_runtime_state.mjs';
 import { resolveStackContext } from './utils/stack_context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv, resolveServerUrls } from './utils/server_urls.mjs';
-import { resolveLocalhostHost } from './utils/localhost_host.mjs';
+import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
 
 /**

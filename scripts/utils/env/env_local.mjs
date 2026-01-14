@@ -23,3 +23,4 @@ export async function ensureEnvLocalUpdated({ rootDir, updates }) {
 
   await ensureEnvFileUpdated({ envPath: join(rootDir, 'env.local'), updates });
 }
+

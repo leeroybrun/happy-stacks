@@ -1,8 +1,8 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { getRootDir } from './utils/paths.mjs';
-import { ensureEnvFileUpdated } from './utils/env_file.mjs';
-import { resolveUserConfigEnvPath } from './utils/config.mjs';
+import { getRootDir } from './utils/paths/paths.mjs';
+import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
+import { resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 

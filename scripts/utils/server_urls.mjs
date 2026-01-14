@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-import { getStackName, resolveStackEnvPath } from './paths.mjs';
+import { getStackName, resolveStackEnvPath } from './paths/paths.mjs';
 import { resolvePublicServerUrl } from '../tailscale.mjs';
 import { resolveServerPortFromEnv } from './server_port.mjs';
 

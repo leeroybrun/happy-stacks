@@ -6,8 +6,8 @@ import { dirname } from 'node:path';
 import { getHappysRegistry } from './cli_registry.mjs';
 
 function cliRootDir() {
-  // scripts/utils/* -> scripts -> repo root
-  return dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+  // scripts/utils/cli/* -> scripts/utils -> scripts -> repo root
+  return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 }
 
 function runOrThrow(label, args) {

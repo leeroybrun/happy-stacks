@@ -1,7 +1,7 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
-import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/pm.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
+import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/proc/pm.mjs';
 import { dirname, join } from 'node:path';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tailscaleServeHttpsUrl } from './tailscale.mjs';

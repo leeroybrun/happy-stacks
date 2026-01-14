@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path';
 
-import { ensureDepsInstalled, pmSpawnScript } from './pm.mjs';
+import { ensureDepsInstalled, pmSpawnScript } from './proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './happy_server_infra.mjs';
 import { waitForServerReady } from './server.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './ports.mjs';

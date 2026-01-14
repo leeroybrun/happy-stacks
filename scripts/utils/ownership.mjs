@@ -1,4 +1,4 @@
-import { runCapture } from './proc.mjs';
+import { runCapture } from './proc/proc.mjs';
 import { killPid } from './expo.mjs';
 
 export async function getPsEnvLine(pid) {

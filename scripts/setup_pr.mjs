@@ -1,9 +1,9 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
-import { run } from './utils/proc.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { run } from './utils/proc/proc.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

@@ -1,8 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import { getComponentsDir } from './paths.mjs';
-import { pathExists } from './fs.mjs';
-import { run, runCapture } from './proc.mjs';
+import { getComponentsDir } from './paths/paths.mjs';
+import { pathExists } from './fs/fs.mjs';
+import { run, runCapture } from './proc/proc.mjs';
 
 export function parseGithubOwner(remoteUrl) {
   const raw = (remoteUrl ?? '').trim();

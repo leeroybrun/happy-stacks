@@ -9,7 +9,9 @@ export function getRuntimeDir() {
   if (fromEnv) {
     return expandHome(fromEnv);
   }
-  const homeDir = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim() ? expandHome(process.env.HAPPY_STACKS_HOME_DIR.trim()) : join(homedir(), '.happy-stacks');
+  const homeDir = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim()
+    ? expandHome(process.env.HAPPY_STACKS_HOME_DIR.trim())
+    : join(homedir(), '.happy-stacks');
   return join(homeDir, 'runtime');
 }
 

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDotenv } from './dotenv.mjs';
-import { expandHome, getCanonicalHomeEnvPathFromEnv } from './canonical_home.mjs';
+import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../paths/canonical_home.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './sandbox.mjs';
 
 async function loadEnvFile(path, { override = false, overridePrefix = null } = {}) {
@@ -57,8 +57,9 @@ async function loadEnvFileIgnoringPrefixes(path, { ignorePrefixes = [] } = {}) {
 }
 
 // Load happy-stacks env (optional). This is intentionally lightweight and does not require extra deps.
-// This file lives under scripts/utils/, so repo root is two directories up.
-const __utilsDir = dirname(fileURLToPath(import.meta.url));
+// This file lives under scripts/utils/env, so repo root is three directories up.
+const __envDir = dirname(fileURLToPath(import.meta.url));
+const __utilsDir = dirname(__envDir);
 const __scriptsDir = dirname(__utilsDir);
 const __cliRootDir = dirname(__scriptsDir);
 
@@ -207,3 +208,4 @@ process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT = process.env.NPM_CONFIG_PACKAGE_M
   const next = [...want.filter((p) => p && !current.includes(p)), ...current];
   process.env.PATH = next.join(delimiter);
 })();
+

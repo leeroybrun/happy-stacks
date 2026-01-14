@@ -1,17 +1,17 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
-import { pathExists } from './utils/fs.mjs';
-import { run, runCapture } from './utils/proc.mjs';
-import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths.mjs';
+import { pathExists } from './utils/fs/fs.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
+import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths/paths.mjs';
 import { inferRemoteNameForOwner, parseGithubOwner } from './utils/worktrees.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
-import { ensureEnvFileUpdated } from './utils/env_file.mjs';
+import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
+import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { existsSync } from 'node:fs';
-import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/config.mjs';
+import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/validate.mjs';
 
 function getActiveStackName() {
@@ -469,7 +469,7 @@ async function cmdMigrate({ rootDir }) {
   // If the persisted config pins any component dir to a legacy location, attempt to rewrite it.
   const envUpdates = [];
 
-  // Keep in sync with scripts/utils/env_local.mjs selection logic.
+  // Keep in sync with scripts/utils/env/env_local.mjs selection logic.
   const explicitEnv = (process.env.HAPPY_STACKS_ENV_FILE ?? process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim();
   const hasHomeConfig = existsSync(getHomeEnvPath()) || existsSync(getHomeEnvLocalPath());
   const envPath = explicitEnv ? explicitEnv : hasHomeConfig ? resolveUserConfigEnvPath({ cliRootDir: rootDir }) : join(rootDir, 'env.local');

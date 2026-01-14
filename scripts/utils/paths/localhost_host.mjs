@@ -15,3 +15,4 @@ export function resolveLocalhostHost({ stackMode, stackName = getStackName() } =
   if (!stackName || stackName === 'main') return 'localhost';
   return `happy-${sanitizeDnsLabel(stackName)}.localhost`;
 }
+

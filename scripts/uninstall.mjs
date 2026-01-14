@@ -1,4 +1,4 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 
 import { rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -7,11 +7,11 @@ import { spawnSync } from 'node:child_process';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { expandHome } from './utils/canonical_home.mjs';
-import { getHappyStacksHomeDir, getRootDir, getStacksStorageRoot } from './utils/paths.mjs';
-import { getRuntimeDir } from './utils/runtime.mjs';
-import { getCanonicalHomeEnvPath } from './utils/config.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
+import { getHappyStacksHomeDir, getRootDir, getStacksStorageRoot } from './utils/paths/paths.mjs';
+import { getRuntimeDir } from './utils/paths/runtime.mjs';
+import { getCanonicalHomeEnvPath } from './utils/env/config.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 
 function resolveWorkspaceDir({ rootDir, homeDir }) {
   // Uninstall should never default to deleting the repo root (getWorkspaceDir() can fall back to cliRootDir).

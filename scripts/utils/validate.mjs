@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
-import { getComponentsDir } from './paths.mjs';
+import { getComponentsDir } from './paths/paths.mjs';
 
 function isInside(path, dir) {
   const p = resolve(path);

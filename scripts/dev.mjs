@@ -1,10 +1,10 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { killProcessTree } from './utils/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { killProcessTree } from './utils/proc/proc.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/ports.mjs';
 import { getServerComponentName, isHappyServerRunning } from './utils/server.mjs';
-import { requireDir } from './utils/pm.mjs';
+import { requireDir } from './utils/proc/pm.mjs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
@@ -18,7 +18,7 @@ import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server_urls
 import { ensureDevCliReady, prepareDaemonAuthSeed, startDevDaemon, watchHappyCliAndRestartDaemon } from './utils/dev_daemon.mjs';
 import { startDevServer, watchDevServerAndRestart } from './utils/dev_server.mjs';
 import { startDevExpoWebUi } from './utils/dev_expo_web.mjs';
-import { resolveLocalhostHost } from './utils/localhost_host.mjs';
+import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
 import { waitForHttpOk } from './utils/server.mjs';
 

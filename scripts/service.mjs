@@ -1,9 +1,9 @@
-import './utils/env.mjs';
-import { run, runCapture } from './utils/proc.mjs';
-import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
-import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/pm.mjs';
-import { getCanonicalHomeDir } from './utils/config.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import './utils/env/env.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
+import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/service/autostart_darwin.mjs';
+import { getCanonicalHomeDir } from './utils/env/config.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';

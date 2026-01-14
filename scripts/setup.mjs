@@ -1,23 +1,23 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getRootDir, resolveStackEnvPath } from './utils/paths.mjs';
+import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
-import { getCanonicalHomeDir } from './utils/config.mjs';
-import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
-import { run, runCapture } from './utils/proc.mjs';
+import { getCanonicalHomeDir } from './utils/env/config.mjs';
+import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
 import { fetchHappyHealth } from './utils/server.mjs';
 import { tailscaleServeEnable, tailscaleServeHttpsUrlForInternalServerUrl } from './tailscale.mjs';
-import { getRuntimeDir } from './utils/runtime.mjs';
+import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { parseDotenv } from './utils/dotenv.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
 import { installService } from './service.mjs';
 import { getDevAuthKeyPath } from './utils/dev_auth_key.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 
 function boolFromFlagsOrKv({ flags, kv, onFlag, offFlag, key, defaultValue }) {
   if (flags.has(offFlag)) return false;

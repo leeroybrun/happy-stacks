@@ -1,14 +1,14 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { cp, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
+import { getHappyStacksHomeDir, getRootDir } from './utils/paths/paths.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { ensureEnvLocalUpdated } from './utils/env_local.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 
 async function ensureSwiftbarAssets({ cliRootDir }) {
   const homeDir = getHappyStacksHomeDir();

@@ -4,11 +4,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { parseDotenv } from './dotenv.mjs';
-import { ensureEnvFileUpdated } from './env_file.mjs';
+import { parseDotenv } from './env/dotenv.mjs';
+import { ensureEnvFileUpdated } from './env/env_file.mjs';
 import { pickNextFreeTcpPort } from './ports.mjs';
-import { pmExecBin } from './pm.mjs';
-import { run, runCapture } from './proc.mjs';
+import { pmExecBin } from './proc/pm.mjs';
+import { run, runCapture } from './proc/proc.mjs';
 
 function base64Url(buf) {
   return Buffer.from(buf)

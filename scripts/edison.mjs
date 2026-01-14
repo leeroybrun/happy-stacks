@@ -1,11 +1,11 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths.mjs';
-import { parseDotenv } from './utils/dotenv.mjs';
-import { pathExists } from './utils/fs.mjs';
-import { run, runCapture } from './utils/proc.mjs';
-import { resolveLocalhostHost } from './utils/localhost_host.mjs';
+import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
+import { pathExists } from './utils/fs/fs.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
+import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -608,12 +608,13 @@ async function cmdTaskScaffold({ rootDir, argv, json }) {
   const taskId = positionals[1]?.trim?.() ? positionals[1].trim() : '';
   if (!taskId) {
     throw new Error(
-      '[edison] usage: happys edison task:scaffold <task-id> [--mode=upstream|fork|both] [--tracks=upstream,fork] [--yes] [--json]'
+      '[edison] usage: happys edison task:scaffold <task-id> [--mode=upstream|fork|both] [--tracks=upstream,fork] [--yes] [--reuse-only] [--json]'
     );
   }
 
   const mode = (kv.get('--mode') ?? '').trim().toLowerCase() || 'upstream';
   const yes = flags.has('--yes');
+  const reuseOnly = flags.has('--reuse-only') || (kv.get('--reuse-only') ?? '').trim() === '1';
 
   const taskPath = join(rootDir, '.project', 'tasks');
   const taskGlobRoots = ['todo', 'wip', 'done', 'validated', 'blocked'];
@@ -722,10 +723,30 @@ async function cmdTaskScaffold({ rootDir, argv, json }) {
       createdTasks.push({ id: trackTaskId, kind: 'track', stack, path: trackRes.path, created: trackRes.created });
 
       const stackExists = Array.isArray(stacks) && stacks.some((s) => String(s?.name ?? '') === stack);
+      const expectedStackRemote = track === 'fork' || track === 'integration' ? 'origin' : 'upstream';
       if (!stackExists) {
-        await run('node', ['./bin/happys.mjs', 'stack', 'new', stack, '--json'], { cwd: rootDir });
+        await run('node', ['./bin/happys.mjs', 'stack', 'new', stack, `--remote=${expectedStackRemote}`, '--json'], { cwd: rootDir });
         createdStacks.push({ stack });
         stacks.push({ name: stack });
+      }
+
+      // If the stack already exists, reuse pinned worktrees when possible.
+      let stackInfo = null;
+      if (stackExists) {
+        const raw = await runCapture('node', ['./bin/happys.mjs', 'stack', 'info', stack, '--json'], { cwd: rootDir });
+        stackInfo = JSON.parse(raw);
+        const actualRemote = String(stackInfo?.stackRemote ?? '').trim() || 'upstream';
+        if (actualRemote !== expectedStackRemote) {
+          throw new Error(
+            `[edison] stack remote mismatch for track "${track}".\n` +
+              `- stack: ${stack}\n` +
+              `- expected: ${expectedStackRemote}\n` +
+              `- actual: ${actualRemote}\n\n` +
+              `Fix:\n` +
+              `- run: happys stack edit ${stack} --interactive\n` +
+              `- set: Git remote for creating new worktrees = ${expectedStackRemote}\n`
+          );
+        }
       }
 
       const qaRes = await ensureQaFile({
@@ -750,7 +771,11 @@ async function cmdTaskScaffold({ rootDir, argv, json }) {
         const compTaskId = existingComp?.id || nextChildId(trackTaskId, existingIds);
         existingIds.add(compTaskId);
         const compTitle = `Component: ${c} (${track})`;
-        const baseWorktree = String(existingComp?.fm?.base_worktree ?? '').trim() || `edison/${compTaskId}`;
+        const pinnedSpec =
+          stackInfo && Array.isArray(stackInfo.components)
+            ? String(stackInfo.components.find((x) => x?.component === c)?.worktreeSpec ?? '').trim()
+            : '';
+        const baseWorktree = String(existingComp?.fm?.base_worktree ?? '').trim() || pinnedSpec || `edison/${compTaskId}`;
         const compFm = {
           id: compTaskId,
           title: compTitle,
@@ -785,16 +810,32 @@ async function cmdTaskScaffold({ rootDir, argv, json }) {
         });
         createdQas.push({ id: `${compTaskId}-qa`, path: qa2.path, created: qa2.created });
 
-        const from = track === 'fork' ? 'origin' : 'upstream';
-        const stdout = await runCapture(
-          'node',
-          ['./bin/happys.mjs', 'wt', 'new', c, baseWorktree, `--from=${from}`, '--json'],
-          { cwd: rootDir }
-        );
-        const res = JSON.parse(stdout);
-        createdWorktrees.push({ component: c, variant: from, taskId: compTaskId, path: res.path, branch: res.branch });
-        await run('node', ['./bin/happys.mjs', 'stack', 'wt', stack, '--', 'use', c, res.path, '--json'], { cwd: rootDir });
-        pinned.push({ stack, component: c, taskId: compTaskId, path: res.path });
+        if (pinnedSpec) {
+          // Stack already pins an existing worktree; reuse it rather than creating a new one.
+          const pinnedDir = String(stackInfo.components.find((x) => x?.component === c)?.dir ?? '').trim();
+          createdWorktrees.push({ component: c, variant: 'reuse', taskId: compTaskId, path: pinnedDir, branch: null, worktreeSpec: pinnedSpec });
+          pinned.push({ stack, component: c, taskId: compTaskId, path: pinnedDir });
+        } else if (reuseOnly && stackExists) {
+          throw new Error(
+            `[edison] --reuse-only: stack "${stack}" is not pinned to a worktree for component "${c}".\n` +
+              `Fix:\n` +
+              `- pin an existing worktree to the stack:\n` +
+              `  happys stack wt ${stack} -- use ${c} <owner/branch|/abs/path>\n` +
+              `- then re-run:\n` +
+              `  happys edison task:scaffold ${taskId} --yes --reuse-only\n`
+          );
+        } else {
+          const from = track === 'fork' ? 'origin' : 'upstream';
+          const stdout = await runCapture(
+            'node',
+            ['./bin/happys.mjs', 'wt', 'new', c, baseWorktree, `--from=${from}`, '--json'],
+            { cwd: rootDir }
+          );
+          const res = JSON.parse(stdout);
+          createdWorktrees.push({ component: c, variant: from, taskId: compTaskId, path: res.path, branch: res.branch });
+          await run('node', ['./bin/happys.mjs', 'stack', 'wt', stack, '--', 'use', c, res.path, '--json'], { cwd: rootDir });
+          pinned.push({ stack, component: c, taskId: compTaskId, path: res.path });
+        }
       }
     }
   } else {
@@ -817,22 +858,48 @@ async function cmdTaskScaffold({ rootDir, argv, json }) {
             `  happys edison task:scaffold ${taskId} --yes\n`
         );
       }
-      await run('node', ['./bin/happys.mjs', 'stack', 'new', stack, '--json'], { cwd: rootDir });
+      const stackRemote = mode === 'fork' ? 'origin' : 'upstream';
+      await run('node', ['./bin/happys.mjs', 'stack', 'new', stack, `--remote=${stackRemote}`, '--json'], { cwd: rootDir });
       createdStacks.push({ stack });
     }
 
+    let stackInfo = null;
+    if (stackExists) {
+      const raw = await runCapture('node', ['./bin/happys.mjs', 'stack', 'info', stack, '--json'], { cwd: rootDir });
+      stackInfo = JSON.parse(raw);
+    }
+
     for (const c of components) {
-      const baseWorktree = `edison/${taskId}`;
+      const pinnedSpec =
+        stackInfo && Array.isArray(stackInfo.components)
+          ? String(stackInfo.components.find((x) => x?.component === c)?.worktreeSpec ?? '').trim()
+          : '';
+      const baseWorktree = pinnedSpec || `edison/${taskId}`;
       const from = mode === 'fork' ? 'origin' : 'upstream';
-      const stdout = await runCapture(
-        'node',
-        ['./bin/happys.mjs', 'wt', 'new', c, baseWorktree, `--from=${from}`, '--json'],
-        { cwd: rootDir }
-      );
-      const res = JSON.parse(stdout);
-      createdWorktrees.push({ component: c, variant: from, taskId, path: res.path, branch: res.branch });
-      await run('node', ['./bin/happys.mjs', 'stack', 'wt', stack, '--', 'use', c, res.path, '--json'], { cwd: rootDir });
-      pinned.push({ stack, component: c, taskId, path: res.path });
+      if (pinnedSpec) {
+        const pinnedDir = String(stackInfo.components.find((x) => x?.component === c)?.dir ?? '').trim();
+        createdWorktrees.push({ component: c, variant: 'reuse', taskId, path: pinnedDir, branch: null, worktreeSpec: pinnedSpec });
+        pinned.push({ stack, component: c, taskId, path: pinnedDir });
+      } else if (reuseOnly && stackExists) {
+        throw new Error(
+          `[edison] --reuse-only: stack "${stack}" is not pinned to a worktree for component "${c}".\n` +
+            `Fix:\n` +
+            `- pin an existing worktree to the stack:\n` +
+            `  happys stack wt ${stack} -- use ${c} <owner/branch|/abs/path>\n` +
+            `- then re-run:\n` +
+            `  happys edison task:scaffold ${taskId} --yes --reuse-only\n`
+        );
+      } else {
+        const stdout = await runCapture(
+          'node',
+          ['./bin/happys.mjs', 'wt', 'new', c, baseWorktree, `--from=${from}`, '--json'],
+          { cwd: rootDir }
+        );
+        const res = JSON.parse(stdout);
+        createdWorktrees.push({ component: c, variant: from, taskId, path: res.path, branch: res.branch });
+        await run('node', ['./bin/happys.mjs', 'stack', 'wt', stack, '--', 'use', c, res.path, '--json'], { cwd: rootDir });
+        pinned.push({ stack, component: c, taskId, path: res.path });
+      }
     }
   }
 

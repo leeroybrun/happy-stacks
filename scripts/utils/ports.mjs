@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import net from 'node:net';
-import { runCapture } from './proc.mjs';
+import { runCapture } from './proc/proc.mjs';
 
 async function listListenPids(port) {
   if (!Number.isFinite(port) || port <= 0) return [];

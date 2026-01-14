@@ -1,7 +1,7 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { listAllStackNames } from './utils/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
 import { resolveServerPortFromEnv } from './utils/server_urls.mjs';
@@ -12,8 +12,8 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { parseDotenv } from './utils/dotenv.mjs';
-import { ensureDepsInstalled, pmExecBin } from './utils/pm.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
+import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/happy_server_infra.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/dev_auth_key.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
@@ -21,7 +21,7 @@ import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
 import { printAuthLoginInstructions } from './utils/auth_login_ux.mjs';
 import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth_files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
 
 function getInternalServerUrl() {

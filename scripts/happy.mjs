@@ -1,11 +1,11 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { expandHome } from './utils/canonical_home.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 
 function resolveCliHomeDir() {
   const fromExplicit = (process.env.HAPPY_HOME_DIR ?? '').trim();

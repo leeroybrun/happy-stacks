@@ -1,16 +1,16 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createRequire } from 'node:module';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { parseDotenv } from './utils/dotenv.mjs';
-import { ensureEnvFileUpdated } from './utils/env_file.mjs';
-import { resolveStackEnvPath } from './utils/paths.mjs';
-import { ensureDepsInstalled } from './utils/pm.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
+import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
+import { resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { ensureDepsInstalled } from './utils/proc/pm.mjs';
 import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './utils/happy_server_infra.mjs';
-import { runCapture } from './utils/proc.mjs';
+import { runCapture } from './utils/proc/proc.mjs';
 import { pickNextFreeTcpPort } from './utils/ports.mjs';
 
 function usage() {
@@ -290,7 +290,7 @@ async function main() {
     throw new Error('[migrate] --to-stack is required');
   }
 
-  const rootDir = (await import('./utils/paths.mjs')).getRootDir(import.meta.url);
+  const rootDir = (await import('./utils/paths/paths.mjs')).getRootDir(import.meta.url);
   await migrateLightToServer({ rootDir, fromStack, toStack, includeFiles, force, json });
 }
 

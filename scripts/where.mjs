@@ -1,15 +1,15 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { parseArgs } from './utils/cli/args.mjs';
-import { expandHome } from './utils/canonical_home.mjs';
-import { getComponentsDir, getComponentDir, getHappyStacksHomeDir, getRootDir, getStackLabel, getStackName, getWorkspaceDir, resolveStackEnvPath } from './utils/paths.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
+import { getComponentsDir, getComponentDir, getHappyStacksHomeDir, getRootDir, getStackLabel, getStackName, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getRuntimeDir } from './utils/runtime.mjs';
-import { getCanonicalHomeDir, getCanonicalHomeEnvPath } from './utils/config.mjs';
-import { getSandboxDir } from './utils/sandbox.mjs';
+import { getRuntimeDir } from './utils/paths/runtime.mjs';
+import { getCanonicalHomeDir, getCanonicalHomeEnvPath } from './utils/env/config.mjs';
+import { getSandboxDir } from './utils/env/sandbox.mjs';
 
 function getHomeEnvPaths() {
   const homeDir = getHappyStacksHomeDir();

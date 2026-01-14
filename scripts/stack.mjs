@@ -1,4 +1,4 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
 import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -7,8 +7,8 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { parseArgs } from './utils/cli/args.mjs';
-import { killProcessTree, run, runCapture } from './utils/proc.mjs';
-import { getComponentDir, getComponentsDir, getHappyStacksHomeDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
+import { killProcessTree, run, runCapture } from './utils/proc/proc.mjs';
+import { getComponentDir, getComponentsDir, getHappyStacksHomeDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
 import {
   createWorktree,
@@ -19,23 +19,23 @@ import {
   worktreeSpecFromDir,
 } from './utils/worktrees.mjs';
 import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.mjs';
-import { parseDotenv } from './utils/dotenv.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env_file.mjs';
+import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { listAllStackNames } from './utils/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack_stop.mjs';
 import { writeDevAuthKey } from './utils/dev_auth_key.mjs';
 import { startDevServer } from './utils/dev_server.mjs';
 import { startDevExpoWebUi } from './utils/dev_expo_web.mjs';
-import { requireDir } from './utils/pm.mjs';
+import { requireDir } from './utils/proc/pm.mjs';
 import { waitForHttpOk } from './utils/server.mjs';
-import { resolveLocalhostHost } from './utils/localhost_host.mjs';
+import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth_files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
-import { getHomeEnvLocalPath } from './utils/config.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { getHomeEnvLocalPath } from './utils/env/config.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
 import {
   deleteStackRuntimeStateFile,
@@ -2587,6 +2587,9 @@ async function cmdInfoInternal({ rootDir, stackName }) {
   const serverComponent =
     getEnvValueAny(stackEnv, ['HAPPY_STACKS_SERVER_COMPONENT', 'HAPPY_LOCAL_SERVER_COMPONENT']) || 'happy-server-light';
 
+  const stackRemote =
+    getEnvValueAny(stackEnv, ['HAPPY_STACKS_STACK_REMOTE', 'HAPPY_LOCAL_STACK_REMOTE']) || 'upstream';
+
   const pinnedServerPortRaw = getEnvValueAny(stackEnv, ['HAPPY_STACKS_SERVER_PORT', 'HAPPY_LOCAL_SERVER_PORT']);
   const pinnedServerPort = pinnedServerPortRaw ? Number(pinnedServerPortRaw) : null;
 
@@ -2632,6 +2635,7 @@ async function cmdInfoInternal({ rootDir, stackName }) {
     envPath,
     runtimeStatePath,
     serverComponent,
+    stackRemote,
     pinned: {
       serverPort: Number.isFinite(pinnedServerPort) && pinnedServerPort > 0 ? pinnedServerPort : null,
     },

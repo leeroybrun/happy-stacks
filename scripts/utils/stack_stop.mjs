@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { getComponentDir } from './paths.mjs';
+import { getComponentDir } from './paths/paths.mjs';
 import { isPidAlive, readPidState } from './expo.mjs';
 import { stopLocalDaemon } from '../daemon.mjs';
 import { stopHappyServerManagedInfra } from './happy_server_infra.mjs';

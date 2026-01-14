@@ -1,7 +1,7 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { getComponentDir, getRootDir } from './utils/paths.mjs';
-import { ensureCliBuilt, ensureHappyCliLocalNpmLinked } from './utils/pm.mjs';
+import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { ensureCliBuilt, ensureHappyCliLocalNpmLinked } from './utils/proc/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 
 /**

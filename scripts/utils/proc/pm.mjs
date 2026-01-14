@@ -4,10 +4,10 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-import { pathExists } from './fs.mjs';
+import { pathExists } from '../fs/fs.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
-import { getDefaultAutostartPaths, getHappyStacksHomeDir } from './paths.mjs';
-import { resolveInstalledPath, resolveInstalledCliRoot } from './runtime.mjs';
+import { getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
+import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 
 function sha256Hex(s) {
   return createHash('sha256').update(String(s ?? ''), 'utf-8').digest('hex');
@@ -258,147 +258,210 @@ HAPPYS="$BIN_DIR/happys"
 if [[ -x "$HAPPYS" ]]; then
   exec "$HAPPYS" happy "$@"
 fi
-exec happys happy "$@"
+
+# Fallback: run happy-stacks from runtime install if present.
+HOME_DIR="\${HAPPY_STACKS_HOME_DIR:-\${HAPPY_LOCAL_HOME_DIR:-$HOME/.happy-stacks}}"
+RUNTIME="$HOME_DIR/runtime/node_modules/happy-stacks/bin/happys.mjs"
+if [[ -f "$RUNTIME" ]]; then
+  exec node "$RUNTIME" happy "$@"
+fi
+
+echo "error: cannot find happys shim or runtime install" >&2
+exit 1
 `;
 
-  await writeFile(happyShim, shim, 'utf-8');
+  const writeIfChanged = async (path, text) => {
+    let existing = '';
+    try {
+      existing = await readFile(path, 'utf-8');
+    } catch {
+      existing = '';
+    }
+    if (existing === text) return false;
+    await writeFile(path, text, 'utf-8');
+    return true;
+  };
+
+  await writeIfChanged(happyShim, shim);
   await chmod(happyShim, 0o755).catch(() => {});
 
-  // eslint-disable-next-line no-console
-  console.log(`[local] installed 'happy' shim at ${happyShim}`);
-  if (!existsSync(happysShim)) {
+  // happys shim: use node + CLI root; if runtime install exists, prefer it.
+  const cliRoot = resolveInstalledCliRoot(rootDir);
+  const happysShimText = `#!/bin/bash
+set -euo pipefail
+exec node "${resolveInstalledPath(rootDir, 'bin/happys.mjs')}" "$@"
+`;
+  await writeIfChanged(happysShim, happysShimText);
+  await chmod(happysShim, 0o755).catch(() => {});
+
+  // If user’s PATH points at a legacy install path, try to make it sane (best-effort).
+  const entries = getPathEntries();
+  const legacyBin = join(homedir(), '.happy-stacks', 'bin');
+  const newBin = join(getDefaultAutostartPaths().baseDir, 'bin');
+  if (entries.some((p) => isPathInside(p, legacyBin)) && !entries.some((p) => isPathInside(p, newBin))) {
     // eslint-disable-next-line no-console
-    console.log(`[local] note: run \`happys init\` to install a stable ${happysShim} shim for services/SwiftBar.`);
+    console.log(`[local] note: your PATH includes ${legacyBin}; recommended path is ${newBin}`);
   }
+
+  return { ok: true, cliRoot, binDir, happyShim, happysShim };
 }
 
-export async function pmSpawnScript({ label, dir, script, env, options = {} }) {
+export async function pmExecBin(dir, bin, args, { env = process.env } = {}) {
   const pm = await getComponentPm(dir);
   if (pm.name === 'yarn') {
-    return spawnProc(label, pm.cmd, ['-s', script], env, { ...options, cwd: dir });
-  }
-  return spawnProc(label, pm.cmd, ['--silent', script], env, { ...options, cwd: dir });
-}
-
-export async function pmSpawnBin({ label, dir, bin, args, env, options = {} }) {
-  const pm = await getComponentPm(dir);
-  if (pm.name === 'yarn') {
-    return spawnProc(label, pm.cmd, [bin, ...args], env, { ...options, cwd: dir });
-  }
-  return spawnProc(label, pm.cmd, ['exec', bin, ...args], env, { ...options, cwd: dir });
-}
-
-export async function pmExecBin({ dir, bin, args, env, quiet = false }) {
-  const pm = await getComponentPm(dir);
-  const stdio = quiet ? 'ignore' : 'inherit';
-  if (pm.name === 'yarn') {
-    await run(pm.cmd, [bin, ...args], { env, cwd: dir, stdio });
+    await run(pm.cmd, ['run', bin, ...args], { cwd: dir, env });
     return;
   }
-  await run(pm.cmd, ['exec', bin, ...args], { env, cwd: dir, stdio });
+  await run(pm.cmd, ['exec', bin, ...args], { cwd: dir, env });
 }
 
-export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.local', env = {} }) {
-  if (process.platform !== 'darwin') {
-    throw new Error('[local] autostart is currently only implemented for macOS (LaunchAgents).');
+export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = {}) {
+  const pm = await getComponentPm(dir);
+  if (pm.name === 'yarn') {
+    return spawnProc(label, pm.cmd, ['run', bin, ...args], env, { cwd: dir });
   }
+  return spawnProc(label, pm.cmd, ['exec', bin, ...args], env, { cwd: dir });
+}
 
-  const {
-    logsDir,
-    stdoutPath,
-    stderrPath,
-    plistPath,
-    primaryLabel,
-    legacyLabel,
-    primaryPlistPath,
-    legacyPlistPath,
-    primaryStdoutPath,
-    primaryStderrPath,
-    legacyStdoutPath,
-    legacyStderrPath,
-  } = getDefaultAutostartPaths();
-  await mkdir(logsDir, { recursive: true });
+export async function pmSpawnScript(dir, label, script, args, { env = process.env } = {}) {
+  const pm = await getComponentPm(dir);
+  if (pm.name === 'yarn') {
+    return spawnProc(label, pm.cmd, ['run', script, ...args], env, { cwd: dir });
+  }
+  return spawnProc(label, pm.cmd, ['run', script, ...args], env, { cwd: dir });
+}
 
-  const nodePath = process.env.HAPPY_STACKS_NODE?.trim()
-    ? process.env.HAPPY_STACKS_NODE.trim()
-    : process.env.HAPPY_LOCAL_NODE?.trim()
-      ? process.env.HAPPY_LOCAL_NODE.trim()
-      : process.execPath;
-  const installedRoot = resolveInstalledCliRoot(rootDir);
-  const happysEntrypoint = resolveInstalledPath(rootDir, join('bin', 'happys.mjs'));
-  const happysShim = join(getHappyStacksHomeDir(), 'bin', 'happys');
-  const useShim = existsSync(happysShim);
+function macLaunchAgentPlistPath(label) {
+  return join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+}
 
-  // Ensure we write to the plist path that matches the label we're installing, instead of the
-  // "active" plist path (which might be legacy and cause filename/label mismatches).
-  const resolvedPlistPath =
-    label === primaryLabel ? primaryPlistPath : label === legacyLabel ? legacyPlistPath : join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
-  const resolvedStdoutPath = label === primaryLabel ? primaryStdoutPath : label === legacyLabel ? legacyStdoutPath : stdoutPath;
-  const resolvedStderrPath = label === primaryLabel ? primaryStderrPath : label === legacyLabel ? legacyStderrPath : stderrPath;
+function xmlEscape(s) {
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
 
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+function plistXml({ label, programArgs, env = {}, stdoutPath, stderrPath, workingDirectory }) {
+  const envEntries = Object.entries(env ?? {}).filter(([k, v]) => String(k).trim() && String(v ?? '').trim());
+  const programArgsXml = programArgs.map((a) => `      <string>${xmlEscape(a)}</string>`).join('\n');
+  const envXml = envEntries
+    .map(([k, v]) => `      <key>${xmlEscape(k)}</key>\n      <string>${xmlEscape(v)}</string>`)
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>${label}</string>
+    <string>${xmlEscape(label)}</string>
+
     <key>ProgramArguments</key>
     <array>
-      ${useShim ? `<string>${happysShim}</string>` : `<string>${nodePath}</string>\n      <string>${happysEntrypoint}</string>`}
-      <string>start</string>
+${programArgsXml}
     </array>
-    <key>WorkingDirectory</key>
-    <string>${installedRoot}</string>
+
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
-    <key>StandardOutPath</key>
-    <string>${resolvedStdoutPath}</string>
+
+${workingDirectory ? `    <key>WorkingDirectory</key>\n    <string>${xmlEscape(workingDirectory)}</string>\n` : ''}    <key>StandardOutPath</key>
+    <string>${xmlEscape(stdoutPath)}</string>
     <key>StandardErrorPath</key>
-    <string>${resolvedStderrPath}</string>
+    <string>${xmlEscape(stderrPath)}</string>
+
     <key>EnvironmentVariables</key>
     <dict>
-${Object.entries(env)
-  .map(([k, v]) => `      <key>${k}</key>\n      <string>${String(v)}</string>`)
-  .join('\n')}
+${envXml}
     </dict>
   </dict>
 </plist>
 `;
-
-  await mkdir(dirname(resolvedPlistPath), { recursive: true });
-  await writeFile(resolvedPlistPath, plist, 'utf-8');
-
-  // Best-effort (works on most macOS setups). If it fails, the plist still exists and can be loaded manually.
-  try {
-    await run('launchctl', ['unload', '-w', resolvedPlistPath]);
-  } catch {
-    // ignore
-  }
-  await run('launchctl', ['load', '-w', resolvedPlistPath]);
 }
 
-export async function ensureMacAutostartDisabled({ label = 'com.happy.local' }) {
+export async function ensureMacAutostartEnabled({ rootDir, label, env }) {
+  if (process.platform !== 'darwin') {
+    throw new Error('[local] macOS autostart is only supported on Darwin');
+  }
+  const l = String(label ?? '').trim();
+  if (!l) {
+    throw new Error('[local] missing launchd label');
+  }
+
+  const plistPath = macLaunchAgentPlistPath(l);
+  const { stdoutPath, stderrPath } = getDefaultAutostartPaths();
+  await mkdir(dirname(plistPath), { recursive: true }).catch(() => {});
+  await mkdir(dirname(stdoutPath), { recursive: true }).catch(() => {});
+  await mkdir(dirname(stderrPath), { recursive: true }).catch(() => {});
+
+  const programArgs = [process.execPath, resolveInstalledPath(rootDir, 'bin/happys.mjs'), 'start'];
+  const mergedEnv = {
+    ...(env ?? {}),
+    // Make sure PATH is present for subprocesses like git/docker.
+    PATH: (process.env.PATH ?? '').trim() || '/usr/bin:/bin:/usr/sbin:/sbin',
+  };
+
+  const xml = plistXml({
+    label: l,
+    programArgs,
+    env: mergedEnv,
+    stdoutPath,
+    stderrPath,
+    workingDirectory: resolveInstalledCliRoot(rootDir),
+  });
+
+  // Write atomically.
+  const tmp = join(dirname(plistPath), `.tmp.${l}.${Date.now()}.plist`);
+  await writeFile(tmp, xml, 'utf-8');
+  await rename(tmp, plistPath);
+
+  // Best-effort load/enable; service.mjs also has start/enable flows, but install should be convenient.
+  try {
+    await runCapture('launchctl', ['load', '-w', plistPath]);
+  } catch {
+    // ignore; service.mjs has a more robust bootstrap path
+  }
+}
+
+export async function ensureMacAutostartDisabled({ label }) {
   if (process.platform !== 'darwin') {
     return;
   }
-  const { primaryLabel, legacyLabel, primaryPlistPath, legacyPlistPath } = getDefaultAutostartPaths();
-  const resolvedPlistPath =
-    label === primaryLabel ? primaryPlistPath : label === legacyLabel ? legacyPlistPath : join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+  const l = String(label ?? '').trim();
+  if (!l) return;
+  const plistPath = macLaunchAgentPlistPath(l);
+  const uidRaw = Number(process.env.UID);
+  const uid = Number.isFinite(uidRaw) ? uidRaw : null;
+
+  // Best-effort unload/bootout/remove; ignore failures.
   try {
-    await run('launchctl', ['unload', '-w', resolvedPlistPath]);
+    await runCapture('launchctl', ['unload', '-w', plistPath]);
   } catch {
-    // Old-style unload can fail on newer macOS; fall back to modern bootout.
+    // ignore
+  }
+  try {
+    await runCapture('launchctl', ['unload', plistPath]);
+  } catch {
+    // ignore
+  }
+  if (uid != null) {
     try {
-      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-      if (uid != null) {
-        await run('launchctl', ['bootout', `gui/${uid}/${label}`]);
-      }
+      await runCapture('launchctl', ['disable', `gui/${uid}/${l}`]);
+    } catch {
+      // ignore
+    }
+    try {
+      await runCapture('launchctl', ['bootout', `gui/${uid}`, plistPath]);
     } catch {
       // ignore
     }
   }
-  // eslint-disable-next-line no-console
-  console.log(`[local] autostart disabled (${label})`);
+  try {
+    await runCapture('launchctl', ['remove', l]);
+  } catch {
+    // ignore
+  }
 }

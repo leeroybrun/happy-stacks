@@ -1,4 +1,4 @@
-import { getStackName, resolveStackEnvPath } from './paths.mjs';
+import { getStackName, resolveStackEnvPath } from './paths/paths.mjs';
 import { getStackRuntimeStatePath } from './stack_runtime_state.mjs';
 
 export function resolveStackContext({ env = process.env, autostart = null } = {}) {

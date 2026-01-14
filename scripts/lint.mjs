@@ -1,10 +1,10 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getComponentDir, getRootDir } from './utils/paths.mjs';
-import { ensureDepsInstalled, requirePnpm } from './utils/pm.mjs';
-import { pathExists } from './utils/fs.mjs';
-import { run } from './utils/proc.mjs';
+import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { ensureDepsInstalled, requirePnpm } from './utils/proc/pm.mjs';
+import { pathExists } from './utils/fs/fs.mjs';
+import { run } from './utils/proc/proc.mjs';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 

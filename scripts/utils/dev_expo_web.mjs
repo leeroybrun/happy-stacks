@@ -1,4 +1,4 @@
-import { ensureDepsInstalled, pmSpawnBin } from './pm.mjs';
+import { ensureDepsInstalled, pmSpawnBin } from './proc/pm.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, wantsExpoClearCache, writePidState } from './expo.mjs';
 import { pickDevMetroPort, resolveStackUiDevPortStart } from './dev_server.mjs';
 import { recordStackRuntimeUpdate } from './stack_runtime_state.mjs';

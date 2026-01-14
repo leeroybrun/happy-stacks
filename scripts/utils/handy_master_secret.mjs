@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { parseDotenv } from './dotenv.mjs';
-import { resolveStackEnvPath } from './paths.mjs';
+import { parseDotenv } from './env/dotenv.mjs';
+import { resolveStackEnvPath } from './paths/paths.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './auth_sources.mjs';
 
 async function readTextIfExists(path) {

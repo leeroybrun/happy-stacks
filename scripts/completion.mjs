@@ -1,4 +1,4 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -7,11 +7,11 @@ import { join } from 'node:path';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { runCapture } from './utils/proc.mjs';
+import { runCapture } from './utils/proc/proc.mjs';
 import { getHappysRegistry } from './utils/cli/cli_registry.mjs';
-import { expandHome } from './utils/canonical_home.mjs';
-import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
-import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/sandbox.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
+import { getHappyStacksHomeDir, getRootDir } from './utils/paths/paths.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 
 function detectShell() {
   const raw = (process.env.SHELL ?? '').toLowerCase();

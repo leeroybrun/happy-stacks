@@ -1,16 +1,16 @@
-import './utils/env.mjs';
+import './utils/env/env.mjs';
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { parseArgs } from './utils/cli/args.mjs';
-import { pathExists } from './utils/fs.mjs';
-import { run, runCapture } from './utils/proc.mjs';
-import { expandHome } from './utils/canonical_home.mjs';
-import { getHappyStacksHomeDir, getRootDir } from './utils/paths.mjs';
+import { pathExists } from './utils/fs/fs.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
+import { getHappyStacksHomeDir, getRootDir } from './utils/paths/paths.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getRuntimeDir } from './utils/runtime.mjs';
+import { getRuntimeDir } from './utils/paths/runtime.mjs';
 
 function cachePaths() {
   const home = getHappyStacksHomeDir();

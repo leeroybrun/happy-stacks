@@ -1,5 +1,5 @@
-import { runCapture } from './proc.mjs';
-import { ensureDepsInstalled, pmExecBin } from './pm.mjs';
+import { runCapture } from './proc/proc.mjs';
+import { ensureDepsInstalled, pmExecBin } from './proc/pm.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
