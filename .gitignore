@@ -27,3 +27,4 @@ env.local
 .project/qa/locks/
 .project/qa/score-history/
 /triage
+/.tmp
