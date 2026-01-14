@@ -44,8 +44,13 @@
     - `happys edison -- read START_VALIDATE_TASK --type start`
     - `happys edison -- read START_HAPPY_STACKS_NEW_SESSION --type start`
 
-- **Auth failures: prefer copy-from main** (non-interactive, safe).
-  - `happys stack auth <stack> copy-from main`
+- **Auth failures: prefer copy-from your configured seed stack** (non-interactive, safe).
+  - Recommended seed: `dev-auth` (set by developers via `HAPPY_STACKS_AUTH_SEED_FROM=dev-auth`).
+  - `happys stack auth <stack> copy-from dev-auth`
+  - If you don't know the seed stack, fall back to: `happys stack auth <stack> copy-from main`
+
+- **Dev UI login key (agents should only consume, not create)**:
+  - Print the UI-accepted dev key format: `happys auth dev-key --print`
 
 - **Multiple daemons are expected** with multiple stacks.
   - Do **not** kill all daemons. Diagnose per stack.

@@ -76,3 +76,27 @@ export async function waitForServerReady(url) {
   throw new Error(`Timed out waiting for server at ${url}`);
 }
 
+// Used for UI readiness checks (Expo / gateway / server). Treat any HTTP response as "up".
+export async function waitForHttpOk(url, { timeoutMs = 15_000, intervalMs = 250 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), Math.min(2500, Math.max(250, intervalMs)));
+      try {
+        const res = await fetch(url, { method: 'GET', signal: ctl.signal });
+        if (res.status >= 100 && res.status < 600) {
+          return;
+        }
+      } finally {
+        clearTimeout(t);
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(intervalMs);
+  }
+  throw new Error(`Timed out waiting for HTTP response from ${url} after ${timeoutMs}ms`);
+}
+

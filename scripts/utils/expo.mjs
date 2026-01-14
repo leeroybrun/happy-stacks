@@ -26,10 +26,12 @@ export async function ensureExpoIsolationEnv({ env, stateDir, expoHomeDir, tmpDi
   await mkdir(tmpDir, { recursive: true });
 
   // Expo CLI uses this to override ~/.expo.
-  env.__UNSAFE_EXPO_HOME_DIRECTORY = env.__UNSAFE_EXPO_HOME_DIRECTORY ?? expoHomeDir;
+  // Always override: stack/worktree isolation must not fall back to the user's global ~/.expo.
+  env.__UNSAFE_EXPO_HOME_DIRECTORY = expoHomeDir;
 
   // Metro default cache root is `path.join(os.tmpdir(), 'metro-cache')`, so TMPDIR isolates it.
-  env.TMPDIR = env.TMPDIR ?? tmpDir;
+  // Always override: macOS sets TMPDIR by default, so a "set-if-missing" guard would not isolate Metro.
+  env.TMPDIR = tmpDir;
 }
 
 export function wantsExpoClearCache({ env }) {

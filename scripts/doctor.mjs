@@ -6,7 +6,7 @@ import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRo
 import { killPortListeners } from './utils/ports.mjs';
 import { getServerComponentName } from './utils/server.mjs';
 import { daemonStatusSummary } from './daemon.mjs';
-import { tailscaleServeStatus, resolvePublicServerUrl } from './tailscale.mjs';
+import { tailscaleServeStatus } from './tailscale.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -14,6 +14,8 @@ import { readFile } from 'node:fs/promises';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { getRuntimeDir } from './utils/runtime.mjs';
 import { assertServerComponentDirMatches } from './utils/validate.mjs';
+import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server_urls.mjs';
+import { resolveStackContext } from './utils/stack_context.mjs';
 
 /**
  * Doctor script for common happy-stacks failure modes.
@@ -115,28 +117,23 @@ async function main() {
   const runtimeVersion = await readPkgVersion(runtimePkgJson);
   const updateCache = existsSync(updateCachePath) ? await readJsonSafe(updateCachePath) : null;
 
-  const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? Number(process.env.HAPPY_LOCAL_SERVER_PORT) : 3005;
-  const internalServerUrl = `http://127.0.0.1:${serverPort}`;
-  const stackMode = Boolean((process.env.HAPPY_STACKS_STACK ?? '').trim() || (process.env.HAPPY_LOCAL_STACK ?? '').trim());
+  const autostart = getDefaultAutostartPaths();
+  const stackCtx = resolveStackContext({ env: process.env, autostart });
+  const stackMode = stackCtx.stackMode;
 
-  const defaultPublicUrl = `http://localhost:${serverPort}`;
-  const envPublicUrl = process.env.HAPPY_LOCAL_SERVER_URL?.trim() ? process.env.HAPPY_LOCAL_SERVER_URL.trim() : '';
-  const resolved = await resolvePublicServerUrl({
-    internalServerUrl,
-    defaultPublicUrl,
-    envPublicUrl,
-    allowEnable: false,
-  });
-  const publicServerUrl = resolved.publicServerUrl;
+  const serverPort = resolveServerPortFromEnv({ defaultPort: 3005 });
+  const resolvedUrls = await resolveServerUrls({ serverPort, allowEnable: false });
+  const internalServerUrl = resolvedUrls.internalServerUrl;
+  const publicServerUrl = resolvedUrls.publicServerUrl;
 
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
-    : join(getDefaultAutostartPaths().baseDir, 'cli');
+    : join(autostart.baseDir, 'cli');
 
   const serveUi = (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
   const uiBuildDir = process.env.HAPPY_LOCAL_UI_BUILD_DIR?.trim()
     ? process.env.HAPPY_LOCAL_UI_BUILD_DIR.trim()
-    : join(getDefaultAutostartPaths().baseDir, 'ui');
+    : join(autostart.baseDir, 'ui');
 
   const serverComponentName = getServerComponentName({ kv });
   if (serverComponentName === 'both') {

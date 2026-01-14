@@ -8,61 +8,31 @@ Happy is an UI/CLI stack (server + web UI + CLI + daemon) who let you monitor an
 
 ## What is Happy Stacks?
 
-happy-stacks allows to:
+happy-stacks is a guided installer + local orchestration CLI for Happy.
 
-- run Happy fully on your own machine (no hosted dependency)
-- safely access it remotely (HTTPS secure context) via Tailscale
-- manage **worktrees** for clean upstream PRs while keeping a patched fork
-- run **multiple isolated stacks** (ports + dirs + component overrides)
-- optionally manage autostart (macOS launchd / Linux systemd user) and a SwiftBar menu bar control panel
+If you only want to **self-host Happy**, start with the **Self-host** section below.
+If you want to **develop Happy** (worktrees, multiple stacks, upstream PR workflows), see the **Development** section further down.
 
-## Quickstart
+## Self-host Happy (install + run)
 
-### Step 1: Setup (guided)
+### Step 1: Setup
 
 Recommended:
 
 ```bash
-npx happy-stacks setup
+npx happy-stacks setup --profile=selfhost
 ```
 
 Alternative (global install):
 
 ```bash
 npm install -g happy-stacks
-happys setup
+happys setup --profile=selfhost
 ```
 
-`setup` will ask your goal:
+`setup` can optionally start Happy and guide you through authentication.
 
-- **Self-host**: install + run Happy locally (optionally enable Tailscale, autostart, menubar)
-- **Dev**: bootstrap a development workspace (worktrees/stacks)
-
-Developer mode (clone this repo):
-
-```bash
-git clone https://github.com/leeroybrun/happy-stacks.git
-cd happy-stacks
-
-node ./bin/happys.mjs setup --profile=dev
-```
-
-Notes:
-
-- In a cloned repo, `pnpm <script>` still works, but `happys <command>` is now the recommended UX (same underlying scripts).
-- To make the installed `~/.happy-stacks/bin/happys` shim (LaunchAgents / SwiftBar) run your local checkout without publishing to npm, set:
-
-  ```bash
-  echo 'HAPPY_STACKS_CLI_ROOT_DIR=/path/to/your/happy-stacks-checkout' >> ~/.happy-stacks/.env
-  ```
-
-  Or (recommended) persist it via init:
-
-  ```bash
-  happys init --cli-root-dir=/path/to/your/happy-stacks-checkout
-  ```
-
-### Step 2: Run the main stack
+### Step 2: Start Happy
 
 Starts the local server, CLI daemon, and serves the pre-built UI.
 
@@ -70,7 +40,7 @@ Starts the local server, CLI daemon, and serves the pre-built UI.
 happys start
 ```
 
-### Step 2b (first run only): authenticate the daemon
+### Step 3 (first run only): authenticate
 
 On a **fresh machine** (or any new stack), the daemon needs to authenticate once before it can register a “machine”.
 
@@ -78,34 +48,20 @@ On a **fresh machine** (or any new stack), the daemon needs to authenticate once
 happys auth login
 ```
 
-#### Troubleshooting: “no machine” on first run (daemon auth)
-
-If `.../new` shows “no machine” check whether this is **auth** vs a **daemon/runtime** issue:
+If you want a quick diagnosis:
 
 ```bash
 happys auth status
 ```
 
-If it says **auth is required**, run:
-
-```bash
-happys auth login
-```
-
-If auth is OK but the daemon isn’t running, run:
-
-```bash
-happys doctor
-```
-
-### Step 3: Enable Tailscale Serve (recommended for remote devices)
+### Step 4: Enable Tailscale Serve (recommended for mobile/remote)
 
 ```bash
 happys tailscale enable
 happys tailscale url
 ```
 
-### Step 4: Mobile access
+### Step 5: Mobile access
 
 Make sure Tailscale is [installed and running]
 ([https://tailscale.com/kb/1347/installation](https://tailscale.com/kb/1347/installation)) on your 
@@ -118,7 +74,39 @@ your local server](docs/remote-access.md).
 
 Details (secure context, phone instructions, automation knobs): `[docs/remote-access.md](docs/remote-access.md)`.
 
-## Why this exists
+## Development (worktrees, stacks, contributor workflows)
+
+### Setup (guided)
+
+```bash
+npx happy-stacks setup --profile=dev
+```
+
+### Developing from a cloned repo
+
+```bash
+git clone https://github.com/leeroybrun/happy-stacks.git
+cd happy-stacks
+
+node ./bin/happys.mjs setup --profile=dev
+```
+
+Notes:
+
+- In a cloned repo, `pnpm <script>` still works, but `happys <command>` is the recommended UX (same underlying scripts).
+- To make the installed `~/.happy-stacks/bin/happys` shim (LaunchAgents / SwiftBar) run your local checkout without publishing to npm, set:
+
+  ```bash
+  echo 'HAPPY_STACKS_CLI_ROOT_DIR=/path/to/your/happy-stacks-checkout' >> ~/.happy-stacks/.env
+  ```
+
+  Or (recommended) persist it via init:
+
+  ```bash
+  happys init --cli-root-dir=/path/to/your/happy-stacks-checkout
+  ```
+
+### Why this exists
 
 - **Automated setup**: `happys setup` + `happys start` gets the whole stack up and running.
 - **No hosted dependency**: run the full stack on your own computer.
@@ -128,7 +116,7 @@ Details (secure context, phone instructions, automation knobs): `[docs/remote-ac
 - **Stacks**: run multiple isolated instances in parallel (ports + dirs + component overrides).
 - **Remote access**: `happys tailscale ...` helps you get an HTTPS URL for mobile/remote devices.
 
-## How Happy Stacks wires “local” URLs
+### How Happy Stacks wires “local” URLs
 
 There are two “URLs” to understand:
 
@@ -164,7 +152,7 @@ Diagram:
 
 More details + automation: `[docs/remote-access.md](docs/remote-access.md)`.
 
-## How it’s organized
+### How it’s organized
 
 - **Scripts**: `scripts/*.mjs` (bootstrap/dev/start/build/stacks/worktrees/service/tailscale/mobile)
 - **Components**: `components/*` (each is its own Git repo)
@@ -177,9 +165,9 @@ Components:
 - `happy-server-light` (light server, can serve built UI)
 - `happy-server` (full server)
 
-## Quickstarts (feature-focused)
+### Quickstarts (feature-focused)
 
-### Remote access (Tailscale Serve)
+#### Remote access (Tailscale Serve)
 
 ```bash
 happys tailscale enable
@@ -188,7 +176,7 @@ happys tailscale url
 
 Details: `[docs/remote-access.md](docs/remote-access.md)`.
 
-### Worktrees + forks (clean upstream PRs)
+#### Worktrees + forks (clean upstream PRs)
 
 Create a clean upstream PR worktree:
 
@@ -206,7 +194,7 @@ happys wt pr happy 123 --update --stash
 
 Details: `[docs/worktrees-and-forks.md](docs/worktrees-and-forks.md)`.
 
-### Server flavor (server-light vs full server)
+#### Server flavor (server-light vs full server)
 
 - Use `happy-server-light` for a light local stack (no Redis, no Postgres, no Docker), and UI serving via server-light.
 - Use `happy-server` when you need a more production-like server (Postgres + Redis + S3-compatible storage) or want to develop server changes for upstream.
@@ -227,7 +215,7 @@ happys stack srv exp1 -- use --interactive
 
 Details: `[docs/server-flavors.md](docs/server-flavors.md)`.
 
-### Stacks (multiple isolated instances)
+#### Stacks (multiple isolated instances)
 
 ```bash
 happys stack new exp1 --interactive
@@ -244,7 +232,15 @@ happys stack dev exp1
 
 Details: `[docs/stacks.md](docs/stacks.md)`.
 
-### Menu bar (SwiftBar)
+#### Dev stacks: browser origin isolation (IMPORTANT)
+
+Non-main stacks use a stack-specific localhost hostname (no `/etc/hosts` changes required):
+
+- `http://happy-<stack>.localhost:<uiPort>`
+
+This avoids browser auth/session collisions between stacks (separate origin per stack).
+
+#### Menu bar (SwiftBar)
 
 ```bash
 happys menubar install
@@ -253,7 +249,7 @@ happys menubar open
 
 Details: `[docs/menubar.md](docs/menubar.md)`.
 
-### Mobile iOS dev (optional)
+#### Mobile iOS dev (optional)
 
 ```bash
 happys mobile --help
@@ -262,7 +258,7 @@ happys mobile --json
 
 Details: `[docs/mobile-ios.md](docs/mobile-ios.md)`.
 
-### Tauri desktop app (optional)
+#### Tauri desktop app (optional)
 
 ```bash
 happys build --tauri
@@ -270,7 +266,7 @@ happys build --tauri
 
 Details: `[docs/tauri.md](docs/tauri.md)`.
 
-## Commands (high-signal)
+### Commands (high-signal)
 
 - **Setup**:
   - `happys setup` (guided; selfhost or dev)
@@ -296,7 +292,7 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
 - **Menu bar (SwiftBar)**:
   - `happys menubar install`
 
-## Docs (deep dives)
+### Docs (deep dives)
 
 - **Remote access (Tailscale + phone)**: `[docs/remote-access.md](docs/remote-access.md)`
 - **Server flavors (server-light vs server)**: `[docs/server-flavors.md](docs/server-flavors.md)`
@@ -307,7 +303,7 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
 - **Mobile iOS dev**: `[docs/mobile-ios.md](docs/mobile-ios.md)`
 - **Tauri desktop app**: `[docs/tauri.md](docs/tauri.md)`
 
-## Configuration
+### Configuration
 
 Where config lives by default:
 

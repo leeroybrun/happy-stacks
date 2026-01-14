@@ -47,12 +47,39 @@ async function probeAccountCount({ serverDir, env }) {
 }
 
 export function resolveAutoCopyFromMainEnabled({ env, stackName, isInteractive }) {
-  const raw = (env.HAPPY_STACKS_AUTO_COPY_FROM_MAIN ?? env.HAPPY_LOCAL_AUTO_COPY_FROM_MAIN ?? '').toString().trim();
-  if (raw) {
-    return raw !== '0';
+  const raw = (env.HAPPY_STACKS_AUTO_AUTH_SEED ?? env.HAPPY_LOCAL_AUTO_AUTH_SEED ?? '').toString().trim();
+  if (raw) return raw !== '0';
+
+  // Legacy toggle (kept for existing setups):
+  // - if set, it only controls enable/disable; source stack remains configurable via HAPPY_STACKS_AUTH_SEED_FROM.
+  const legacy = (env.HAPPY_STACKS_AUTO_COPY_FROM_MAIN ?? env.HAPPY_LOCAL_AUTO_COPY_FROM_MAIN ?? '').toString().trim();
+  if (legacy) return legacy !== '0';
+
+  if (stackName === 'main') return false;
+
+  // Default:
+  // - always auto-seed in non-interactive contexts (agents/services)
+  // - in interactive shells, auto-seed only when the user explicitly configured a non-main seed stack
+  //   (this avoids silently spreading main identity for users who haven't opted in yet).
+  if (!isInteractive) return true;
+  const seed = (env.HAPPY_STACKS_AUTH_SEED_FROM ?? env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').toString().trim();
+  return Boolean(seed && seed !== 'main');
+}
+
+export function resolveAuthSeedFromEnv(env) {
+  // Back-compat for an earlier experimental var name:
+  // - if set to a non-bool-ish stack name, treat it as the seed source
+  // - if set to "1"/"true", ignore (source comes from HAPPY_STACKS_AUTH_SEED_FROM)
+  const legacyAutoFrom = (env.HAPPY_STACKS_AUTO_AUTH_SEED_FROM ?? env.HAPPY_LOCAL_AUTO_AUTH_SEED_FROM ?? '').toString().trim();
+  if (legacyAutoFrom && legacyAutoFrom !== '0' && legacyAutoFrom !== '1' && legacyAutoFrom.toLowerCase() !== 'true') {
+    return legacyAutoFrom;
   }
-  // Default: only for non-main stacks, and only in non-interactive contexts (agents/services).
-  return stackName !== 'main' && !isInteractive;
+  // Legacy toggle: "on" implies main (historical behavior).
+  const legacy = (env.HAPPY_STACKS_AUTO_COPY_FROM_MAIN ?? env.HAPPY_LOCAL_AUTO_COPY_FROM_MAIN ?? '').toString().trim();
+  if (legacy && legacy !== '0') return 'main';
+  // Otherwise, use the general default seed stack.
+  const seed = (env.HAPPY_STACKS_AUTH_SEED_FROM ?? env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').toString().trim();
+  return seed || 'main';
 }
 
 export async function ensureServerLightSchemaReady({ serverDir, env }) {
@@ -107,7 +134,16 @@ export async function getAccountCountForServerComponent({ serverComponentName, s
   return { ok: false, accountCount: null, error: `unknown server component: ${serverComponentName}` };
 }
 
-export async function maybeAutoCopyAuthFromMainIfNeeded({ rootDir, env, enabled, stackName, cliHomeDir, accountCount, quiet = false }) {
+export async function maybeAutoCopyAuthFromMainIfNeeded({
+  rootDir,
+  env,
+  enabled,
+  stackName,
+  cliHomeDir,
+  accountCount,
+  quiet = false,
+  authEnv = null,
+}) {
   const accessKeyPath = join(cliHomeDir, 'access.key');
   const hasAccessKey = existsSync(accessKeyPath);
 
@@ -121,14 +157,18 @@ export async function maybeAutoCopyAuthFromMainIfNeeded({ rootDir, env, enabled,
   }
 
   const reason = !hasAccessKey ? 'missing_credentials' : 'no_accounts';
+  const fromStackName = resolveAuthSeedFromEnv(env);
   if (!quiet) {
-    console.log(`[local] auth: auto copy-from main for ${stackName} (${reason})`);
+    console.log(`[local] auth: auto seed from ${fromStackName} for ${stackName} (${reason})`);
   }
 
-  // Best-effort: copy credentials/master secret + seed accounts from main.
+  // Best-effort: copy credentials/master secret + seed accounts from the configured seed stack.
   // Keep this non-fatal; the daemon will emit actionable errors if it still can't authenticate.
   try {
-    const out = await runCapture(process.execPath, [`${rootDir}/scripts/auth.mjs`, 'copy-from', 'main', '--json'], { cwd: rootDir, env });
+    const out = await runCapture(process.execPath, [`${rootDir}/scripts/auth.mjs`, 'copy-from', fromStackName, '--json'], {
+      cwd: rootDir,
+      env: authEnv && typeof authEnv === 'object' ? authEnv : env,
+    });
     return { ok: true, skipped: false, reason, out: out.trim() ? JSON.parse(out) : null };
   } catch (e) {
     return { ok: false, skipped: false, reason, error: e instanceof Error ? e.message : String(e) };
@@ -144,6 +184,7 @@ export async function prepareDaemonAuthSeedIfNeeded({
   isInteractive,
   accountCount,
   quiet = false,
+  authEnv = null,
 }) {
   if (!startDaemon) return { ok: true, skipped: true, reason: 'no_daemon' };
   const enabled = resolveAutoCopyFromMainEnabled({ env, stackName, isInteractive });
@@ -155,5 +196,6 @@ export async function prepareDaemonAuthSeedIfNeeded({
     cliHomeDir,
     accountCount,
     quiet,
+    authEnv,
   });
 }

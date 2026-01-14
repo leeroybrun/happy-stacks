@@ -28,3 +28,4 @@ env.local
 .project/qa/score-history/
 /triage
 /.tmp
+/.edison/_tmp

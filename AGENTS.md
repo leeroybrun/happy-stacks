@@ -257,12 +257,14 @@ Each stack is isolated (ports + CLI home dir). That means **running multiple sta
 
 #### **Auth + secrets (stacks)**
 
-- **Default behavior**: `happys stack new <name>` will **copy auth from `main`** by default so new stacks typically **do not require re-login**.
-  - This copies the stack’s master secret and CLI credentials into the new stack’s directories.
+- **Auth seeding (stacks)**: non-main stacks can be auto-seeded from a **configured seed stack** (recommended: `dev-auth`) so they typically **do not require re-login**.
+  - Configure via `HAPPY_STACKS_AUTH_SEED_FROM=<seed>` and `HAPPY_STACKS_AUTO_AUTH_SEED=1`.
+  - **Agents should not create seed stacks or dev keys**; they should only consume existing seeds (e.g. `copy-from dev-auth`) and use `happys auth dev-key --print` for UI login when needed.
 - **Opt out**: pass **`--no-copy-auth`** (or `--fresh-auth`) to force a fresh login / new machine identity.
 - **If you already have a stack and it’s missing auth** (common when it was created with `--no-copy-auth`, created before this behavior existed, or its `cli/` dir was cleaned):
-  - Copy from main (no re-login, non-interactive): `happys stack auth <name> copy-from main`
-  - Note: this copies **CLI credentials + master secret** and will also **seed the target DB** by copying **Account rows** from main into the stack DB. This avoids FK errors like Prisma `P2003` without copying large DB files.
+  - Copy from your seed stack (no re-login, non-interactive): `happys stack auth <name> copy-from <seed>` (recommended: `dev-auth`)
+  - Note: this copies **CLI credentials + master secret** and will also **seed the target DB** by copying **Account rows** from the seed stack into the target stack DB. This avoids FK errors like Prisma `P2003` without copying large DB files.
+  - If you don't know the seed stack, fall back to: `happys stack auth <name> copy-from main`
 - **If auth is required**:
   - main: `happys auth login`
   - stack: `happys stack auth <name> login`

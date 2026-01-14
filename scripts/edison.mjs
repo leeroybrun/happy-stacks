@@ -6,6 +6,7 @@ import { parseDotenv } from './utils/dotenv.mjs';
 import { pathExists } from './utils/fs.mjs';
 import { run, runCapture } from './utils/proc.mjs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { mkdir, lstat, rename, symlink, writeFile, readdir } from 'node:fs/promises';
 
@@ -29,6 +30,85 @@ async function readExistingEnv(path) {
     return raw;
   } catch {
     return '';
+  }
+}
+
+async function readJsonIfExists(path) {
+  try {
+    if (!path || !(await pathExists(path))) return null;
+    const raw = await readFile(path, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function inferServerPortFromRuntimeState(runtimeState) {
+  try {
+    const port = runtimeState?.ports?.server;
+    const n = Number(port);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function isQaValidateCommand(edisonArgs) {
+  const args = Array.isArray(edisonArgs) ? edisonArgs : [];
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === 'qa' && args[i + 1] === 'validate') return true;
+  }
+  return false;
+}
+
+async function ensureStackServerPortForWebServerValidation({ rootDir, stackName, env, edisonArgs, json }) {
+  const currentPort = (env.HAPPY_STACKS_SERVER_PORT ?? env.HAPPY_LOCAL_SERVER_PORT ?? '').toString().trim();
+  if (currentPort) return;
+  if (!isQaValidateCommand(edisonArgs)) return;
+
+  const { baseDir } = resolveStackEnvPath(stackName);
+  const runtimePath = join(baseDir, 'stack.runtime.json');
+
+  const existing = await readJsonIfExists(runtimePath);
+  const existingPort = inferServerPortFromRuntimeState(existing);
+  if (existingPort) {
+    env.HAPPY_STACKS_SERVER_PORT = String(existingPort);
+    env.HAPPY_LOCAL_SERVER_PORT = String(existingPort);
+    return;
+  }
+
+  // Option A: Happy-local wrapper responsibility.
+  // If the stack uses ephemeral ports and isn't running yet, start it (detached) so we can
+  // discover the chosen port via stack.runtime.json before Edison expands web_server URLs.
+  if (!json) {
+    // eslint-disable-next-line no-console
+    console.log(`[edison] stack=${stackName}: server port not set; starting stack to resolve runtime port...`);
+  }
+
+  try {
+    const child = spawn(
+      process.execPath,
+      [join(rootDir, 'bin', 'happys.mjs'), 'stack', 'start', stackName, '--restart'],
+      { cwd: rootDir, env, stdio: 'ignore', detached: true }
+    );
+    child.unref();
+  } catch {
+    // If we fail to spawn, we still proceed; Edison will fail closed when URL probing fails.
+  }
+
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    const st = await readJsonIfExists(runtimePath);
+    const port = inferServerPortFromRuntimeState(st);
+    if (port) {
+      env.HAPPY_STACKS_SERVER_PORT = String(port);
+      env.HAPPY_LOCAL_SERVER_PORT = String(port);
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 250));
   }
 }
 
@@ -1266,6 +1346,9 @@ async function main() {
   try {
     // eslint-disable-next-line no-console
     if (stackName && !json) console.log(`[edison] stack=${stackName}`);
+    if (stackName) {
+      await ensureStackServerPortForWebServerValidation({ rootDir, stackName, env, edisonArgs, json });
+    }
     if (!(await pathExists(rootDir))) {
       throw new Error(`[edison] missing repo root: ${rootDir}`);
     }

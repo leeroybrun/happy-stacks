@@ -355,6 +355,21 @@ Runs the “full local dev loop”:
 - **daemon** (`happy-cli`) pointing at that server
 - **UI** via Expo web dev server
 
+### Web UI origin isolation (IMPORTANT)
+
+When running **non-main stacks**, Happy Stacks will use a stack-specific localhost hostname:
+
+- `http://happy-<stack>.localhost:<uiPort>`
+
+This intentionally creates a **unique browser origin per stack** so browser storage (localStorage/cookies) does not collide between stacks (which can otherwise cause “no machine” / auth confusion).
+
+### Browser auto-open (`--no-browser`)
+
+In interactive TTY runs, `happys dev` / `happys start` may auto-open the UI in your browser.
+
+- Disable: `--no-browser`
+- Stack mode uses the stack-specific hostname shown above (not plain `localhost`) for correctness.
+
 **Dev reliability features** (implemented in Happy Stacks):
 
 - **Dependency install**: ensures component deps are installed when needed.
@@ -362,7 +377,10 @@ Runs the “full local dev loop”:
   - `happy-server` (Postgres): applies `prisma migrate deploy` (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`)
   - `happy-server-light` (SQLite): upstream dev normally runs `prisma db push` (toggle via `HAPPY_STACKS_PRISMA_PUSH`)
 - **Auth seeding for new stacks** (non-main + non-interactive default):
-  - Uses `happys stack auth <stack> copy-from main` heuristics only when the stack looks uninitialized.
+  - Uses the configured seed stack via `HAPPY_STACKS_AUTH_SEED_FROM` (default: `main`) when the stack looks uninitialized.
+  - Recommended for development: create + log into a dedicated seed stack once (usually `dev-auth`) and set:
+    - `HAPPY_STACKS_AUTH_SEED_FROM=dev-auth`
+    - `HAPPY_STACKS_AUTO_AUTH_SEED=1`
   - This copies credentials/master secret and seeds the minimal DB rows (Accounts) without copying full DB files.
 
 ---
@@ -407,6 +425,57 @@ When watchers restart components:
   - Ports are allocated once per `stack dev/start` invocation and are kept stable for the lifetime of that run.
 
 See “Process isolation + runtime state” below.
+
+---
+
+## Developer-only: set up a `dev-auth` seed stack + dev UI key
+
+This is a **one-time developer machine setup**. LLM agents should **not** do this; agents should only consume existing seeds/keys.
+
+### Create the seed stack (wizard)
+
+Run:
+
+```bash
+happys stack create-dev-auth-seed
+```
+
+This will (interactive, in a TTY):
+
+- create (or reuse) the `dev-auth` stack
+- start a temporary server + Expo UI
+- guide you through creating/restoring an account in the UI
+- prompt to save the dev key locally (never committed)
+- run `happys stack auth dev-auth login` to authenticate the CLI/daemon for that seed stack
+
+### Make it the default seed for new stacks
+
+Add to `~/.happy-stacks/env.local`:
+
+```bash
+HAPPY_STACKS_AUTH_SEED_FROM=dev-auth
+HAPPY_STACKS_AUTO_AUTH_SEED=1
+```
+
+### Repair / seed existing stacks (bulk)
+
+```bash
+happys auth copy-from dev-auth --all --except=main,dev-auth
+```
+
+If you have full-server (`happy-server`) stacks and want seeding to bring up infra automatically:
+
+```bash
+happys auth copy-from dev-auth --all --except=main,dev-auth --with-infra
+```
+
+### Print the UI-accepted dev key format (for UI login / agents)
+
+```bash
+happys auth dev-key --print
+```
+
+By default, in a TTY this prints the UI “backup” format (`XXXXX-...`). For automation, use `--format=base64url`.
 
 ---
 
@@ -490,11 +559,19 @@ Most commands support `--help` and `--json`.
 ### Core run commands
 
 - **`happys start`**: production-like run (no Expo)
-  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`
+  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--no-browser`
 - **`happys dev`**: dev run (server + daemon + Expo web)
-  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--watch`, `--no-watch`
+  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--watch`, `--no-watch`, `--no-browser`
 - **`happys stop`**: stop stacks and related processes
   - Flags: `--except-stacks=main,exp1`, `--yes`, `--aggressive`, `--sweep-owned`, `--no-docker`, `--no-service`
+
+### TUI (optional)
+
+If you want a split-pane view while running a command:
+
+```bash
+happys tui stack dev <stack>
+```
 
 ### Stack-scoped commands
 
@@ -521,7 +598,7 @@ happys stack typecheck exp1 --happy=slopus/pr/my-ui-pr happy
   - `happys stack wt <name> -- <wt args...>`
   - `happys stack srv <name> -- use happy-server|happy-server-light`
   - `happys stack doctor <name>`
-  - `happys stack auth <name> status|login|copy-from main`
+  - `happys stack auth <name> status|login|copy-from <seed>`
   - `happys stack audit --fix-workspace --fix-paths --fix-ports`
 
 ### Worktrees
@@ -632,8 +709,13 @@ happys stack auth <stack> login
 Non-interactive repair (copy credentials + seed accounts from `main`):
 
 ```bash
-happys stack auth <stack> copy-from main
+happys stack auth <stack> copy-from <seed>
 ```
+
+Notes:
+
+- `<seed>` should be the stack you use as your auth seed (recommended: `dev-auth`).
+- Creating/logging into the seed stack is a **developer-only** setup step; agents should only consume it.
 
 ### Port collisions / foreign component paths / weird stack dirs
 

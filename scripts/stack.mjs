@@ -7,19 +7,28 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { parseArgs } from './utils/args.mjs';
-import { run, runCapture } from './utils/proc.mjs';
+import { killProcessTree, run, runCapture } from './utils/proc.mjs';
 import { getComponentDir, getComponentsDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/ports.mjs';
 import { createWorktree, resolveComponentSpecToDir } from './utils/worktrees.mjs';
-import { isTty, prompt, promptSelect, promptWorktreeSource, withRl } from './utils/wizard.mjs';
+import { isTty, prompt, promptWorktreeSource, withRl } from './utils/wizard.mjs';
 import { parseDotenv } from './utils/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env_file.mjs';
+import { listAllStackNames } from './utils/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack_stop.mjs';
+import { writeDevAuthKey } from './utils/dev_auth_key.mjs';
+import { startDevServer } from './utils/dev_server.mjs';
+import { startDevExpoWebUi } from './utils/dev_expo_web.mjs';
+import { requireDir } from './utils/pm.mjs';
+import { waitForHttpOk } from './utils/server.mjs';
+import { resolveLocalhostHost } from './utils/localhost_host.mjs';
+import { openUrlInBrowser } from './utils/browser.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
   isPidAlive,
+  recordStackRuntimeStart,
   readStackRuntimeStateFile,
 } from './utils/stack_runtime_state.mjs';
 import { killPid } from './utils/expo.mjs';
@@ -452,28 +461,6 @@ async function interactiveNew({ rootDir, rl, defaults }) {
     out.port = want ? Number(want) : null;
   }
 
-  // Auth strategy (how should this stack get credentials?)
-  if (out.copyAuth == null) {
-    const picked = await promptSelect(rl, {
-      title: 'Authentication for this stack:',
-      options: [
-        {
-          label: 'copy from main (default; avoids re-login if main is already authenticated)',
-          value: { copyAuth: true, copyAuthFrom: 'main', migrateCredentials: true, autoCopyFromMain: true },
-        },
-        {
-          label: 'fresh auth (no copying; requires login)',
-          value: { copyAuth: false, copyAuthFrom: 'main', migrateCredentials: false, autoCopyFromMain: false },
-        },
-      ],
-      defaultIndex: 0,
-    });
-    out.copyAuth = picked.copyAuth;
-    out.copyAuthFrom = picked.copyAuthFrom;
-    out.migrateCredentials = picked.migrateCredentials;
-    out.autoCopyFromMain = picked.autoCopyFromMain;
-  }
-
   // Remote for creating new worktrees (used by all "create new worktree" choices)
   if (!out.createRemote) {
     out.createRemote = await prompt(rl, 'Git remote for creating new worktrees (default: upstream): ', { defaultValue: 'upstream' });
@@ -557,8 +544,11 @@ async function cmdNew({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const json = wantsJson(argv, { flags });
-  let copyAuth = !(flags.has('--no-copy-auth') || flags.has('--fresh-auth'));
-  let copyAuthFrom = (kv.get('--copy-auth-from') ?? '').trim() || 'main';
+  const copyAuth = !(flags.has('--no-copy-auth') || flags.has('--fresh-auth'));
+  const copyAuthFrom =
+    (kv.get('--copy-auth-from') ?? '').trim() ||
+    (process.env.HAPPY_STACKS_AUTH_SEED_FROM ?? process.env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').trim() ||
+    'main';
   const forcePort = flags.has('--force-port');
 
   // argv here is already "args after 'new'", so the first positional is the stack name.
@@ -570,11 +560,6 @@ async function cmdNew({ rootDir, argv }) {
     port: kv.get('--port')?.trim() ? Number(kv.get('--port')) : null,
     serverComponent: (kv.get('--server') ?? '').trim() || '',
     createRemote: (kv.get('--remote') ?? '').trim() || '',
-    // Only used for interactive prompts (flags remain authoritative when provided).
-    copyAuth: null,
-    copyAuthFrom: 'main',
-    migrateCredentials: null,
-    autoCopyFromMain: null,
     components: {
       happy: kv.get('--happy')?.trim() || null,
       'happy-cli': kv.get('--happy-cli')?.trim() || null,
@@ -588,21 +573,12 @@ async function cmdNew({ rootDir, argv }) {
     config = await withRl((rl) => interactiveNew({ rootDir, rl, defaults }));
   }
 
-  const copyAuthExplicit = flags.has('--no-copy-auth') || flags.has('--fresh-auth') || kv.has('--copy-auth-from');
-  if (interactive && !copyAuthExplicit) {
-    if (config.copyAuth === true) copyAuth = true;
-    if (config.copyAuth === false) copyAuth = false;
-    if (typeof config.copyAuthFrom === 'string' && config.copyAuthFrom.trim()) {
-      copyAuthFrom = config.copyAuthFrom.trim();
-    }
-  }
-
   stackName = config.stackName?.trim() ? config.stackName.trim() : '';
   if (!stackName) {
     throw new Error(
       '[stack] usage: happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
         '[--happy=default|<owner/...>|<path>] [--happy-cli=...] [--happy-server=...] [--happy-server-light=...] ' +
-        '[--copy-auth-from=main] [--no-copy-auth|--fresh-auth] [--interactive] [--force-port]'
+        '[--copy-auth-from=<stack>] [--no-copy-auth] [--interactive] [--force-port]'
     );
   }
   if (stackName === 'main') {
@@ -657,11 +633,6 @@ async function cmdNew({ rootDir, argv }) {
     HAPPY_STACKS_UI_BUILD_DIR: uiBuildDir,
     HAPPY_STACKS_CLI_HOME_DIR: cliHomeDir,
     HAPPY_STACKS_STACK_REMOTE: config.createRemote?.trim() ? config.createRemote.trim() : 'upstream',
-    // Credential behavior (optional):
-    // - HAPPY_STACKS_MIGRATE_CREDENTIALS=0 disables best-effort credential migration from main/legacy locations.
-    // - HAPPY_STACKS_AUTO_COPY_FROM_MAIN=0 disables best-effort auth seeding from main when starting in non-interactive contexts.
-    HAPPY_STACKS_MIGRATE_CREDENTIALS: '1',
-    HAPPY_STACKS_AUTO_COPY_FROM_MAIN: '1',
     ...defaultComponentDirs,
   };
   if (port != null) {
@@ -727,19 +698,6 @@ async function cmdNew({ rootDir, argv }) {
     }
   }
 
-  // Apply interactive auth choices (if flags didn't already decide them).
-  if (interactive && !copyAuthExplicit) {
-    const migrate = config.migrateCredentials == null ? true : Boolean(config.migrateCredentials);
-    const autoCopy = config.autoCopyFromMain == null ? true : Boolean(config.autoCopyFromMain);
-    stackEnv.HAPPY_STACKS_MIGRATE_CREDENTIALS = migrate ? '1' : '0';
-    stackEnv.HAPPY_STACKS_AUTO_COPY_FROM_MAIN = autoCopy ? '1' : '0';
-  }
-  // If the user requested a "fresh auth" stack explicitly, disable all copying.
-  if (flags.has('--fresh-auth') || flags.has('--no-copy-auth')) {
-    stackEnv.HAPPY_STACKS_MIGRATE_CREDENTIALS = '0';
-    stackEnv.HAPPY_STACKS_AUTO_COPY_FROM_MAIN = '0';
-  }
-
   // happy
   const happySpec = config.components.happy;
   if (happySpec && typeof happySpec === 'object' && happySpec.create) {
@@ -787,7 +745,8 @@ async function cmdNew({ rootDir, argv }) {
   }
 
   if (copyAuth) {
-    // Default: inherit main stack auth so creating a new stack doesn't require re-login.
+    // Default: inherit seed stack auth so creating a new stack doesn't require re-login.
+    // Source: --copy-auth-from (highest), else HAPPY_STACKS_AUTH_SEED_FROM (default: main).
     // Users can opt out with --no-copy-auth to force a fresh auth / machine identity.
     await copyAuthFromStackIntoNewStack({
       fromStackName: copyAuthFrom,
@@ -813,7 +772,6 @@ async function cmdNew({ rootDir, argv }) {
       `[stack] env: ${envPath}`,
       `[stack] port: ${port == null ? 'ephemeral (picked at start)' : String(port)}`,
       `[stack] server: ${serverComponent}`,
-      !copyAuth ? `[stack] auth: not copied. After starting this stack, run: happys stack auth ${stackName} login` : null,
     ].join('\n'),
   });
 }
@@ -983,6 +941,7 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
       }
 
       const wantsRestart = args.includes('--restart');
+      const wantsJson = args.includes('--json');
       const pinnedServerPort = Boolean((stackEnv.HAPPY_STACKS_SERVER_PORT ?? '').trim() || (stackEnv.HAPPY_LOCAL_SERVER_PORT ?? '').trim());
       const serverComponent =
         (stackEnv.HAPPY_STACKS_SERVER_COMPONENT ?? stackEnv.HAPPY_LOCAL_SERVER_COMPONENT ?? '').toString().trim() || 'happy-server-light';
@@ -994,15 +953,45 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
       // If this is an ephemeral-port stack and it's already running, avoid spawning a second copy.
       const existingOwnerPid = Number(runtimeState?.ownerPid);
       const existingPort = Number(runtimeState?.ports?.server);
+      const existingUiPort = Number(runtimeState?.expo?.webPort);
+      const existingPorts =
+        runtimeState?.ports && typeof runtimeState.ports === 'object' ? runtimeState.ports : null;
       if (isPidAlive(existingOwnerPid)) {
         if (!wantsRestart) {
-          console.log(
-            `[stack] ${stackName}: already running (pid=${existingOwnerPid}${Number.isFinite(existingPort) && existingPort > 0 ? ` port=${existingPort}` : ''})`
-          );
+          const serverPart = Number.isFinite(existingPort) && existingPort > 0 ? ` server=${existingPort}` : '';
+          const uiPart =
+            scriptPath === 'dev.mjs' && Number.isFinite(existingUiPort) && existingUiPort > 0 ? ` ui=${existingUiPort}` : '';
+          console.log(`[stack] ${stackName}: already running (pid=${existingOwnerPid}${serverPart}${uiPart})`);
+
+          const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+          const noBrowser =
+            args.includes('--no-browser') ||
+            (env.HAPPY_STACKS_NO_BROWSER ?? env.HAPPY_LOCAL_NO_BROWSER ?? '').toString().trim() === '1';
+          const openBrowser = isInteractive && !wantsJson && !noBrowser;
+
+          const host = resolveLocalhostHost({ stackMode: true, stackName });
+          const uiUrl =
+            scriptPath === 'dev.mjs'
+              ? Number.isFinite(existingUiPort) && existingUiPort > 0
+                ? `http://${host}:${existingUiPort}`
+                : null
+              : Number.isFinite(existingPort) && existingPort > 0
+                ? `http://${host}:${existingPort}`
+                : null;
+
+          if (uiUrl) {
+            console.log(`[stack] ${stackName}: ui: ${uiUrl}`);
+            if (openBrowser) {
+              await openUrlInBrowser(uiUrl);
+            }
+          } else if (scriptPath === 'dev.mjs') {
+            console.log(`[stack] ${stackName}: ui: unknown (missing expo.webPort in stack.runtime.json)`);
+          }
           return;
         }
         // Restart: stop the existing runner first.
         await killPidOwnedByStack(existingOwnerPid, { stackName, envPath, cliHomeDir: (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').toString(), label: 'runner', json: false });
+        // Clear runtime state so we don't keep stale process PIDs; we'll re-create it for the new run below.
         await deleteStackRuntimeStateFile(runtimeStatePath);
       }
 
@@ -1028,26 +1017,76 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
 
         const startPort = getDefaultPortStart();
         const ports = {};
-        ports.server = await pickNextFreeTcpPort(startPort, { reservedPorts: reserved });
-        reserved.add(ports.server);
 
-        if (serverComponent === 'happy-server') {
-          ports.backend = await pickNextFreeTcpPort(ports.server + 10, { reservedPorts: reserved });
-          reserved.add(ports.backend);
-          if (managedInfra) {
-            ports.pg = await pickNextFreeTcpPort(ports.server + 1000, { reservedPorts: reserved });
-            reserved.add(ports.pg);
-            ports.redis = await pickNextFreeTcpPort(ports.pg + 1, { reservedPorts: reserved });
-            reserved.add(ports.redis);
-            ports.minio = await pickNextFreeTcpPort(ports.redis + 1, { reservedPorts: reserved });
-            reserved.add(ports.minio);
-            ports.minioConsole = await pickNextFreeTcpPort(ports.minio + 1, { reservedPorts: reserved });
-            reserved.add(ports.minioConsole);
+        const parsePortOrNull = (v) => {
+          const n = Number(v);
+          return Number.isFinite(n) && n > 0 ? n : null;
+        };
+        const candidatePorts =
+          wantsRestart && existingPorts
+            ? {
+                server: parsePortOrNull(existingPorts.server),
+                backend: parsePortOrNull(existingPorts.backend),
+                pg: parsePortOrNull(existingPorts.pg),
+                redis: parsePortOrNull(existingPorts.redis),
+                minio: parsePortOrNull(existingPorts.minio),
+                minioConsole: parsePortOrNull(existingPorts.minioConsole),
+              }
+            : null;
+
+        const canReuse =
+          candidatePorts &&
+          candidatePorts.server &&
+          (serverComponent !== 'happy-server' || candidatePorts.backend) &&
+          (!managedInfra ||
+            (candidatePorts.pg && candidatePorts.redis && candidatePorts.minio && candidatePorts.minioConsole));
+
+        if (canReuse) {
+          ports.server = candidatePorts.server;
+          if (serverComponent === 'happy-server') {
+            ports.backend = candidatePorts.backend;
+            if (managedInfra) {
+              ports.pg = candidatePorts.pg;
+              ports.redis = candidatePorts.redis;
+              ports.minio = candidatePorts.minio;
+              ports.minioConsole = candidatePorts.minioConsole;
+            }
+          }
+
+          // Fail-closed if any of the reused ports are unexpectedly occupied (prevents cross-stack collisions).
+          const toCheck = Object.values(ports)
+            .map((n) => Number(n))
+            .filter((n) => Number.isFinite(n) && n > 0);
+          for (const p of toCheck) {
+            // eslint-disable-next-line no-await-in-loop
+            if (!(await isTcpPortFree(p))) {
+              throw new Error(
+                `[stack] ${stackName}: cannot reuse port ${p} on restart (port is not free).\n` +
+                  `[stack] Fix: stop the process using it, or re-run without --restart to allocate new ports.`
+              );
+            }
+          }
+        } else {
+          ports.server = await pickNextFreeTcpPort(startPort, { reservedPorts: reserved });
+          reserved.add(ports.server);
+
+          if (serverComponent === 'happy-server') {
+            ports.backend = await pickNextFreeTcpPort(ports.server + 10, { reservedPorts: reserved });
+            reserved.add(ports.backend);
+            if (managedInfra) {
+              ports.pg = await pickNextFreeTcpPort(ports.server + 1000, { reservedPorts: reserved });
+              reserved.add(ports.pg);
+              ports.redis = await pickNextFreeTcpPort(ports.pg + 1, { reservedPorts: reserved });
+              reserved.add(ports.redis);
+              ports.minio = await pickNextFreeTcpPort(ports.redis + 1, { reservedPorts: reserved });
+              reserved.add(ports.minio);
+              ports.minioConsole = await pickNextFreeTcpPort(ports.minio + 1, { reservedPorts: reserved });
+              reserved.add(ports.minioConsole);
+            }
           }
         }
 
-        // Sanity: if somehow a port is now occupied, fail closed (avoids killPortListeners nuking random processes).
-        // eslint-disable-next-line no-await-in-loop
+        // Sanity: if somehow the server port is now occupied, fail closed (avoids killPortListeners nuking random processes).
         if (!(await isTcpPortFree(Number(ports.server)))) {
           throw new Error(`[stack] ${stackName}: picked server port ${ports.server} but it is not free`);
         }
@@ -1085,6 +1124,16 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           stdio: 'inherit',
           shell: false,
         });
+
+        // Record the chosen ports immediately (before the runner finishes booting), so other stack commands
+        // can resolve the correct endpoints and `--restart` can reliably reuse the same ports.
+        await recordStackRuntimeStart(runtimeStatePath, {
+          stackName,
+          script: scriptPath,
+          ephemeral: true,
+          ownerPid: child.pid,
+          ports,
+        }).catch(() => {});
 
         try {
           await new Promise((resolvePromise, rejectPromise) => {
@@ -1263,26 +1312,8 @@ async function cmdMigrate({ argv }) {
 }
 
 async function cmdListStacks() {
-  const stacksDir = getStacksStorageRoot();
-  const legacyStacksDir = join(getLegacyStorageRoot(), 'stacks');
   try {
-    const namesSet = new Set();
-    const entries = await readdir(stacksDir, { withFileTypes: true });
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      if (e.name === 'main') continue;
-      namesSet.add(e.name);
-    }
-    try {
-      const legacyEntries = await readdir(legacyStacksDir, { withFileTypes: true });
-      for (const e of legacyEntries) {
-        if (!e.isDirectory()) continue;
-        namesSet.add(e.name);
-      }
-    } catch {
-      // ignore
-    }
-    const names = Array.from(namesSet).sort();
+    const names = (await listAllStackNames()).filter((n) => n !== 'main');
     if (!names.length) {
       console.log('[stack] no stacks found');
       return;
@@ -1294,31 +1325,6 @@ async function cmdListStacks() {
   } catch {
     console.log('[stack] no stacks found');
   }
-}
-
-async function listAllStackNames() {
-  const stacksDir = getStacksStorageRoot();
-  const legacyStacksDir = join(getLegacyStorageRoot(), 'stacks');
-  const namesSet = new Set(['main']);
-  try {
-    const entries = await readdir(stacksDir, { withFileTypes: true });
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      namesSet.add(e.name);
-    }
-  } catch {
-    // ignore
-  }
-  try {
-    const legacyEntries = await readdir(legacyStacksDir, { withFileTypes: true });
-    for (const e of legacyEntries) {
-      if (!e.isDirectory()) continue;
-      namesSet.add(e.name);
-    }
-  } catch {
-    // ignore
-  }
-  return Array.from(namesSet).sort();
 }
 
 function getEnvValue(obj, key) {
@@ -1796,6 +1802,266 @@ async function cmdAudit({ rootDir, argv }) {
   }
 }
 
+async function cmdCreateDevAuthSeed({ rootDir, argv }) {
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const name = (positionals[1] ?? '').trim() || 'dev-auth';
+  const serverComponent = (kv.get('--server') ?? '').trim() || 'happy-server-light';
+  const interactive = !flags.has('--non-interactive') && (flags.has('--interactive') || isTty());
+
+  if (json) {
+    // Keep JSON mode non-interactive and stable by using the existing stack command output.
+    // (We intentionally don't run the guided login flow in JSON mode.)
+    const createArgs = ['new', name, '--no-copy-auth', '--server', serverComponent, '--json'];
+    const created = await runCapture(process.execPath, [join(rootDir, 'scripts', 'stack.mjs'), ...createArgs], { cwd: rootDir, env: process.env }).catch((e) => {
+      throw new Error(
+        `[stack] create-dev-auth-seed: failed to create auth seed stack "${name}": ${e instanceof Error ? e.message : String(e)}`
+      );
+    });
+
+    printResult({
+      json,
+      data: {
+        ok: true,
+        seedStack: name,
+        serverComponent,
+        created: created.trim() ? JSON.parse(created.trim()) : { ok: true },
+        next: {
+          login: `happys stack auth ${name} login`,
+          setEnv: `# add to ~/.happy-stacks/env.local:\nHAPPY_STACKS_AUTH_SEED_FROM=${name}\nHAPPY_STACKS_AUTO_AUTH_SEED=1`,
+          reseedAll: `happys auth copy-from ${name} --all --except=main,${name}`,
+        },
+      },
+    });
+    return;
+  }
+
+  // Create the seed stack as fresh auth (no copy) so it doesn't share main identity.
+  // IMPORTANT: do this in-process (no recursive spawn) so the env file is definitely written
+  // before we run any guided steps (withStackEnv/login).
+  if (!stackExistsSync(name)) {
+    await cmdNew({
+      rootDir,
+      argv: [name, '--no-copy-auth', '--server', serverComponent],
+    });
+  } else {
+    console.log(`[stack] auth seed stack already exists: ${name}`);
+  }
+
+  if (!stackExistsSync(name)) {
+    throw new Error(`[stack] create-dev-auth-seed: expected stack "${name}" to exist after creation, but it does not`);
+  }
+
+  // Interactive convenience: guide login first, then configure env.local + store dev key.
+  if (interactive) {
+    await withRl(async (rl) => {
+      let savedDevKey = false;
+      const wantLoginRaw = (await prompt(
+        rl,
+        `Run guided login now? (starts the seed server temporarily for this stack) (Y/n): `,
+        { defaultValue: 'y' }
+      ))
+        .trim()
+        .toLowerCase();
+      const wantLogin = wantLoginRaw === 'y' || wantLoginRaw === 'yes' || wantLoginRaw === '';
+
+      if (wantLogin) {
+        console.log('');
+        console.log(`[stack] starting ${serverComponent} temporarily so we can log in...`);
+
+        const serverPort = await pickNextFreeTcpPort(3005, { host: '127.0.0.1' });
+        const internalServerUrl = `http://127.0.0.1:${serverPort}`;
+        const publicServerUrl = `http://localhost:${serverPort}`;
+
+        const autostart = { stackName: name, baseDir: getStackDir(name) };
+        const children = [];
+
+        await withStackEnv({
+          stackName: name,
+          extraEnv: {
+            // Make sure stack auth login uses the same port we just picked, and avoid inheriting
+            // any global/public URL (e.g. main stack’s Tailscale URL) for this guided flow.
+            HAPPY_STACKS_SERVER_PORT: String(serverPort),
+            HAPPY_LOCAL_SERVER_PORT: String(serverPort),
+            HAPPY_STACKS_SERVER_URL: '',
+            HAPPY_LOCAL_SERVER_URL: '',
+          },
+          fn: async ({ env }) => {
+            const serverDir =
+              serverComponent === 'happy-server'
+                ? env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER
+                : env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT;
+            const resolvedServerDir = serverDir || getComponentDir(rootDir, serverComponent);
+            const resolvedCliDir = env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI || getComponentDir(rootDir, 'happy-cli');
+            const resolvedUiDir = env.HAPPY_STACKS_COMPONENT_DIR_HAPPY || getComponentDir(rootDir, 'happy');
+
+            await requireDir(serverComponent, resolvedServerDir);
+            await requireDir('happy-cli', resolvedCliDir);
+            await requireDir('happy', resolvedUiDir);
+
+            let serverProc = null;
+            let uiProc = null;
+            try {
+              const started = await startDevServer({
+                serverComponentName: serverComponent,
+                serverDir: resolvedServerDir,
+                autostart,
+                baseEnv: env,
+                serverPort,
+                internalServerUrl,
+                publicServerUrl,
+                envPath: env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '',
+                stackMode: true,
+                runtimeStatePath: null,
+                serverAlreadyRunning: false,
+                restart: true,
+                children,
+                spawnOptions: { stdio: 'ignore' },
+              });
+              serverProc = started.serverProc;
+
+              // Start Expo web UI so /terminal/connect exists for happy-cli web auth.
+              const uiRes = await startDevExpoWebUi({
+                startUi: true,
+                uiDir: resolvedUiDir,
+                autostart,
+                baseEnv: env,
+                // In the browser, prefer localhost for API calls.
+                apiServerUrl: publicServerUrl,
+                restart: false,
+                stackMode: true,
+                runtimeStatePath: null,
+                stackName: name,
+                envPath: env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '',
+                children,
+                spawnOptions: { stdio: 'ignore' },
+              });
+              if (uiRes?.skipped === false && uiRes.proc) {
+                uiProc = uiRes.proc;
+              }
+
+              console.log('');
+              const uiHost = `happy-${sanitizeDnsLabel(name)}.localhost`;
+              const uiPort = uiRes?.port;
+              const uiRoot = Number.isFinite(uiPort) && uiPort > 0 ? `http://${uiHost}:${uiPort}` : null;
+              const uiRootLocalhost = Number.isFinite(uiPort) && uiPort > 0 ? `http://localhost:${uiPort}` : null;
+              const uiSettings = uiRoot ? `${uiRoot}/settings/account` : null;
+
+              console.log('[stack] step 1/3: create a dev-auth account in the UI (this generates the dev key)');
+              if (uiRoot) {
+                console.log(`[stack] waiting for UI to be ready...`);
+                // Prefer localhost for readiness checks (faster/more reliable), even though we
+                // instruct the user to use the stack-scoped *.localhost origin for storage isolation.
+                await waitForHttpOk(uiRootLocalhost || uiRoot, { timeoutMs: 30_000 });
+                console.log(`- open: ${uiRoot}`);
+                console.log(`- click: "Create Account"`);
+                console.log(`- then open: ${uiSettings}`);
+                console.log(`- tap: "Secret Key" to reveal + copy it`);
+              } else {
+                console.log(`- UI is running but the port was not detected; rerun with DEBUG logs if needed`);
+              }
+              await prompt(rl, `Press Enter once you've created the account in the UI... `);
+
+              console.log('');
+              console.log('[stack] step 2/3: save the dev key locally (for agents / Playwright)');
+              const keyInput = (await prompt(
+                rl,
+                `Paste the Secret Key now (from Settings → Account → Secret Key). Leave empty to skip: `
+              )).trim();
+              if (keyInput) {
+                const res = await writeDevAuthKey({ env: process.env, input: keyInput });
+                savedDevKey = true;
+                console.log(`[stack] dev key saved: ${res.path}`);
+              } else {
+                console.log(`[stack] dev key not saved; you can do it later with: happys auth dev-key --set="<key>"`);
+              }
+
+              console.log('');
+              console.log('[stack] step 3/3: authenticate the CLI against this stack (web auth)');
+              console.log(`[stack] launching: happys stack auth ${name} login`);
+              await run(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), 'login', '--no-force'], {
+                cwd: rootDir,
+                env,
+              });
+            } finally {
+              if (uiProc) {
+                console.log('');
+                console.log(`[stack] stopping temporary UI (pid=${uiProc.pid})...`);
+                killProcessTree(uiProc, 'SIGINT');
+                await Promise.race([
+                  new Promise((resolve) => uiProc.on('exit', resolve)),
+                  new Promise((resolve) => setTimeout(resolve, 15_000)),
+                ]);
+              }
+              if (serverProc) {
+                console.log('');
+                console.log(`[stack] stopping temporary server (pid=${serverProc.pid})...`);
+                killProcessTree(serverProc, 'SIGINT');
+                await Promise.race([
+                  new Promise((resolve) => serverProc.on('exit', resolve)),
+                  new Promise((resolve) => setTimeout(resolve, 15_000)),
+                ]);
+              }
+            }
+          },
+        });
+
+        console.log('');
+        console.log('[stack] login step complete.');
+      } else {
+        console.log(`[stack] skipping guided login. You can do it later with: happys stack auth ${name} login`);
+      }
+
+      const wantEnvRaw = (await prompt(rl, `Set this as the default auth seed (writes ~/.happy-stacks/env.local)? (Y/n): `, { defaultValue: 'y' }))
+        .trim()
+        .toLowerCase();
+      const wantEnv = wantEnvRaw === 'y' || wantEnvRaw === 'yes' || wantEnvRaw === '';
+      if (wantEnv) {
+        const homeDir = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim() ? process.env.HAPPY_STACKS_HOME_DIR.trim().replace(/^~(?=\/)/, homedir()) : join(homedir(), '.happy-stacks');
+        const envLocalPath = join(homeDir, 'env.local');
+        await ensureEnvFileUpdated({
+          envPath: envLocalPath,
+          updates: [
+            { key: 'HAPPY_STACKS_AUTH_SEED_FROM', value: name },
+            { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '1' },
+          ],
+        });
+        console.log(`[stack] updated: ${envLocalPath}`);
+      } else {
+        console.log(`[stack] tip: set in ~/.happy-stacks/env.local: HAPPY_STACKS_AUTH_SEED_FROM=${name} and HAPPY_STACKS_AUTO_AUTH_SEED=1`);
+      }
+
+      if (!savedDevKey) {
+        const wantKey = (await prompt(rl, `Save the dev auth key for Playwright/UI logins now? (y/N): `)).trim().toLowerCase();
+        if (wantKey === 'y' || wantKey === 'yes') {
+          console.log(`[stack] paste the secret key (base64url OR backup-format like XXXXX-XXXXX-...):`);
+          const input = (await prompt(rl, `dev key: `)).trim();
+          if (input) {
+            try {
+              const res = await writeDevAuthKey({ env: process.env, input });
+              console.log(`[stack] dev key saved: ${res.path}`);
+            } catch (e) {
+              console.warn(`[stack] dev key not saved: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          } else {
+            console.log('[stack] dev key not provided; skipping');
+          }
+        } else {
+          console.log(`[stack] tip: you can set it later with: happys auth dev-key --set="<key>"`);
+        }
+      }
+    });
+  } else {
+    console.log(`- set as default seed (recommended) in ~/.happy-stacks/env.local:`);
+    console.log(`  HAPPY_STACKS_AUTH_SEED_FROM=${name}`);
+    console.log(`  HAPPY_STACKS_AUTO_AUTH_SEED=1`);
+    console.log(`- (optional) seed existing stacks: happys auth copy-from ${name} --all --except=main,${name}`);
+    console.log(`- (optional) store dev key for UI automation: happys auth dev-key --set="<key>"`);
+  }
+}
+
 async function main() {
   const rootDir = getRootDir(import.meta.url);
   // pnpm (legacy) passes an extra leading `--` when forwarding args into scripts. Normalize it away so
@@ -1818,6 +2084,7 @@ async function main() {
           'list',
           'migrate',
           'audit',
+          'create-dev-auth-seed',
           'auth',
           'dev',
           'start',
@@ -1837,12 +2104,13 @@ async function main() {
       },
       text: [
         '[stack] usage:',
-        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=main] [--no-copy-auth|--fresh-auth] [--force-port] [--json]',
+        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=<stack>] [--no-copy-auth] [--force-port] [--json]',
         '  happys stack edit <name> --interactive [--json]',
         '  happys stack list [--json]',
         '  happys stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',
         '  happys stack audit [--fix] [--fix-main] [--fix-ports] [--fix-workspace] [--fix-paths] [--unpin-ports] [--unpin-ports-except=stack1,stack2] [--json]',
-        '  happys stack auth <name> status|login [--json]',
+        '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--non-interactive] [--json]',
+        '  happys stack auth <name> status|login|copy-from [--json]',
         '  happys stack dev <name> [-- ...]',
         '  happys stack start <name> [-- ...]',
         '  happys stack build <name> [-- ...]',
@@ -1910,6 +2178,10 @@ async function main() {
   }
   if (cmd === 'audit') {
     await cmdAudit({ rootDir, argv });
+    return;
+  }
+  if (cmd === 'create-dev-auth-seed') {
+    await cmdCreateDevAuthSeed({ rootDir, argv });
     return;
   }
 

@@ -68,6 +68,31 @@ export async function updateStackRuntimeStateFile(statePath, patch) {
   return next;
 }
 
+export async function recordStackRuntimeStart(statePath, { stackName, script, ephemeral, ownerPid, ports } = {}) {
+  const now = new Date().toISOString();
+  const existing = (await readStackRuntimeStateFile(statePath)) ?? {};
+  const startedAt = typeof existing.startedAt === 'string' && existing.startedAt.trim() ? existing.startedAt : now;
+  const next = deepMerge(existing, {
+    version: 1,
+    stackName,
+    script,
+    ephemeral: Boolean(ephemeral),
+    ownerPid,
+    ports: ports ?? {},
+    startedAt,
+    updatedAt: now,
+  });
+  await writeStackRuntimeStateFile(statePath, next);
+  return next;
+}
+
+export async function recordStackRuntimeUpdate(statePath, patch = {}) {
+  return await updateStackRuntimeStateFile(statePath, {
+    ...(patch ?? {}),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 export async function deleteStackRuntimeStateFile(statePath) {
   try {
     if (!statePath || !existsSync(statePath)) return;

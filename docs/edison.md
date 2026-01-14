@@ -292,7 +292,10 @@ If inference fails, prefer explicit `--stack=<stack>`.
 - **Health / diagnosis**:
   - `happys stack doctor <stack>`
 - **Auth repair (non-interactive)**:
-  - `happys stack auth <stack> copy-from main`
+  - `happys stack auth <stack> copy-from <seed>`
+
+- **Dev UI login key (agents should only consume, not create)**:
+  - `happys auth dev-key --print`
 - **Stop stacks (safe)**:
   - `happys stop --except-stacks=main --yes`
 
@@ -329,7 +332,7 @@ These are used by Edison when creating new task/QA markdown files:
 - **“Do not run `edison ...` directly”**
   - Fix: use `happys edison -- ...` (or `--stack=<stack>`)
 - **Auth missing / machine not registered**
-  - Fix: `happys stack auth <stack> copy-from main`
+  - Fix: `happys stack auth <stack> copy-from <seed>` (recommended seed: `dev-auth`)
 - **Stack port collisions / foreign component paths**
   - Fix: `happys stack audit --fix-workspace --fix-paths --fix-ports`
 - **Browser validator can’t reach server**

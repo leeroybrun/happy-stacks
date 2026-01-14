@@ -131,6 +131,13 @@ export function getHappysRegistry() {
       description: 'Diagnose/fix local setup',
     },
     {
+      name: 'tui',
+      kind: 'node',
+      scriptRelPath: 'scripts/tui.mjs',
+      rootUsage: 'happys tui <happys args...> [--json]',
+      description: 'Run happys commands in a split-pane TUI',
+    },
+    {
       name: 'self',
       kind: 'node',
       scriptRelPath: 'scripts/self.mjs',

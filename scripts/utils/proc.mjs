@@ -1,5 +1,23 @@
 import { spawn } from 'node:child_process';
 
+function writeWithPrefix(stream, prefix, bufState, chunk) {
+  const s = chunk.toString();
+  bufState.buf += s;
+  while (true) {
+    const idx = bufState.buf.indexOf('\n');
+    if (idx < 0) break;
+    const line = bufState.buf.slice(0, idx);
+    bufState.buf = bufState.buf.slice(idx + 1);
+    stream.write(`${prefix}${line}\n`);
+  }
+}
+
+function flushPrefixed(stream, prefix, bufState) {
+  if (!bufState.buf) return;
+  stream.write(`${prefix}${bufState.buf}\n`);
+  bufState.buf = '';
+}
+
 export function spawnProc(label, cmd, args, env, options = {}) {
   const child = spawn(cmd, args, {
     env,
@@ -10,8 +28,17 @@ export function spawnProc(label, cmd, args, env, options = {}) {
     ...options,
   });
 
-  child.stdout?.on('data', (d) => process.stdout.write(`[${label}] ${d.toString()}`));
-  child.stderr?.on('data', (d) => process.stderr.write(`[${label}] ${d.toString()}`));
+  const outState = { buf: '' };
+  const errState = { buf: '' };
+  const outPrefix = `[${label}] `;
+  const errPrefix = `[${label}] `;
+
+  child.stdout?.on('data', (d) => writeWithPrefix(process.stdout, outPrefix, outState, d));
+  child.stderr?.on('data', (d) => writeWithPrefix(process.stderr, errPrefix, errState, d));
+  child.on('close', () => {
+    flushPrefixed(process.stdout, outPrefix, outState);
+    flushPrefixed(process.stderr, errPrefix, errState);
+  });
   child.on('exit', (code, sig) => {
     if (code !== 0) {
       process.stderr.write(`[${label}] exited (code=${code}, sig=${sig})\n`);

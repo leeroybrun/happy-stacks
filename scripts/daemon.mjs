@@ -1,4 +1,5 @@
 import { spawnProc, run, runCapture } from './utils/proc.mjs';
+import { resolveAuthSeedFromEnv } from './utils/stack_startup.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -193,9 +194,11 @@ function authLoginHint() {
   return stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
 }
 
-function authCopyFromMainHint() {
+function authCopyFromSeedHint() {
   const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
-  return stackName === 'main' ? null : `happys stack auth ${stackName} copy-from main`;
+  if (stackName === 'main') return null;
+  const seed = resolveAuthSeedFromEnv(process.env);
+  return `happys stack auth ${stackName} copy-from ${seed}`;
 }
 
 async function seedCredentialsIfMissing({ cliHomeDir }) {
@@ -465,7 +468,7 @@ export async function startLocalDaemonWithAuth({
     }
 
     if (excerptIndicatesMissingAuth(first.excerpt)) {
-      const copyHint = authCopyFromMainHint();
+      const copyHint = authCopyFromSeedHint();
       console.error(
         `[local] daemon is not authenticated yet (expected on first run).\n` +
         `[local] Keeping the server running so you can login.\n` +
@@ -489,7 +492,7 @@ export async function startLocalDaemonWithAuth({
         throw new Error('Failed to start daemon (after credentials were created)');
       }
     } else {
-      const copyHint = authCopyFromMainHint();
+      const copyHint = authCopyFromSeedHint();
       console.error(
         `[local] daemon failed to start (server returned an error).\n` +
           `[local] Try:\n` +

@@ -1,12 +1,60 @@
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 
 import { pathExists } from './fs.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
 import { getDefaultAutostartPaths, getHappyStacksHomeDir } from './paths.mjs';
 import { resolveInstalledPath, resolveInstalledCliRoot } from './runtime.mjs';
+
+function sha256Hex(s) {
+  return createHash('sha256').update(String(s ?? ''), 'utf-8').digest('hex');
+}
+
+async function readJsonIfExists(path) {
+  try {
+    if (!path || !existsSync(path)) return null;
+    const raw = await readFile(path, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeJsonAtomic(path, value) {
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true }).catch(() => {});
+  const tmp = join(dir, `.tmp.${Date.now()}.${Math.random().toString(16).slice(2)}.json`);
+  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n', 'utf-8');
+  await rename(tmp, path);
+}
+
+function resolveBuildStatePath({ label, dir }) {
+  const homeDir = getHappyStacksHomeDir();
+  const key = sha256Hex(resolve(dir));
+  return join(homeDir, 'cache', 'build', label, `${key}.json`);
+}
+
+async function computeGitWorktreeSignature(dir) {
+  try {
+    // Fast path: only if this is a git worktree.
+    const inside = (await runCapture('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'])).trim();
+    if (inside !== 'true') return null;
+    const head = (await runCapture('git', ['-C', dir, 'rev-parse', 'HEAD'])).trim();
+    // Includes staged + unstaged + untracked changes; captures “dirty” vs “clean”.
+    const status = await runCapture('git', ['-C', dir, 'status', '--porcelain=v1']);
+    return {
+      kind: 'git',
+      head,
+      statusHash: sha256Hex(status),
+      signature: sha256Hex(`${head}\n${status}`),
+    };
+  } catch {
+    return null;
+  }
+}
 
 async function commandExists(cmd, options = {}) {
   try {
@@ -53,7 +101,7 @@ export async function requireDir(label, dir) {
   );
 }
 
-export async function ensureDepsInstalled(dir, label) {
+export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
   const pkgJson = join(dir, 'package.json');
   if (!(await pathExists(pkgJson))) {
     return;
@@ -62,6 +110,7 @@ export async function ensureDepsInstalled(dir, label) {
   const nodeModules = join(dir, 'node_modules');
   const pnpmModulesMeta = join(dir, 'node_modules', '.modules.yaml');
   const pm = await getComponentPm(dir);
+  const stdio = quiet ? 'ignore' : 'inherit';
 
   if (await pathExists(nodeModules)) {
     const yarnLock = join(dir, 'yarn.lock');
@@ -71,10 +120,12 @@ export async function ensureDepsInstalled(dir, label) {
     // If this repo is Yarn-managed (yarn.lock present) but node_modules was created by pnpm,
     // reinstall with Yarn to restore upstream-locked dependency versions.
     if (pm.name === 'yarn' && (await pathExists(pnpmModulesMeta))) {
-      // eslint-disable-next-line no-console
-      console.log(`[local] converting ${label} dependencies back to yarn (reinstalling node_modules)...`);
+      if (!quiet) {
+        // eslint-disable-next-line no-console
+        console.log(`[local] converting ${label} dependencies back to yarn (reinstalling node_modules)...`);
+      }
       await rm(nodeModules, { recursive: true, force: true });
-      await run(pm.cmd, ['install'], { cwd: dir });
+      await run(pm.cmd, ['install'], { cwd: dir, stdio });
     }
 
     // If dependencies changed since the last install, re-run install even if node_modules exists.
@@ -92,9 +143,11 @@ export async function ensureDepsInstalled(dir, label) {
       const pkgM = await mtimeMs(pkgJson);
       const intM = await mtimeMs(yarnIntegrity);
       if (!intM || lockM > intM || pkgM > intM) {
-        // eslint-disable-next-line no-console
-        console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json changed)...`);
-        await run(pm.cmd, ['install'], { cwd: dir });
+        if (!quiet) {
+          // eslint-disable-next-line no-console
+          console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json changed)...`);
+        }
+        await run(pm.cmd, ['install'], { cwd: dir, stdio });
       }
     }
 
@@ -102,29 +155,75 @@ export async function ensureDepsInstalled(dir, label) {
       const lockM = await mtimeMs(pnpmLock);
       const metaM = await mtimeMs(pnpmModulesMeta);
       if (!metaM || lockM > metaM) {
-        // eslint-disable-next-line no-console
-        console.log(`[local] refreshing ${label} dependencies (pnpm-lock changed)...`);
-        await run(pm.cmd, ['install'], { cwd: dir });
+        if (!quiet) {
+          // eslint-disable-next-line no-console
+          console.log(`[local] refreshing ${label} dependencies (pnpm-lock changed)...`);
+        }
+        await run(pm.cmd, ['install'], { cwd: dir, stdio });
       }
     }
 
     return;
   }
 
-  // eslint-disable-next-line no-console
-  console.log(`[local] installing ${label} dependencies (first run)...`);
-  await run(pm.cmd, ['install'], { cwd: dir });
+  if (!quiet) {
+    // eslint-disable-next-line no-console
+    console.log(`[local] installing ${label} dependencies (first run)...`);
+  }
+  await run(pm.cmd, ['install'], { cwd: dir, stdio });
 }
 
 export async function ensureCliBuilt(cliDir, { buildCli }) {
   await ensureDepsInstalled(cliDir, 'happy-cli');
   if (!buildCli) {
-    return;
+    return { built: false, reason: 'disabled' };
   }
+  // Default: build only when needed (fast + reliable for worktrees that haven't been built yet).
+  //
+  // You can force always-build by setting:
+  // - HAPPY_STACKS_CLI_BUILD_MODE=always (legacy: HAPPY_LOCAL_CLI_BUILD_MODE=always)
+  // Or disable via:
+  // - HAPPY_STACKS_CLI_BUILD=0 (legacy: HAPPY_LOCAL_CLI_BUILD=0)
+  const modeRaw = (process.env.HAPPY_STACKS_CLI_BUILD_MODE ?? process.env.HAPPY_LOCAL_CLI_BUILD_MODE ?? 'auto').trim().toLowerCase();
+  const mode = modeRaw === 'always' || modeRaw === 'auto' || modeRaw === 'never' ? modeRaw : 'auto';
+  if (mode === 'never') {
+    return { built: false, reason: 'mode_never' };
+  }
+  const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
+  const buildStatePath = resolveBuildStatePath({ label: 'happy-cli', dir: cliDir });
+  const gitSig = await computeGitWorktreeSignature(cliDir);
+  const prev = await readJsonIfExists(buildStatePath);
+
+  if (mode === 'auto') {
+    // If dist doesn't exist, we must build.
+    if (!(await pathExists(distEntrypoint))) {
+      // fallthrough to build
+    } else if (gitSig && prev?.signature && prev.signature === gitSig.signature) {
+      return { built: false, reason: 'up_to_date' };
+    } else if (!gitSig) {
+      // No git info: best-effort skip if dist exists (keeps this fast outside git worktrees).
+      return { built: false, reason: 'no_git_info' };
+    }
+  }
+
   // eslint-disable-next-line no-console
   console.log('[local] building happy-cli...');
   const pm = await getComponentPm(cliDir);
   await run(pm.cmd, ['build'], { cwd: cliDir });
+
+  // Persist new build state (best-effort).
+  const nowSig = gitSig ?? (await computeGitWorktreeSignature(cliDir));
+  if (nowSig) {
+    await writeJsonAtomic(buildStatePath, {
+      label: 'happy-cli',
+      dir: resolve(cliDir),
+      signature: nowSig.signature,
+      head: nowSig.head,
+      statusHash: nowSig.statusHash,
+      builtAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+  return { built: true, reason: mode === 'always' ? 'mode_always' : 'changed' };
 }
 
 function getPathEntries() {
@@ -188,13 +287,14 @@ export async function pmSpawnBin({ label, dir, bin, args, env, options = {} }) {
   return spawnProc(label, pm.cmd, ['exec', bin, ...args], env, { ...options, cwd: dir });
 }
 
-export async function pmExecBin({ dir, bin, args, env }) {
+export async function pmExecBin({ dir, bin, args, env, quiet = false }) {
   const pm = await getComponentPm(dir);
+  const stdio = quiet ? 'ignore' : 'inherit';
   if (pm.name === 'yarn') {
-    await run(pm.cmd, [bin, ...args], { env, cwd: dir });
+    await run(pm.cmd, [bin, ...args], { env, cwd: dir, stdio });
     return;
   }
-  await run(pm.cmd, ['exec', bin, ...args], { env, cwd: dir });
+  await run(pm.cmd, ['exec', bin, ...args], { env, cwd: dir, stdio });
 }
 
 export async function ensureMacAutostartEnabled({ rootDir, label = 'com.happy.local', env = {} }) {
