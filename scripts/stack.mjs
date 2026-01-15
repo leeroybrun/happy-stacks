@@ -52,6 +52,7 @@ import { getCliHomeDirFromEnvOrDefault, getServerLightDataDirFromEnvOrDefault } 
 import { randomToken } from './utils/crypto/tokens.mjs';
 import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
 import { sanitizeSlugPart } from './utils/git/refs.mjs';
+import { isCursorInstalled, openWorkspaceInEditor, writeStackCodeWorkspace } from './utils/stack/editor_workspace.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -2580,6 +2581,31 @@ async function cmdInfoInternal({ rootDir, stackName }) {
   };
 }
 
+async function cmdStackCodeOrCursor({ rootDir, stackName, json, editor, includeStackDir, includeAllComponents, includeCliHome }) {
+  const ws = await writeStackCodeWorkspace({ rootDir, stackName, includeStackDir, includeAllComponents, includeCliHome });
+
+  if (json) {
+    printResult({
+      json,
+      data: {
+        ok: true,
+        stackName,
+        editor,
+        ...ws,
+      },
+    });
+    return;
+  }
+
+  await openWorkspaceInEditor({ rootDir, editor, workspacePath: ws.workspacePath });
+  console.log(`[stack] opened ${editor === 'code' ? 'VS Code' : 'Cursor'} workspace for "${stackName}": ${ws.workspacePath}`);
+}
+
+async function cmdStackOpen({ rootDir, stackName, json, includeStackDir, includeAllComponents, includeCliHome }) {
+  const editor = (await isCursorInstalled({ cwd: rootDir, env: process.env })) ? 'cursor' : 'code';
+  await cmdStackCodeOrCursor({ rootDir, stackName, json, editor, includeStackDir, includeAllComponents, includeCliHome });
+}
+
 async function main() {
   const rootDir = getRootDir(import.meta.url);
   // pnpm (legacy) passes an extra leading `--` when forwarding args into scripts. Normalize it away so
@@ -2623,6 +2649,9 @@ async function main() {
           'mobile',
           'resume',
           'stop',
+          'code',
+          'cursor',
+          'open',
           'srv',
           'wt',
           'tailscale:*',
@@ -2651,6 +2680,9 @@ async function main() {
         '  happys stack mobile <name> [-- ...]',
         '  happys stack resume <name> <sessionId...> [--json]',
         '  happys stack stop <name> [--aggressive] [--sweep-owned] [--no-docker] [--json]',
+        '  happys stack code <name> [--no-stack-dir] [--include-all-components] [--include-cli-home] [--json]',
+        '  happys stack cursor <name> [--no-stack-dir] [--include-all-components] [--include-cli-home] [--json]',
+        '  happys stack open <name> [--no-stack-dir] [--include-all-components] [--include-cli-home] [--json]   # prefer Cursor, else VS Code',
         '  happys stack srv <name> -- status|use ...',
         '  happys stack wt <name> -- <wt args...>',
         '  happys stack tailscale:status|enable|disable|url <name> [-- ...]',
@@ -2857,6 +2889,28 @@ async function main() {
       },
     });
     if (json) printResult({ json, data: { ok: true, stopped: out } });
+    return;
+  }
+
+  if (cmd === 'code') {
+    const includeStackDir = !flags.has('--no-stack-dir');
+    const includeAllComponents = flags.has('--include-all-components');
+    const includeCliHome = flags.has('--include-cli-home');
+    await cmdStackCodeOrCursor({ rootDir, stackName, json, editor: 'code', includeStackDir, includeAllComponents, includeCliHome });
+    return;
+  }
+  if (cmd === 'cursor') {
+    const includeStackDir = !flags.has('--no-stack-dir');
+    const includeAllComponents = flags.has('--include-all-components');
+    const includeCliHome = flags.has('--include-cli-home');
+    await cmdStackCodeOrCursor({ rootDir, stackName, json, editor: 'cursor', includeStackDir, includeAllComponents, includeCliHome });
+    return;
+  }
+  if (cmd === 'open') {
+    const includeStackDir = !flags.has('--no-stack-dir');
+    const includeAllComponents = flags.has('--include-all-components');
+    const includeCliHome = flags.has('--include-cli-home');
+    await cmdStackOpen({ rootDir, stackName, json, includeStackDir, includeAllComponents, includeCliHome });
     return;
   }
 
