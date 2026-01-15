@@ -1889,7 +1889,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               }
 
               console.log('');
-              const uiHost = `happy-${sanitizeDnsLabel(name)}.localhost`;
+              const uiHost = resolveLocalhostHost({ stackMode: true, stackName: name });
               const uiPort = uiRes?.port;
               const uiRoot = Number.isFinite(uiPort) && uiPort > 0 ? `http://${uiHost}:${uiPort}` : null;
               const uiRootLocalhost = Number.isFinite(uiPort) && uiPort > 0 ? `http://localhost:${uiPort}` : null;

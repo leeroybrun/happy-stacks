@@ -23,7 +23,6 @@ import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writ
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
-import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 import { stackExistsSync } from './utils/stack/stacks.mjs';
 import {
@@ -31,6 +30,7 @@ import {
   getServerLightDataDirFromEnvOrDefault,
   resolveCliHomeDir,
 } from './utils/stack/dirs.mjs';
+import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -74,7 +74,7 @@ async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
     if (!uiRunning.running) return null;
     const port = Number(uiRunning.state?.port);
     if (!Number.isFinite(port) || port <= 0) return null;
-    const host = stackName && stackName !== 'main' ? `happy-${sanitizeDnsLabel(stackName)}.localhost` : 'localhost';
+    const host = resolveLocalhostHost({ stackMode: stackName !== 'main', stackName });
     return `http://${host}:${port}`;
   } catch {
     return null;
