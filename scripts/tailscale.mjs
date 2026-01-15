@@ -3,6 +3,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 
@@ -22,7 +23,7 @@ import { access } from 'node:fs/promises';
  */
 
 function getInternalServerUrl() {
-  const port = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? Number(process.env.HAPPY_LOCAL_SERVER_PORT) : 3005;
+  const port = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
   return `http://127.0.0.1:${port}`;
 }
 

@@ -1,7 +1,7 @@
 import './utils/env/env.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
+import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/service/autostart_darwin.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
@@ -37,7 +37,7 @@ function getUid() {
 }
 
 function getInternalUrl() {
-  const port = process.env.HAPPY_LOCAL_SERVER_PORT?.trim() ? Number(process.env.HAPPY_LOCAL_SERVER_PORT) : 3005;
+  const port = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
   return `http://127.0.0.1:${port}`;
 }
 
