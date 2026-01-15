@@ -6,6 +6,7 @@ import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
+import { sanitizeStackName } from './utils/stack/names.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -445,17 +446,6 @@ function resolveComponentsFromFrontmatter(fm) {
   if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
   if (typeof v === 'string' && v.trim()) return v.split(',').map((p) => p.trim()).filter(Boolean);
   return [];
-}
-
-function sanitizeStackName(raw) {
-  return String(raw ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '')
-    .slice(0, 64);
 }
 
 function yamlQuote(v) {

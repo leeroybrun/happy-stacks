@@ -4,40 +4,23 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { parseGithubPullRequest } from './utils/git/refs.mjs';
+import { sanitizeStackName } from './utils/stack/names.mjs';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-function sanitizeStackName(raw) {
-  const s = String(raw ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return s || 'pr';
-}
-
-function parseGithubPullRequestNumber(input) {
-  const raw = String(input ?? '').trim();
-  if (!raw) return null;
-  if (/^\d+$/.test(raw)) return Number(raw);
-  const m = raw.match(/github\.com\/[^/]+\/[^/]+\/pull\/(?<num>\d+)/);
-  return m?.groups?.num ? Number(m.groups.num) : null;
-}
-
 function inferStackNameFromPrArgs({ happy, happyCli, server, serverLight }) {
   const parts = [];
-  const hn = parseGithubPullRequestNumber(happy);
-  const cn = parseGithubPullRequestNumber(happyCli);
-  const sn = parseGithubPullRequestNumber(server);
-  const sln = parseGithubPullRequestNumber(serverLight);
+  const hn = parseGithubPullRequest(happy)?.number ?? null;
+  const cn = parseGithubPullRequest(happyCli)?.number ?? null;
+  const sn = parseGithubPullRequest(server)?.number ?? null;
+  const sln = parseGithubPullRequest(serverLight)?.number ?? null;
   if (hn) parts.push(`happy${hn}`);
   if (cn) parts.push(`cli${cn}`);
   if (sn) parts.push(`server${sn}`);
   if (sln) parts.push(`light${sln}`);
-  return sanitizeStackName(parts.length ? `pr-${parts.join('-')}` : 'pr');
+  return sanitizeStackName(parts.length ? `pr-${parts.join('-')}` : 'pr', { fallback: 'pr', maxLen: 64 });
 }
 
 function detectBestAuthSource() {
