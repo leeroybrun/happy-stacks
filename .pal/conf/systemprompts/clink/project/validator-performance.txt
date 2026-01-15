@@ -31,7 +31,7 @@ Refresh framework-specific performance patterns from active packs.
 ```bash
 git status --porcelain
 git diff                      # Uncommitted changes (may be empty)
-git diff main...HEAD          # Committed changes on this branch/worktree
+git diff {{config.git.defaultBranch}}...HEAD          # Committed changes on this branch/worktree
 ```
 
 **Focus on**:

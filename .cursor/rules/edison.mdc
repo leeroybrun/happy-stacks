@@ -6,18 +6,18 @@ alwaysApply: true
 
 # Edison Framework Rules
 
-## Critical Principles (Non-Negotiable)
+## Critical Principles (Config-Driven)
 
-1. **STRICT TDD**: Write failing test FIRST (RED), then implement (GREEN), then refactor
-2. **NO MOCKS**: Test real behavior, real code, real libs - NO MOCKS EVER
-3. **NO LEGACY**: Delete old code completely - NO backward compatibility, NO fallbacks
-4. **NO HARDCODED VALUES**: All config from YAML - NO magic numbers/strings in code
-5. **100% CONFIGURABLE**: Every behavior must be configurable via YAML
-6. **DRY**: Zero code duplication - extract to shared utilities
-7. **SOLID**: Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion
-8. **KISS**: Keep It Simple, Stupid - no over-engineering
-9. **YAGNI**: You Aren't Gonna Need It - remove speculative features
-10. **ROOT CAUSE**: ALWAYS find and fix root causes, never dirty fixes
+These rules are **project-configurable** via Edison YAML. Do not assume every project uses the same enforcement level.
+
+- **TDD**: write failing test FIRST (RED), then implement (GREEN), then refactor.
+
+- **No internal mocks**: test real behavior; only mock at true system boundaries.
+
+- **Configuration-first**: avoid hardcoded behavior; load config from YAML/environment.
+
+- **Quality basics**: DRY, SOLID, KISS; avoid speculative/YAGNI code.
+- **Root cause**: fix underlying issues; avoid “dirty fixes”.
 
 ## Development Practices
 

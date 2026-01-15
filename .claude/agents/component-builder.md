@@ -112,26 +112,19 @@ If implementation exists before the test:
 
 ## Test Suite Selection (Fast vs Slow)
 
-Edison’s tests are divided into two practical suites:
+Projects differ; Edison is framework- and language-agnostic. Use the project’s configured test command as the authoritative baseline:
 
-- **Fast** (`pytest -m fast`): deterministic unit tests that avoid heavy git/subprocess/E2E workflows.
-- **Slow** (`pytest -m slow`): anything that uses substantial subprocess/git, integration, or E2E flows.
-
-**Rule of thumb**:
-- For tight iteration loops (RED/GREEN): run **fast**.
-- Before handoff or when touching cross-cutting behavior (session/task/worktree/evidence/composition/config loading): run **slow**.
-
-**Evidence-first note (important):**
-- These commands are great for local iteration, but validation evidence should be captured via `edison evidence capture <task-id>` and reviewed via `edison evidence status <task-id>`.
-- Evidence capture is snapshot-based (repo fingerprint). If a complete, passing snapshot already exists for the current repo state, Edison can reuse it without re-running long suites.
-
-Convenience wrappers (preferred):
 ```bash
-scripts/test-fast
-scripts/test-slow
+KIND="{{hs_kind}}"; if [ -z "$KIND" ] || [ "$KIND" = "parent" ]; then echo "Refusing evidence capture for hs_kind=parent. Run evidence on a track/component task."; exit 1; fi; TASK_STACK="{{stack}}"; TASK_STACK="${TASK_STACK%\"}"; TASK_STACK="${TASK_STACK#\"}"; ENV_STACK="${HAPPY_STACKS_STACK:?Run via: happys edison --stack=$TASK_STACK -- evidence capture <task-id>}"; if [ -z "$TASK_STACK" ]; then echo "Missing task stack (fill frontmatter: stack)"; exit 1; fi; if [ "$ENV_STACK" != "$TASK_STACK" ]; then echo "Stack mismatch: env=$ENV_STACK task=$TASK_STACK"; exit 1; fi; IFS="," read -r -a COMPS <<< "{{components_csv}}"; node ./bin/happys.mjs stack test "$TASK_STACK" "${COMPS[@]}"
 ```
 
-Both wrappers automatically use `pytest-xdist` when available (parallel mode), and fall back to single-process otherwise.
+**Rule of thumb**:
+- For tight iteration loops (RED/GREEN): run the *smallest relevant subset* (single test file, single package, targeted command) to iterate quickly.
+- Before handoff, and whenever touching cross-cutting behavior (session/task/worktree/evidence/composition/config loading): run the project’s **full** required test run (typically via `edison evidence capture <task-id>` so the result is reusable and auditable).
+
+**Evidence-first note (important)**:
+- Local “subset” commands are great for iteration, but validation evidence should be captured via `edison evidence capture <task-id>` and reviewed via `edison evidence status <task-id>`.
+- Evidence capture is snapshot-based (repo fingerprint). If a complete, passing snapshot already exists for the current repo state, Edison can reuse it without re-running long suites.
 
 ### Guardrails
 - No `.skip` / `.todo` / `.only` (or equivalents) committed
@@ -697,6 +690,7 @@ Continue working until the Edison session is complete:
 - Keep validators independent from implementers.
 - Do not stop early when work remains.
 <!-- END ANCHOR: continuation-guidance -->
+{{/if}}
 
 ---
 
@@ -829,6 +823,7 @@ Render:
 
 - **Design-system fidelity**: Use tokens, no hardcoded colors/spacing
 - **Accessibility first**: Semantic elements, focus management, keyboard support
+{{if:not(config-eq(tdd.enforcement, off))}}
 - **TDD with real rendering**: Write tests that render real UI
 
 ### Anti-patterns (DO NOT DO)

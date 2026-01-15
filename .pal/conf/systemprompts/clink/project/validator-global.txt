@@ -40,14 +40,14 @@ Your validation must be **thorough, objective, and unbiased**.
 ## Validation Workflow
 
 ### Step 1: Context7 Knowledge Refresh
-Refresh your knowledge on post-training packages used in this project BEFORE validating.
+When applicable (i.e., when the task touches configured post-training packages), refresh your knowledge via Context7 before validating.
 
 ### Step 2: Review Git Diff
 
 ```bash
 git status --porcelain
 git diff                      # Uncommitted changes (may be empty)
-git diff main...HEAD          # Committed changes on this branch/worktree
+git diff {{config.git.defaultBranch}}...HEAD          # Committed changes on this branch/worktree
 ```
 
 **Questions to Answer**:
@@ -67,11 +67,11 @@ git diff main...HEAD          # Committed changes on this branch/worktree
 - If `package.json` / lockfiles changed, assess dependency risk for the **delta introduced by this task**.
 - If lockfiles changed but vulnerable package **versions** did **not** change (normalization/reordering), do **not** reject solely on baseline audit findings; create follow-up tasks instead.
 
-### Step 3: Run 10-Point Comprehensive Checklist
+### Step 3: Run Comprehensive Checklist
 
 ---
 
-## 10-Point Checklist
+## Checklist
 
 ### 1. Task Completion
 - ✅ All acceptance criteria met
@@ -95,14 +95,17 @@ git diff main...HEAD          # Committed changes on this branch/worktree
 - ✅ Proper pagination
 
 ### 5. Error Handling
-- ✅ All async functions have try/catch
-- ✅ Proper response status codes
-- ✅ Loading/error/empty states in UI
+- ✅ Errors are handled appropriately for the language/runtime (fail-closed where safety matters)
+- ✅ User-facing errors are meaningful (no stack traces)
+- ✅ Async flows expose loading/error/empty states when applicable
 
 ### 6. TDD Compliance
-- ✅ TDD intent is verifiable (prefer `[RED]`→`[GREEN]`→`[REFACTOR]` commit markers when available; use git history as a signal, but do not reject solely on marker sequencing if new behavior is covered by real tests and the required evidence commands pass)
-- ✅ Tests use real behavior (minimal mocking)
+- ✅ TDD intent is verifiable (use git history as a signal when available; do not reject solely on marker sequencing if new behavior is covered by real tests and required evidence passes)
+{{if:config-eq(tdd.enforceCommitMarkers, True)}}
+- ✅ Commit markers are present: `[RED]`→`[GREEN]`→`[REFACTOR]`
+- ✅ Tests use real behavior (avoid internal mocks; mock only at true system boundaries)
 - ✅ Coverage meets target
+{{/if}}
 
 ### 7. Architecture
 - ✅ Business logic separated from UI
@@ -465,7 +468,7 @@ This repo is an orchestration workspace and may be dirty with unrelated work. **
 
 - You are INDEPENDENT - you don't know what sub-agents discussed
 - You validate CHANGES (git diff) AND final code
-- Context7 refresh is MANDATORY
+- Context7 refresh is mandatory when the task touches configured post-training packages
 - Be thorough but fair - don't block on nitpicks
 - Production quality is the goal
 

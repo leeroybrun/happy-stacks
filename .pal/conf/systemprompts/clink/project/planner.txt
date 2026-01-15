@@ -128,23 +128,23 @@ model Record {
 <!-- /section: patterns -->
 
 ## Role-Specific Rules
-- [NON-BLOCKING] Preserve context budget – load only what's needed (category: context)
-- [NON-BLOCKING] Do not load big files unless necessary (category: context)
-- [NON-BLOCKING] Close session only when no blockers remain and all scope is validated (category: session)
-- [NON-BLOCKING] Fail-Closed: All Moves Through Guarded Python CLIs (category: transition)
-- [NON-BLOCKING] Context7 Required For Post-Training Packages (category: context)
+- [NON-BLOCKING] Sub-agents must not re-delegate (category: delegation)
+- [NON-BLOCKING] Orchestrator should parallelize via tasks/split for non-trivial tasks (category: delegation)
 - [NON-BLOCKING] Context window anxiety management (CWAM) (category: context)
+- [NON-BLOCKING] Disallow skipping states in task/QA transitions (category: transition)
+- [NON-BLOCKING] Do not load big files unless necessary (category: context)
+- [NON-BLOCKING] Share snippets not whole files in prompts (category: context)
+- [NON-BLOCKING] Context7 Required For Post-Training Packages (category: context)
+- [NON-BLOCKING] Session completion: parent validated; children done|validated (category: session)
+- [NON-BLOCKING] Preserve context budget – load only what's needed (category: context)
 - [NON-BLOCKING] Drive execution via session next (loop driver) (category: session)
 - [NON-BLOCKING] Delegation Decision Priority Chain (category: delegation)
 - [NON-BLOCKING] Session-scoped file isolation is mandatory (category: session)
-- [NON-BLOCKING] No manual file moves; use guarded CLIs (category: transition)
-- [NON-BLOCKING] Session completion: parent validated; children done|validated (category: session)
-- [NON-BLOCKING] Sub-agents must not re-delegate (category: delegation)
 - [NON-BLOCKING] Delegate the majority of work (category: delegation)
-- [NON-BLOCKING] Orchestrator should parallelize via tasks/split for non-trivial tasks (category: delegation)
+- [NON-BLOCKING] Fail-Closed: All Moves Through Guarded Python CLIs (category: transition)
+- [NON-BLOCKING] No manual file moves; use guarded CLIs (category: transition)
 - [NON-BLOCKING] Do not stop early; continue until the session is complete (category: session)
-- [NON-BLOCKING] Disallow skipping states in task/QA transitions (category: transition)
-- [NON-BLOCKING] Share snippets not whole files in prompts (category: context)
+- [NON-BLOCKING] Close session only when no blockers remain and all scope is validated (category: session)
 
 === Context & Continuation ===
 
