@@ -25,8 +25,8 @@ import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack/stop.mjs';
 import { writeDevAuthKey } from './utils/dev_auth_key.mjs';
-import { startDevServer } from './utils/dev_server.mjs';
-import { startDevExpoWebUi } from './utils/dev_expo_web.mjs';
+import { startDevServer } from './utils/dev/server.mjs';
+import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';

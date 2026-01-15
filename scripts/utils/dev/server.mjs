@@ -1,12 +1,12 @@
 import { join, resolve } from 'node:path';
 
-import { ensureDepsInstalled, pmSpawnScript } from './proc/pm.mjs';
-import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './server/infra/happy_server_infra.mjs';
-import { waitForServerReady } from './server/server.mjs';
-import { isTcpPortFree, pickNextFreeTcpPort } from './net/ports.mjs';
-import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from './stack/runtime_state.mjs';
-import { killProcessGroupOwnedByStack } from './proc/ownership.mjs';
-import { watchDebounced } from './watch.mjs';
+import { ensureDepsInstalled, pmSpawnScript } from '../proc/pm.mjs';
+import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
+import { waitForServerReady } from '../server/server.mjs';
+import { isTcpPortFree, pickNextFreeTcpPort } from '../net/ports.mjs';
+import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
+import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
+import { watchDebounced } from '../watch.mjs';
 
 function hashStringToInt(s) {
   let h = 0;

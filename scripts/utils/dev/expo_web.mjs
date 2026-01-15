@@ -1,8 +1,8 @@
-import { ensureDepsInstalled, pmSpawnBin } from './proc/pm.mjs';
-import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, wantsExpoClearCache, writePidState } from './expo.mjs';
-import { pickDevMetroPort, resolveStackUiDevPortStart } from './dev_server.mjs';
-import { recordStackRuntimeUpdate } from './stack/runtime_state.mjs';
-import { killProcessGroupOwnedByStack } from './proc/ownership.mjs';
+import { ensureDepsInstalled, pmSpawnBin } from '../proc/pm.mjs';
+import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, wantsExpoClearCache, writePidState } from '../expo.mjs';
+import { pickDevMetroPort, resolveStackUiDevPortStart } from './server.mjs';
+import { recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
+import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
 
 export async function startDevExpoWebUi({
   startUi,
