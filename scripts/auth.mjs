@@ -4,7 +4,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
-import { getInternalServerUrl, getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
+import { getInternalServerUrl, getPublicServerUrlEnvOverride, getWebappUrlEnvOverride } from './utils/server/urls.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -35,29 +35,6 @@ import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 function getInternalServerUrlCompat() {
   const { port, internalServerUrl } = getInternalServerUrl({ env: process.env, defaultPort: 3005 });
   return { port, url: internalServerUrl };
-}
-
-function resolveEnvWebappUrlForStack({ stackName }) {
-  const candidate = (process.env.HAPPY_WEBAPP_URL ?? '').trim();
-
-  // For main, allow the user's global override.
-  if (stackName === 'main') {
-    return candidate;
-  }
-
-  // For non-main stacks, only respect HAPPY_WEBAPP_URL if it is explicitly present in the stack env file.
-  const envPath =
-    (process.env.HAPPY_STACKS_ENV_FILE ?? '').trim() ||
-    (process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim() ||
-    resolveStackEnvPath(stackName).envPath;
-  try {
-    if (!envPath || !existsSync(envPath)) return '';
-    const raw = readFileSync(envPath, 'utf-8');
-    const env = raw ? parseEnvToObject(raw) : {};
-    return (env.HAPPY_WEBAPP_URL ?? '').toString().trim();
-  } catch {
-    return '';
-  }
 }
 
 async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
@@ -850,7 +827,7 @@ async function cmdLogin({ argv, json }) {
     envPublicUrl,
     allowEnable: false,
   });
-  const envWebappUrl = resolveEnvWebappUrlForStack({ stackName });
+  const { envWebappUrl } = getWebappUrlEnvOverride({ env: process.env, stackName });
   const expoWebappUrl = await resolveWebappUrlFromRunningExpo({ rootDir, stackName });
   const webappUrl = envWebappUrl || expoWebappUrl || publicServerUrl;
   const webappUrlSource = expoWebappUrl ? 'expo' : envWebappUrl ? 'stack env override' : 'server';

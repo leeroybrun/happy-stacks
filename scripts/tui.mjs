@@ -7,22 +7,7 @@ import { readEnvObjectFromFile } from './utils/env/read.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 import { getEnvValueAny } from './utils/env/values.mjs';
-
-function stripAnsi(s) {
-  // eslint-disable-next-line no-control-regex
-  return String(s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-}
-
-function padRight(s, n) {
-  const str = String(s ?? '');
-  if (str.length >= n) return str.slice(0, n);
-  return str + ' '.repeat(n - str.length);
-}
-
-function parsePrefixedLabel(line) {
-  const m = String(line ?? '').match(/^\[([^\]]+)\]\s*/);
-  return m ? m[1] : null;
-}
+import { padRight, parsePrefixedLabel, stripAnsi } from './utils/ui/text.mjs';
 
 function nowTs() {
   const d = new Date();

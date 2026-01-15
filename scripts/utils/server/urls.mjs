@@ -17,6 +17,19 @@ function stackEnvExplicitlySetsPublicUrl({ env, stackName }) {
   }
 }
 
+function stackEnvExplicitlySetsWebappUrl({ env, stackName }) {
+  try {
+    const envPath =
+      (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString().trim() ||
+      resolveStackEnvPath(stackName).envPath;
+    if (!envPath || !existsSync(envPath)) return false;
+    const raw = readFileSync(envPath, 'utf-8');
+    return /^HAPPY_WEBAPP_URL=/m.test(raw);
+  } catch {
+    return false;
+  }
+}
+
 export function getPublicServerUrlEnvOverride({ env = process.env, serverPort, stackName = null } = {}) {
   const defaultPublicUrl = `http://localhost:${serverPort}`;
   const name =
@@ -33,6 +46,22 @@ export function getPublicServerUrlEnvOverride({ env = process.env, serverPort, s
   }
 
   return { defaultPublicUrl, envPublicUrl, publicServerUrl: envPublicUrl || defaultPublicUrl };
+}
+
+export function getWebappUrlEnvOverride({ env = process.env, stackName = null } = {}) {
+  const name =
+    (stackName ?? '').toString().trim() ||
+    (env.HAPPY_STACKS_STACK ?? env.HAPPY_LOCAL_STACK ?? '').toString().trim() ||
+    getStackName();
+
+  let envWebappUrl = (env.HAPPY_WEBAPP_URL ?? '').toString().trim() || '';
+
+  // Safety: for non-main stacks, ignore a global HAPPY_WEBAPP_URL unless it was explicitly set in the stack env file.
+  if (name !== 'main' && envWebappUrl && !stackEnvExplicitlySetsWebappUrl({ env, stackName: name })) {
+    envWebappUrl = '';
+  }
+
+  return { envWebappUrl };
 }
 
 export async function resolveServerUrls({ env = process.env, serverPort, allowEnable = true } = {}) {
