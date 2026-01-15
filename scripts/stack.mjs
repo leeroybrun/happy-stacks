@@ -41,7 +41,7 @@ import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_sec
 import { readPinnedServerPortFromEnvFile } from './utils/server/port.mjs';
 import { getEnvValue, getEnvValueAny } from './utils/env/values.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
-import { coercePort } from './utils/server/port.mjs';
+import { coercePort, listPortsFromEnvObject, STACK_RESERVED_PORT_KEYS } from './utils/server/port.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
@@ -92,21 +92,7 @@ async function readPortsFromEnvFile(envPath) {
   const raw = await readExistingEnv(envPath);
   if (!raw.trim()) return [];
   const parsed = parseEnvToObject(raw);
-  const keys = [
-    'HAPPY_STACKS_SERVER_PORT',
-    'HAPPY_LOCAL_SERVER_PORT',
-    'HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT',
-    'HAPPY_STACKS_PG_PORT',
-    'HAPPY_STACKS_REDIS_PORT',
-    'HAPPY_STACKS_MINIO_PORT',
-    'HAPPY_STACKS_MINIO_CONSOLE_PORT',
-  ];
-  const ports = [];
-  for (const k of keys) {
-    const n = coercePort(parsed[k]);
-    if (n) ports.push(n);
-  }
-  return ports;
+  return listPortsFromEnvObject(parsed, STACK_RESERVED_PORT_KEYS);
 }
 
 async function collectReservedStackPorts({ excludeStackName = null } = {}) {

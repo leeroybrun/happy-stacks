@@ -10,7 +10,7 @@ import { pickNextFreeTcpPort } from '../../net/ports.mjs';
 import { pmExecBin } from '../../proc/pm.mjs';
 import { run, runCapture } from '../../proc/proc.mjs';
 import { randomToken } from '../../crypto/tokens.mjs';
-import { coercePort } from '../port.mjs';
+import { coercePort, INFRA_RESERVED_PORT_KEYS } from '../port.mjs';
 
 const readEnvObject = readEnvObjectFromFile;
 
@@ -286,14 +286,7 @@ export async function ensureHappyServerManagedInfra({
   const reservedPorts = new Set();
 
   // Reserve known ports (if present) to avoid picking duplicates when auto-filling.
-  for (const key of [
-    'HAPPY_STACKS_SERVER_PORT',
-    'HAPPY_LOCAL_SERVER_PORT',
-    'HAPPY_STACKS_PG_PORT',
-    'HAPPY_STACKS_REDIS_PORT',
-    'HAPPY_STACKS_MINIO_PORT',
-    'HAPPY_STACKS_MINIO_CONSOLE_PORT',
-  ]) {
+  for (const key of INFRA_RESERVED_PORT_KEYS) {
     const p = coercePort(existingEnv[key] ?? env[key]);
     if (p) reservedPorts.add(p);
   }
