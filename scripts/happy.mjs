@@ -6,6 +6,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { resolveCliHomeDir } from './utils/stack/dirs.mjs';
+import { getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -35,7 +36,7 @@ async function main() {
   const serverPort = Number.isFinite(port) ? port : 3005;
 
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
-  const publicServerUrl = (process.env.HAPPY_STACKS_SERVER_URL ?? process.env.HAPPY_LOCAL_SERVER_URL ?? '').trim() || `http://localhost:${serverPort}`;
+  const { publicServerUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort });
 
   const cliHomeDir = resolveCliHomeDir();
 

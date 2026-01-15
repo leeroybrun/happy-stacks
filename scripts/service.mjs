@@ -1,6 +1,7 @@
 import './utils/env/env.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/service/autostart_darwin.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
@@ -273,10 +274,13 @@ async function postStartDiagnostics() {
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
     : join(getDefaultAutostartPaths().baseDir, 'cli');
 
-  const publicUrl =
-    process.env.HAPPY_LOCAL_SERVER_URL?.trim()
-      ? process.env.HAPPY_LOCAL_SERVER_URL.trim()
-      : internalUrl.replace('127.0.0.1', 'localhost');
+  let port = 3005;
+  try {
+    port = Number(new URL(internalUrl).port || 0) || 3005;
+  } catch {
+    port = 3005;
+  }
+  const { publicServerUrl: publicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port });
 
   const cliDir = join(rootDir, 'components', 'happy-cli');
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
