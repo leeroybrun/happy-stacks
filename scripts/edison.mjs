@@ -4,13 +4,14 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
+import { readTextOrEmpty } from './utils/fs/ops.mjs';
 import { readJsonIfExists } from './utils/fs/json.mjs';
+import { isPidAlive } from './utils/proc/pids.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { sanitizeStackName } from './utils/stack/names.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { mkdir, lstat, rename, symlink, writeFile, readdir, chmod } from 'node:fs/promises';
 import os from 'node:os';
 
@@ -28,14 +29,7 @@ function cleanHappyStacksEnv(baseEnv) {
   return cleaned;
 }
 
-async function readExistingEnv(path) {
-  try {
-    const raw = await readFile(path, 'utf-8');
-    return raw;
-  } catch {
-    return '';
-  }
-}
+const readExistingEnv = readTextOrEmpty;
 
 function inferServerPortFromRuntimeState(runtimeState) {
   try {
@@ -44,17 +38,6 @@ function inferServerPortFromRuntimeState(runtimeState) {
     return Number.isFinite(n) && n > 0 ? n : null;
   } catch {
     return null;
-  }
-}
-
-function isPidAlive(pid) {
-  const n = Number(pid);
-  if (!Number.isFinite(n) || n <= 1) return false;
-  try {
-    process.kill(n, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 

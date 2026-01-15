@@ -17,3 +17,13 @@ export async function readTextIfExists(path) {
   }
 }
 
+export async function readTextOrEmpty(path) {
+  try {
+    const p = String(path ?? '').trim();
+    if (!p || !existsSync(p)) return '';
+    return await readFile(p, 'utf-8');
+  } catch {
+    return '';
+  }
+}
+

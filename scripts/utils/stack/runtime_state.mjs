@@ -1,45 +1,28 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { resolveStackEnvPath } from '../paths/paths.mjs';
+import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
+import { isPidAlive } from '../proc/pids.mjs';
+
+export { isPidAlive };
 
 export function getStackRuntimeStatePath(stackName) {
   const { baseDir } = resolveStackEnvPath(stackName);
   return join(baseDir, 'stack.runtime.json');
 }
 
-export function isPidAlive(pid) {
-  const n = Number(pid);
-  if (!Number.isFinite(n) || n <= 1) return false;
-  try {
-    process.kill(n, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function readStackRuntimeStateFile(statePath) {
-  try {
-    if (!statePath || !existsSync(statePath)) return null;
-    const raw = await readFile(statePath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = await readJsonIfExists(statePath, { defaultValue: null });
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 export async function writeStackRuntimeStateFile(statePath, state) {
   if (!statePath) {
     throw new Error('[stack] missing runtime state path');
   }
-  const dir = dirname(statePath);
-  await mkdir(dir, { recursive: true }).catch(() => {});
-  const tmp = join(dir, `.stack.runtime.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  await writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8');
-  await rename(tmp, statePath);
+  await writeJsonAtomic(statePath, state);
 }
 
 function isPlainObject(v) {

@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 // NOTE: random bytes usage centralized in scripts/utils/crypto/tokens.mjs
 import { homedir } from 'node:os';
-import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
+import { ensureDir, readTextIfExists, readTextOrEmpty } from './utils/fs/ops.mjs';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc/proc.mjs';
@@ -223,14 +223,7 @@ function stringifyEnv(env) {
   return lines.join('\n') + '\n';
 }
 
-async function readExistingEnv(path) {
-  try {
-    const raw = await readFile(path, 'utf-8');
-    return raw;
-  } catch {
-    return '';
-  }
-}
+const readExistingEnv = readTextOrEmpty;
 
 function resolveDefaultComponentDirs({ rootDir }) {
   const componentNames = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];

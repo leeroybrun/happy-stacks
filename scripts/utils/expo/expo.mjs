@@ -3,6 +3,9 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { isPidAlive } from '../proc/pids.mjs';
+
+export { isPidAlive };
 
 function hashDir(dir) {
   return createHash('sha1').update(String(dir ?? '')).digest('hex').slice(0, 12);
@@ -53,15 +56,6 @@ export async function readPidState(statePath) {
     return state;
   } catch {
     return null;
-  }
-}
-
-export function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 
