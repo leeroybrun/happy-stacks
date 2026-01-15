@@ -9,16 +9,18 @@ import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { fetchHappyHealth } from './utils/server/server.mjs';
+import { waitForHappyHealthOk } from './utils/server/server.mjs';
 import { tailscaleServeEnable, tailscaleServeHttpsUrlForInternalServerUrl } from './tailscale.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { parseDotenv } from './utils/env/dotenv.mjs';
 import { installService } from './service.mjs';
 import { getDevAuthKeyPath } from './utils/auth/dev_key.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { boolFromFlags, boolFromFlagsOrKv } from './utils/cli/flags.mjs';
+import { openUrlInBrowser } from './utils/ui/browser.mjs';
+import { commandExists } from './utils/proc/commands.mjs';
+import { readEnvValueFromFile } from './utils/env/read.mjs';
 
 function normalizeProfile(raw) {
   const v = (raw ?? '').trim().toLowerCase();
@@ -34,65 +36,6 @@ function normalizeServer(raw) {
   if (v === 'light' || v === 'server-light' || v === 'happy-server-light') return 'happy-server-light';
   if (v === 'server' || v === 'full' || v === 'happy-server') return 'happy-server';
   return '';
-}
-
-async function commandExists(cmd) {
-  try {
-    const out = (await runCapture('sh', ['-lc', `command -v ${cmd} >/dev/null 2>&1 && echo yes || echo no`])).trim();
-    return out === 'yes';
-  } catch {
-    return false;
-  }
-}
-
-async function openUrl(url) {
-  const u = String(url ?? '').trim();
-  if (!u) return false;
-  if (process.platform === 'darwin') {
-    await run('open', [u]).catch(() => {});
-    return true;
-  }
-  if (process.platform === 'linux') {
-    if (await commandExists('xdg-open')) {
-      await run('xdg-open', [u]).catch(() => {});
-      return true;
-    }
-    return false;
-  }
-  return false;
-}
-
-async function waitForHealthOk(internalServerUrl, { timeoutMs = 60_000 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
-    const health = await fetchHappyHealth(internalServerUrl);
-    if (health.ok) {
-      return true;
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  return false;
-}
-
-function parseEnvFileText(text) {
-  try {
-    return parseDotenv(text ?? '');
-  } catch {
-    return new Map();
-  }
-}
-
-async function readEnvValueFromFile(envPath, key) {
-  try {
-    if (!envPath || !existsSync(envPath)) return '';
-    const raw = await readFile(envPath, 'utf-8');
-    const parsed = parseEnvFileText(raw);
-    return (parsed.get(key) ?? '').trim();
-  } catch {
-    return '';
-  }
 }
 
 async function resolveMainServerPort() {
@@ -629,12 +572,12 @@ async function cmdSetup({ rootDir, argv }) {
         // eslint-disable-next-line no-console
         console.log(res.enableUrl);
         // Best-effort open
-        await openUrl(res.enableUrl);
+        await openUrlInBrowser(res.enableUrl).catch(() => {});
       }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.log('[setup] tailscale not available. Install it from: https://tailscale.com/download');
-      await openUrl('https://tailscale.com/download');
+      await openUrlInBrowser('https://tailscale.com/download').catch(() => {});
     }
   }
 
@@ -648,7 +591,7 @@ async function cmdSetup({ rootDir, argv }) {
       await spawnDetachedNodeScript({ rootDir, rel: 'scripts/run.mjs', args: [] });
     }
 
-    const ready = await waitForHealthOk(internalServerUrl, { timeoutMs: 90_000 });
+    const ready = await waitForHappyHealthOk(internalServerUrl, { timeoutMs: 90_000 });
     if (!ready) {
       // eslint-disable-next-line no-console
       console.log(`[setup] started, but server did not become healthy yet: ${internalServerUrl}`);
@@ -726,7 +669,7 @@ async function cmdSetup({ rootDir, argv }) {
       console.log('[setup] tip: when you are ready, authenticate with: happys auth login');
     }
 
-    await openUrl(openTarget);
+    await openUrlInBrowser(openTarget).catch(() => {});
     // eslint-disable-next-line no-console
     console.log(`[setup] open: ${openTarget}`);
   }

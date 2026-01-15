@@ -59,6 +59,18 @@ export async function isHappyServerRunning(baseUrl) {
   return true;
 }
 
+export async function waitForHappyHealthOk(baseUrl, { timeoutMs = 60_000, intervalMs = 300 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    const health = await fetchHappyHealth(baseUrl);
+    if (health.ok) return true;
+    // eslint-disable-next-line no-await-in-loop
+    await delay(intervalMs);
+  }
+  return false;
+}
+
 export async function waitForServerReady(url) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {

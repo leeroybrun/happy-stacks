@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
+import { commandExists } from './utils/proc/commands.mjs';
 import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths/paths.mjs';
 import { inferRemoteNameForOwner, parseGithubOwner } from './utils/git/worktrees.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
@@ -1243,15 +1244,6 @@ async function cmdSync({ rootDir, argv }) {
   await git(repoRoot, ['branch', '--set-upstream-to', `${remoteName}/${defaultBranch}`, mirrorBranch]).catch(() => {});
 
   return { component, remote: remoteName, mirrorBranch, upstreamRef: `${remoteName}/${defaultBranch}` };
-}
-
-async function commandExists(cmd) {
-  try {
-    const out = (await runCapture('sh', ['-lc', `command -v ${cmd} >/dev/null 2>&1 && echo yes || echo no`])).trim();
-    return out === 'yes';
-  } catch {
-    return false;
-  }
 }
 
 async function fileExists(path) {
