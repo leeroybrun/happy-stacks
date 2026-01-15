@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { commandExists } from './utils/proc/commands.mjs';
+import { commandExists, resolveCommandPath } from './utils/proc/commands.mjs';
 import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths/paths.mjs';
 import { inferRemoteNameForOwner, parseGithubOwner } from './utils/git/worktrees.mjs';
 import { getWorktreesRoot } from './utils/git/worktrees.mjs';
@@ -1372,14 +1372,15 @@ async function cmdCode({ rootDir, argv }) {
   if (!(await pathExists(dir))) {
     throw new Error(`[wt] target does not exist: ${dir}`);
   }
-  if (!(await commandExists('code'))) {
+  const codePath = await resolveCommandPath('code', { cwd: rootDir, env: process.env });
+  if (!codePath) {
     throw new Error("[wt] VS Code CLI 'code' not found on PATH. In VS Code: Cmd+Shift+P → 'Shell Command: Install code command in PATH'.");
   }
   if (json) {
-    return { component, dir, cmd: 'code' };
+    return { component, dir, cmd: 'code', resolvedCmd: codePath };
   }
-  await run('code', [dir], { cwd: rootDir, env: process.env, stdio: 'inherit' });
-  return { component, dir, cmd: 'code' };
+  await run(codePath, [dir], { cwd: rootDir, env: process.env, stdio: 'inherit' });
+  return { component, dir, cmd: 'code', resolvedCmd: codePath };
 }
 
 async function cmdCursor({ rootDir, argv }) {
@@ -1396,14 +1397,20 @@ async function cmdCursor({ rootDir, argv }) {
     throw new Error(`[wt] target does not exist: ${dir}`);
   }
 
-  const hasCursorCli = await commandExists('cursor');
+  const cursorPath = await resolveCommandPath('cursor', { cwd: rootDir, env: process.env });
+  const hasCursorCli = Boolean(cursorPath);
   if (json) {
-    return { component, dir, cmd: hasCursorCli ? 'cursor' : process.platform === 'darwin' ? 'open -a Cursor' : null };
+    return {
+      component,
+      dir,
+      cmd: hasCursorCli ? 'cursor' : process.platform === 'darwin' ? 'open -a Cursor' : null,
+      resolvedCmd: cursorPath || null,
+    };
   }
 
   if (hasCursorCli) {
-    await run('cursor', [dir], { cwd: rootDir, env: process.env, stdio: 'inherit' });
-    return { component, dir, cmd: 'cursor' };
+    await run(cursorPath, [dir], { cwd: rootDir, env: process.env, stdio: 'inherit' });
+    return { component, dir, cmd: 'cursor', resolvedCmd: cursorPath };
   }
 
   if (process.platform === 'darwin') {
