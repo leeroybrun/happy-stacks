@@ -53,5 +53,10 @@ export async function resolveServerUrls({ env = process.env, serverPort, allowEn
   };
 }
 
+export function getInternalServerUrl({ env = process.env, defaultPort = 3005 } = {}) {
+  const port = resolveServerPortFromEnv({ env, defaultPort });
+  return { port, internalServerUrl: `http://127.0.0.1:${port}` };
+}
+
 export { resolveServerPortFromEnv };
 

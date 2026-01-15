@@ -4,7 +4,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
-import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
+import { getInternalServerUrl, getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -32,9 +32,9 @@ import {
 } from './utils/stack/dirs.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 
-function getInternalServerUrl() {
-  const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
-  return { port: n, url: `http://127.0.0.1:${n}` };
+function getInternalServerUrlCompat() {
+  const { port, internalServerUrl } = getInternalServerUrl({ env: process.env, defaultPort: 3005 });
+  return { port, url: internalServerUrl };
 }
 
 function resolveEnvWebappUrlForStack({ stackName }) {
@@ -654,7 +654,7 @@ async function cmdCopyFrom({ argv, json }) {
       // so we can seed DB accounts reliably.
       const managed = (targetEnv.HAPPY_STACKS_MANAGED_INFRA ?? targetEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1').toString().trim() !== '0';
       if (targetServerComponent === 'happy-server' && withInfra && managed) {
-        const { port } = getInternalServerUrl();
+        const { port } = getInternalServerUrlCompat();
         const publicServerUrl = `http://localhost:${port}`;
         const envPath = resolveStackEnvPath(stackName).envPath;
         const infra = await ensureHappyServerManagedInfra({
@@ -757,7 +757,7 @@ async function cmdStatus({ json }) {
   const rootDir = getRootDir(import.meta.url);
   const stackName = getStackName();
 
-  const { port, url: internalServerUrl } = getInternalServerUrl();
+  const { port, url: internalServerUrl } = getInternalServerUrlCompat();
   const { defaultPublicUrl, envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port, stackName });
   const { publicServerUrl } = await resolvePublicServerUrl({
     internalServerUrl,
@@ -842,7 +842,7 @@ async function cmdLogin({ argv, json }) {
   const stackName = getStackName();
   const { kv } = parseArgs(argv);
 
-  const { port, url: internalServerUrl } = getInternalServerUrl();
+  const { port, url: internalServerUrl } = getInternalServerUrlCompat();
   const { defaultPublicUrl, envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port, stackName });
   const { publicServerUrl } = await resolvePublicServerUrl({
     internalServerUrl,

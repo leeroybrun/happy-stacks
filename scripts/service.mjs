@@ -1,7 +1,7 @@
 import './utils/env/env.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
+import { getInternalServerUrl, getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/service/autostart_darwin.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
@@ -34,11 +34,6 @@ function getUid() {
   // (LaunchAgents run in a user context so this is fine.)
   const n = Number(process.env.UID);
   return Number.isFinite(n) ? n : null;
-}
-
-function getInternalUrl() {
-  const port = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
-  return `http://127.0.0.1:${port}`;
 }
 
 function getAutostartEnv({ rootDir }) {
@@ -268,7 +263,7 @@ async function startLaunchAgent({ persistent }) {
 
 async function postStartDiagnostics() {
   const rootDir = getRootDir(import.meta.url);
-  const internalUrl = getInternalUrl();
+  const internalUrl = getInternalServerUrl({ env: process.env, defaultPort: 3005 }).internalServerUrl;
 
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
     ? process.env.HAPPY_LOCAL_CLI_HOME_DIR.trim().replace(/^~(?=\/)/, homedir())
@@ -465,7 +460,7 @@ async function waitForLaunchAgentStopped({ timeoutMs = 8000 } = {}) {
 
 async function showStatus() {
   const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
-  const internalUrl = getInternalUrl();
+  const internalUrl = getInternalServerUrl({ env: process.env, defaultPort: 3005 }).internalServerUrl;
 
   console.log(`label: ${label}`);
   console.log(`plist: ${plistPath} ${existsSync(plistPath) ? '(present)' : '(missing)'}`);
@@ -554,7 +549,7 @@ async function main() {
       return;
     case 'status':
       if (json) {
-        const internalUrl = getInternalUrl();
+        const internalUrl = getInternalServerUrl({ env: process.env, defaultPort: 3005 }).internalServerUrl;
         let health = null;
         try {
           const res = await fetch(`${internalUrl}/health`, { method: 'GET' });
