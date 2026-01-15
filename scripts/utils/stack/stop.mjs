@@ -8,13 +8,7 @@ import { stopLocalDaemon } from '../../daemon.mjs';
 import { stopHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { deleteStackRuntimeStateFile, getStackRuntimeStatePath, readStackRuntimeStateFile } from './runtime_state.mjs';
 import { killPidOwnedByStack, killProcessGroupOwnedByStack, listPidsWithEnvNeedle } from '../proc/ownership.mjs';
-
-function parseIntOrNull(raw) {
-  const s = String(raw ?? '').trim();
-  if (!s) return null;
-  const n = Number(s);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+import { coercePort } from '../server/port.mjs';
 
 function resolveServerComponentFromStackEnv(env) {
   const v =
@@ -139,8 +133,8 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
   };
 
   const serverComponent = resolveServerComponentFromStackEnv(env);
-  const port = parseIntOrNull(env.HAPPY_STACKS_SERVER_PORT ?? env.HAPPY_LOCAL_SERVER_PORT);
-  const backendPort = parseIntOrNull(env.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? env.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT);
+  const port = coercePort(env.HAPPY_STACKS_SERVER_PORT ?? env.HAPPY_LOCAL_SERVER_PORT);
+  const backendPort = coercePort(env.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? env.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT);
   const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? join(baseDir, 'cli')).toString();
   const cliBin = join(getComponentDir(rootDir, 'happy-cli'), 'bin', 'happy.mjs');
   const envPath = (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString();

@@ -1,5 +1,12 @@
 import { readEnvValueFromFile } from '../env/read.mjs';
 
+export function coercePort(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export function resolveServerPortFromEnv({ env = process.env, defaultPort = 3005 } = {}) {
   const raw =
     (env.HAPPY_STACKS_SERVER_PORT ?? '').toString().trim() ||
@@ -7,6 +14,17 @@ export function resolveServerPortFromEnv({ env = process.env, defaultPort = 3005
     '';
   const n = raw ? Number(raw) : Number(defaultPort);
   return Number.isFinite(n) && n > 0 ? n : Number(defaultPort);
+}
+
+export function listPortsFromEnvObject(env, keys) {
+  const obj = env && typeof env === 'object' ? env : {};
+  const list = Array.isArray(keys) ? keys : [];
+  const out = [];
+  for (const k of list) {
+    const p = coercePort(obj[k]);
+    if (p) out.push(p);
+  }
+  return out;
 }
 
 export async function readServerPortFromEnvFile(envPath, { defaultPort = 3005 } = {}) {

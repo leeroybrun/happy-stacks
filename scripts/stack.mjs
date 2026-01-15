@@ -41,6 +41,7 @@ import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_sec
 import { readPinnedServerPortFromEnvFile } from './utils/server/port.mjs';
 import { getEnvValue, getEnvValueAny } from './utils/env/values.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
+import { coercePort } from './utils/server/port.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
@@ -102,9 +103,8 @@ async function readPortsFromEnvFile(envPath) {
   ];
   const ports = [];
   for (const k of keys) {
-    const rawV = (parsed[k] ?? '').toString().trim();
-    const n = rawV ? Number(rawV) : NaN;
-    if (Number.isFinite(n) && n > 0) ports.push(n);
+    const n = coercePort(parsed[k]);
+    if (n) ports.push(n);
   }
   return ports;
 }

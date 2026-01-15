@@ -10,11 +10,7 @@ import { pickNextFreeTcpPort } from '../../net/ports.mjs';
 import { pmExecBin } from '../../proc/pm.mjs';
 import { run, runCapture } from '../../proc/proc.mjs';
 import { randomToken } from '../../crypto/tokens.mjs';
-
-function coercePort(v) {
-  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+import { coercePort } from '../port.mjs';
 
 const readEnvObject = readEnvObjectFromFile;
 
