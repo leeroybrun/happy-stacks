@@ -5,6 +5,7 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/pro
 import { createHash } from 'node:crypto';
 
 import { pathExists } from '../fs/fs.mjs';
+import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
 import { commandExists } from './commands.mjs';
 import { getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
@@ -12,24 +13,6 @@ import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.
 
 function sha256Hex(s) {
   return createHash('sha256').update(String(s ?? ''), 'utf-8').digest('hex');
-}
-
-async function readJsonIfExists(path) {
-  try {
-    if (!path || !existsSync(path)) return null;
-    const raw = await readFile(path, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-async function writeJsonAtomic(path, value) {
-  const dir = dirname(path);
-  await mkdir(dir, { recursive: true }).catch(() => {});
-  const tmp = join(dir, `.tmp.${Date.now()}.${Math.random().toString(16).slice(2)}.json`);
-  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n', 'utf-8');
-  await rename(tmp, path);
 }
 
 function resolveBuildStatePath({ label, dir }) {

@@ -5,6 +5,7 @@ import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, re
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
 import { getInternalServerUrl, getPublicServerUrlEnvOverride, getWebappUrlEnvOverride } from './utils/server/urls.mjs';
+import { fetchHappyHealth } from './utils/server/server.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -109,20 +110,6 @@ function checkDaemonState(cliHomeDir) {
   }
 
   return { status: 'stopped' };
-}
-
-async function fetchHealth(internalServerUrl) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 1500);
-  try {
-    const res = await fetch(`${internalServerUrl}/health`, { method: 'GET', signal: ctl.signal });
-    const body = (await res.text()).trim();
-    return { ok: res.ok, status: res.status, body };
-  } catch {
-    return { ok: false, status: null, body: null };
-  } finally {
-    clearTimeout(t);
-  }
 }
 
 function authLoginSuggestion(stackName) {
@@ -756,7 +743,12 @@ async function cmdStatus({ json }) {
   };
 
   const daemon = checkDaemonState(cliHomeDir);
-  const health = await fetchHealth(internalServerUrl);
+  const healthRaw = await fetchHappyHealth(internalServerUrl);
+  const health = {
+    ok: Boolean(healthRaw.ok),
+    status: healthRaw.status,
+    body: healthRaw.text ? healthRaw.text.trim() : null,
+  };
 
   const out = {
     stackName,

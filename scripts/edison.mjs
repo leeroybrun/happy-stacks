@@ -4,6 +4,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
+import { readJsonIfExists } from './utils/fs/json.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { sanitizeStackName } from './utils/stack/names.mjs';
@@ -33,17 +34,6 @@ async function readExistingEnv(path) {
     return raw;
   } catch {
     return '';
-  }
-}
-
-async function readJsonIfExists(path) {
-  try {
-    if (!path || !(await pathExists(path))) return null;
-    const raw = await readFile(path, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
   }
 }
 

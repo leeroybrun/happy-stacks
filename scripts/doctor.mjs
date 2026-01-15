@@ -6,6 +6,7 @@ import { resolveCommandPath } from './utils/proc/commands.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/net/ports.mjs';
 import { getServerComponentName } from './utils/server/server.mjs';
+import { fetchHappyHealth } from './utils/server/server.mjs';
 import { daemonStatusSummary } from './daemon.mjs';
 import { tailscaleServeStatus } from './tailscale.mjs';
 import { homedir } from 'node:os';
@@ -44,7 +45,8 @@ async function fetchHealth(url) {
   };
 
   // Prefer /health when available, but fall back to / (matches waitForServerReady).
-  const health = await tryGet('/health');
+  const healthRaw = await fetchHappyHealth(url);
+  const health = { ok: healthRaw.ok, status: healthRaw.status, body: healthRaw.text ? healthRaw.text.trim() : null };
   if (health.ok) {
     return health;
   }

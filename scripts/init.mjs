@@ -7,16 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { ensureCanonicalHomeEnvUpdated, ensureHomeEnvUpdated } from './utils/env/config.mjs';
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
+import { readJsonIfExists } from './utils/fs/json.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
-
-async function readJsonIfExists(path) {
-  try {
-    const raw = await readFile(path, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
 
 function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
