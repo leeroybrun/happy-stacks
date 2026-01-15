@@ -770,7 +770,7 @@ log_debug('here')  // NO debug breadcrumbs!
 1. **Test first**: Write test before implementation (TDD)
 2. **Verify failure**: Test must fail before implementation
 3. **Real integration**: Test real dependencies when feasible (refer to TDD guidelines)
-4. **Fast tests**: Unit tests <100ms, integration tests <1s
+4. **Fast tests**: Unit tests <100ms, integration tests <1000ms
 5. **Isolated tests**: Use unique identifiers, ensure proper cleanup
 
 #### Feature Implementer
@@ -1990,10 +1990,10 @@ edison evidence capture <task-id>         # Capture preset-required evidence (ma
 | Test Type | Target Time | Description |
 |-----------|-------------|-------------|
 | Unit tests | <100ms each | Pure logic, no external dependencies |
-| Integration tests | <1s each | Multiple components working together |
+| Integration tests | <1000ms each | Multiple components working together |
 | API/Service tests | <100ms each | Service layer with real dependencies |
 | UI/Component tests | <200ms each | Rendering and interaction tests |
-| End-to-End tests | <5s each | Full user journey tests |
+| End-to-End tests | <5000ms each | Full user journey tests |
 <!-- /section: agent-execution -->
 
 <!-- section: validator-check -->
@@ -3094,7 +3094,7 @@ edison session next <session-id>
 1. 📋 **APPLICABLE RULES** - Read FIRST before taking action
 2. 🎯 **RECOMMENDED ACTIONS** - Read AFTER understanding rules
 3. 🤖 **DELEGATION HINT** - Follow delegation priority chain
-4. 🔍 **VALIDATORS** - Auto-detected from git diff
+4. 🔍 **VALIDATORS** - Auto-detected from the task diff (source depends on `diffReview.mode={{config.diffReview.mode}}`)
 
 **Example:**
 ```bash
@@ -4035,7 +4035,7 @@ Shows complete validator roster (always-required + triggered + optional).
 
 **Each validator will handle:**
 - ✅ Calling `edison session track start` (their mandatory first step)
-- ✅ Loading context (QA brief, implementation report, evidence, git diff)
+- ✅ Loading context (QA brief, implementation report, evidence, task diff)
 - ✅ Querying Context7 (if context7Required in their config)
 - ✅ Filling validator report as they validate
 - ✅ Determining verdict (approve/reject/blocked)
@@ -4314,7 +4314,7 @@ mcp__context7__query-docs({
 - When HMAC stamping is enabled in config, include the stamped digest inside each marker.
 
 ## Auto-detection & enforcement
-- `edison task done` auto-detects Context7‑detected packages from the git diff and blocks completion if matching markers are absent.
+- `edison task done` auto-detects Context7‑detected packages from the task diff and blocks completion if matching markers are absent.
 - State machine guards reuse the detection results; you cannot bypass Context7 by skipping the done step.
 - Use `--session <id>` so detection runs against the correct session worktree.
 
@@ -5039,7 +5039,8 @@ cli  /
 Run after implementation is complete and before a task can advance beyond `{{fn:semantic_state("task","done")}}/`. QA briefs are the canonical validation record.
 
 ## Validation Checklist (fail-closed)
-- Build the triggered validator roster from the merged `validation.validators` config (core → packs → user → project) and the task/session file context (git diff + primary files).
+- Build the triggered validator roster from the merged `validation.validators` config (core → packs → user → project) and the task/session file context (task diff + primary files).
+  - Diff source is configurable: `diffReview.mode={{config.diffReview.mode}}` (git vs evidence).
 - Command evidence passing for the **current repo fingerprint** (preset-driven). Inspect with `edison evidence status <task-id> [--preset <preset>]` and capture with `edison evidence capture <task-id> [--preset <preset>]`.
 - QA brief exists in `qa/{{fn:semantic_states("qa","waiting,todo,wip","brace")}}` with roster, commands, expected results, and evidence links; never duplicate QA files.
 - Bundle manifest generated before launching validators (see Bundle section).
@@ -5665,7 +5666,7 @@ Validators may add domain-specific sections:
 
 - **Stack-specific**: Language/runtime conventions, framework patterns, async/concurrency rules (when applicable)
 - **Edison**: CLI command patterns, configuration patterns, entity patterns, platform output compliance
-- **Global**: Checklist, Context7 refresh notes, git diff analysis
+- **Global**: Checklist, Context7 refresh notes, task diff analysis
 
 ## Guideline: validators/VALIDATOR_COMMON
 
@@ -5693,7 +5694,7 @@ Validators are **independent code reviewers** that ensure production-ready quali
 
 ### What You Have Access To:
 1. The task requirements (provided in your context)
-2. The task diff (via git diff or canonical evidence, depending on project configuration)
+2. The task diff (source depends on `diffReview.mode={{config.diffReview.mode}}`)
 3. The current codebase state
 4. Evidence files from verification commands
 
@@ -5772,7 +5773,7 @@ Every validator MUST perform these universal checks:
 - ✅ All files created/modified as specified
 - ✅ No `TODO` or `FIXME` comments in production code
 - ✅ No commented-out code
-- ✅ If Edison session worktrees are disabled, validate in the project’s chosen isolation context (e.g., stack/worktree tooling) and do not assume the git diff is session-scoped.
+- ✅ If Edison session worktrees are disabled, validate in the project’s chosen isolation context (e.g., stack/worktree tooling) and do not assume the task diff is session-scoped.
 - ✅ If the diff contains unrelated changes (multi-LLM / in-flight work is common):
   - Do NOT suggest destructive "cleanup" (no `git reset/restore/clean/switch`, etc.)
   - Focus only on the changes relevant to the task requirements
@@ -5981,7 +5982,7 @@ Production quality means PRODUCTION quality - no shortcuts.
 # Validator Guidelines (Core)
 
 - Stay independent from implementation: do not validate work you implemented or reviewed.
-- Load the QA brief, bundle manifest, implementation report, evidence, and git diff before judging.
+- Load the QA brief, bundle manifest, implementation report, evidence, and the task diff before judging.
 - Refresh Context7 for any post-training packages in scope; add markers if missing.
 - Follow the validator roster and model bindings from the project config; do not substitute models.
 - Run required automation or reproduction steps exactly as listed; capture outputs in evidence.
@@ -5994,7 +5995,7 @@ Production quality means PRODUCTION quality - no shortcuts.
 # Validator Workflow (Core)
 
 1. **Intake** – Open the QA brief and bundle manifest; confirm the task/QA state matches the manifest. If QA is missing or duplicated, halt and notify the orchestrator.
-2. **Load context** – Read the implementation report, evidence files, and git diff. Note the automation outputs and Context7 markers for post-training packages.
+2. **Load context** – Read the implementation report, evidence files, and the task diff. Note the automation outputs and Context7 markers for post-training packages.
 3. **Prepare checks** – Map changed files to required validators; verify your validator role/model matches the config. Set up any local services the QA specifies.
 4. **Execute** – Run the prescribed commands/tests. Capture output to evidence files under the current `round-<N>/` directory.
 5. **Findings** – Document issues with severity, category, location, and recommended fix. Note any follow-up tasks needed and whether they are blocking.

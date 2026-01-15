@@ -330,10 +330,10 @@ edison evidence capture <task-id>         # Capture preset-required evidence (ma
 | Test Type | Target Time | Description |
 |-----------|-------------|-------------|
 | Unit tests | <100ms each | Pure logic, no external dependencies |
-| Integration tests | <1s each | Multiple components working together |
+| Integration tests | <1000ms each | Multiple components working together |
 | API/Service tests | <100ms each | Service layer with real dependencies |
 | UI/Component tests | <200ms each | Rendering and interaction tests |
-| End-to-End tests | <5s each | Full user journey tests |
+| End-to-End tests | <5000ms each | Full user journey tests |
 
 ---
 

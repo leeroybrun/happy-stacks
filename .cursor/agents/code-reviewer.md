@@ -353,10 +353,10 @@ edison evidence capture <task-id>         # Capture preset-required evidence (ma
 | Test Type | Target Time | Description |
 |-----------|-------------|-------------|
 | Unit tests | <100ms each | Pure logic, no external dependencies |
-| Integration tests | <1s each | Multiple components working together |
+| Integration tests | <1000ms each | Multiple components working together |
 | API/Service tests | <100ms each | Service layer with real dependencies |
 | UI/Component tests | <200ms each | Rendering and interaction tests |
-| End-to-End tests | <5s each | Full user journey tests |
+| End-to-End tests | <5000ms each | Full user journey tests |
 
 ---
 
@@ -745,7 +745,7 @@ Continue working until the Edison session is complete:
 
 ### Step 1: Receive Review Request
 
-Receive changed files and git diff from orchestrator.
+Receive changed files and the task diff from orchestrator (source depends on `diffReview.mode=evidence`).
 
 ### Step 2: Read Changed Files
 
@@ -774,12 +774,10 @@ Bash({ command: 'git log --oneline file1.* file1.test.*' })
 
 **TDD Compliance** (CRITICAL):
 - [ ] Tests written BEFORE code (check git history when available)
-{{if:not(config-eq(noMocks.enforcement, off))}}
 - [ ] Tests test real behavior (avoid internal mocks)
 - [ ] All tests passing
 - [ ] No skipped tests
 - [ ] Coverage meets target
-{{/if}}
 
 **Code Quality**:
 - [ ] No `TODO`/`FIXME` comments

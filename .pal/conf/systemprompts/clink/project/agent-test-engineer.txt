@@ -353,10 +353,10 @@ edison evidence capture <task-id>         # Capture preset-required evidence (ma
 | Test Type | Target Time | Description |
 |-----------|-------------|-------------|
 | Unit tests | <100ms each | Pure logic, no external dependencies |
-| Integration tests | <1s each | Multiple components working together |
+| Integration tests | <1000ms each | Multiple components working together |
 | API/Service tests | <100ms each | Service layer with real dependencies |
 | UI/Component tests | <200ms each | Rendering and interaction tests |
-| End-to-End tests | <5s each | Full user journey tests |
+| End-to-End tests | <5000ms each | Full user journey tests |
 
 ---
 
@@ -690,7 +690,6 @@ Continue working until the Edison session is complete:
 - Keep validators independent from implementers.
 - Do not stop early when work remains.
 <!-- END ANCHOR: continuation-guidance -->
-{{/if}}
 
 ---
 
@@ -863,10 +862,9 @@ test("renders and handles interaction"):
 
 ## Important Rules
 
-{{if:not(config-eq(tdd.enforcement, off))}}
 - **TEST FIRST, ALWAYS**: Write test before code (RED-GREEN-REFACTOR)
 - **VERIFY FAILURE**: Test must fail before implementation
-- **FAST TESTS**: <100ms unit, <1s integration
+- **FAST TESTS**: unit <100ms, integration <1000ms
 - **ISOLATED TESTS**: Use unique IDs, templates handle cleanup
 - **QUALITY > COVERAGE**: 80% coverage with good tests > 100% with weak tests
 

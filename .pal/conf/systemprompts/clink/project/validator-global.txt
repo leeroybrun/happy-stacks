@@ -112,7 +112,7 @@ If it is empty, discover the correct diff command name from `edison evidence sta
 ### 7. Architecture
 - ✅ Business logic separated from UI
 - ✅ Validation schemas reusable
-- ✅ No magic numbers
+- ✅ No magic numbers (config-driven behavior; avoid hardcoding)
 
 ### 8. Best Practices
 - ✅ Framework conventions followed

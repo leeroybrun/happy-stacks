@@ -353,10 +353,10 @@ edison evidence capture <task-id>         # Capture preset-required evidence (ma
 | Test Type | Target Time | Description |
 |-----------|-------------|-------------|
 | Unit tests | <100ms each | Pure logic, no external dependencies |
-| Integration tests | <1s each | Multiple components working together |
+| Integration tests | <1000ms each | Multiple components working together |
 | API/Service tests | <100ms each | Service layer with real dependencies |
 | UI/Component tests | <200ms each | Rendering and interaction tests |
-| End-to-End tests | <5s each | Full user journey tests |
+| End-to-End tests | <5000ms each | Full user journey tests |
 
 ---
 
@@ -690,7 +690,6 @@ Continue working until the Edison session is complete:
 - Keep validators independent from implementers.
 - Do not stop early when work remains.
 <!-- END ANCHOR: continuation-guidance -->
-{{/if}}
 
 ---
 
@@ -760,8 +759,7 @@ Continue working until the Edison session is complete:
    - Database models (if needed)
    - API route handlers
    - Business logic
-{{if:not(config-eq(tdd.enforcement, off))}}
-   - Tests (TDD: write tests first!)
+- Tests (TDD: write tests first!)
 
 2. **Frontend**:
    - Data fetching hooks

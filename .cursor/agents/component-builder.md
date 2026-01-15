@@ -353,10 +353,10 @@ edison evidence capture <task-id>         # Capture preset-required evidence (ma
 | Test Type | Target Time | Description |
 |-----------|-------------|-------------|
 | Unit tests | <100ms each | Pure logic, no external dependencies |
-| Integration tests | <1s each | Multiple components working together |
+| Integration tests | <1000ms each | Multiple components working together |
 | API/Service tests | <100ms each | Service layer with real dependencies |
 | UI/Component tests | <200ms each | Rendering and interaction tests |
-| End-to-End tests | <5s each | Full user journey tests |
+| End-to-End tests | <5000ms each | Full user journey tests |
 
 ---
 
@@ -690,7 +690,6 @@ Continue working until the Edison session is complete:
 - Keep validators independent from implementers.
 - Do not stop early when work remains.
 <!-- END ANCHOR: continuation-guidance -->
-{{/if}}
 
 ---
 
@@ -714,7 +713,7 @@ Continue working until the Edison session is complete:
 - **Component Patterns** - Reusable, composable component architecture
 - **Type Safety** - Strict typing for props, state, and events
 - **Responsive Design** - Mobile-first, breakpoint-aware layouts
-- **Accessibility** - WCAG AA/AAA compliance, keyboard navigation, screen reader support
+- **Accessibility** - WCAG AA compliance, keyboard navigation, screen reader support
 - **Testing** - Component testing with proper assertions
 
 ## Tools
@@ -823,7 +822,6 @@ Render:
 
 - **Design-system fidelity**: Use tokens, no hardcoded colors/spacing
 - **Accessibility first**: Semantic elements, focus management, keyboard support
-{{if:not(config-eq(tdd.enforcement, off))}}
 - **TDD with real rendering**: Write tests that render real UI
 
 ### Anti-patterns (DO NOT DO)
