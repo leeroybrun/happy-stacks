@@ -26,13 +26,17 @@ You are a **security expert** reviewing code for vulnerabilities. Your job is to
 ### Step 1: Load Framework-Specific Security Context
 Consult the tech-stack section for framework-specific security patterns.
 
-### Step 2: Review Git Diff for Security Changes
+### Step 2: Review Task Diff for Security Changes (via Evidence)
+
+In multi-component projects, security review should be based on the canonical diff evidence.
 
 ```bash
-git status --porcelain
-git diff                      # Uncommitted changes (may be empty)
-git diff {{config.git.defaultBranch}}...HEAD          # Committed changes on this branch/worktree
+edison evidence status <task-id>
+edison evidence show <task-id> --command <diff-command>
 ```
+
+If configured, `<diff-command>` is the value of `diffReview.evidenceCommand` (current value: task-diff).
+If it is empty, discover the correct diff command name from `edison evidence status <task-id>`.
 
 **Focus on**:
 - New API endpoints (auth? validation?)
@@ -157,7 +161,7 @@ The validator should load and **merge core + pack security rules** using the con
 ## Remember
 
 - **Zero tolerance** for security vulnerabilities
-- **Check git diff** for new security risks
+- **Check the task diff evidence** for new security risks
 - **Block task completion** if ANY vulnerability found
 - **Be thorough** - production security depends on this
 

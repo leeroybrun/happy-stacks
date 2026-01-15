@@ -5681,7 +5681,7 @@ Validators are **independent code reviewers** that ensure production-ready quali
 
 **Key Characteristics**:
 - **Independent**: No visibility into orchestrator or sub-agent discussions
-- **Objective**: Only see task requirements, git diff, and codebase state
+- **Objective**: Only see task requirements, the task diff, and codebase state
 - **Unbiased**: Validate based on evidence and standards, not assumptions
 - **Thorough**: Don't skip edge cases, error paths, or security implications
 
@@ -5693,7 +5693,7 @@ Validators are **independent code reviewers** that ensure production-ready quali
 
 ### What You Have Access To:
 1. The task requirements (provided in your context)
-2. The git diff (uncommitted changes)
+2. The task diff (via git diff or canonical evidence, depending on project configuration)
 3. The current codebase state
 4. Evidence files from verification commands
 
@@ -5720,11 +5720,14 @@ Validators are **independent code reviewers** that ensure production-ready quali
 
 Collect evidence BEFORE validating:
 
-#### Review Git Diff
+#### Review Task Diff (via Evidence)
 ```bash
-git diff --cached  # Staged changes
-git diff           # Unstaged changes
+edison evidence status <task-id>
+edison evidence show <task-id> --command <diff-command>
 ```
+If configured, `<diff-command>` is the value of `diffReview.evidenceCommand` (current value: task-diff).
+If it is empty, discover the correct diff command name from `edison evidence status <task-id>`.
+
 **Critical Questions**:
 - ✅ **Scope Compliance**: Do changes match task requirements EXACTLY?
 - ✅ **Unintended Deletions**: Was any code accidentally removed?

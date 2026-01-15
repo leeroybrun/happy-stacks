@@ -37,10 +37,15 @@ mcp__context7__get_library_docs({
 
 ### Step 2: Check Changed Database Files
 
+In multi-component projects, prefer reviewing the canonical diff evidence and then focus on the database-related files within it.
+
 ```bash
-git diff --cached -- 'prisma/**/*'
-git diff -- 'prisma/**/*'
+edison evidence status <task-id>
+edison evidence show <task-id> --command <diff-command>
 ```
+
+If configured, `<diff-command>` is the value of `diffReview.evidenceCommand` (current value: task-diff).
+If it is empty, discover the correct diff command name from `edison evidence status <task-id>`.
 
 ### Step 3: Run Database Checklist
 

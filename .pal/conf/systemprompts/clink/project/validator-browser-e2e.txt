@@ -30,10 +30,15 @@ You are intentionally adversarial:
 
 ### Step 1: Read the Diff and Identify Affected Journeys
 
+In multi-component projects, prefer reviewing the canonical diff evidence (often per-component) and derive the user journeys from that diff.
+
 ```bash
-git diff --cached
-git diff
+edison evidence status <task-id>
+edison evidence show <task-id> --command <diff-command>
 ```
+
+If configured, `<diff-command>` is the value of `diffReview.evidenceCommand` (current value: task-diff).
+If it is empty, discover the correct diff command name from `edison evidence status <task-id>`.
 
 Derive the user journeys to validate:
 - entry points (deep links, navigation paths)

@@ -24,8 +24,9 @@ You are running inside an automated Edison validation run (non-interactive).
 - Prefer reviewing the task diff evidence if present (see below), otherwise review the working tree diff.
 
 **Evidence-aware diff selection (preferred order)**:
-1. If the prelude provides an **Evidence Round Dir**, and it contains `command-task-diff.txt`, treat that as the canonical PR-style diff for review.
-2. Otherwise, use `git diff` / the repository state at the provided Worktree path.
+1. If the prelude provides an **Evidence Round Dir**, and it contains a project-provided PR-style diff evidence (often `command-task-diff.txt`), treat that as the canonical diff for review.
+2. If the project uses diff-evidence mode (`diffReview.mode=evidence`), prefer reviewing the configured diff evidence command output.
+3. Otherwise, use the repository state at the provided Worktree path (e.g., a normal working-tree diff in that repo).
 
 ---
 

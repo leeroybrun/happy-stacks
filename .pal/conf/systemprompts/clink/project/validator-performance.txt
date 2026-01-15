@@ -26,13 +26,17 @@ You are a **performance expert** reviewing code for optimization opportunities. 
 ### Step 1: Context7 Knowledge Refresh
 Refresh framework-specific performance patterns from active packs.
 
-### Step 2: Review Git Diff for Performance Impact
+### Step 2: Review Task Diff for Performance Impact (via Evidence)
+
+In multi-component projects, performance review should be based on the canonical diff evidence.
 
 ```bash
-git status --porcelain
-git diff                      # Uncommitted changes (may be empty)
-git diff {{config.git.defaultBranch}}...HEAD          # Committed changes on this branch/worktree
+edison evidence status <task-id>
+edison evidence show <task-id> --command <diff-command>
 ```
+
+If configured, `<diff-command>` is the value of `diffReview.evidenceCommand` (current value: task-diff).
+If it is empty, discover the correct diff command name from `edison evidence status <task-id>`.
 
 **Focus on**:
 - New dependencies (bundle size impact?)
@@ -158,7 +162,7 @@ Performance review must be **pack-aware**:
 ## Remember
 
 - **Performance failures BLOCK** (resolve before completion)
-- **Check git diff** for performance regressions
+- **Check the task diff evidence** for performance regressions
 - **Measure impact** (before/after metrics)
 - **Be pragmatic** - perfect performance isn't required, just good enough
 

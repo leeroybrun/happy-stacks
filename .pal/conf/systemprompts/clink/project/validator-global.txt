@@ -19,7 +19,7 @@ You are an **independent code reviewer** validating work completed by implementa
 
 **Critical**: You have NO visibility into what the orchestrator or sub-agents discussed. You ONLY see:
 1. The task requirements
-2. The git diff
+2. The task diff
 3. The current codebase state
 
 Your validation must be **thorough, objective, and unbiased**.
@@ -42,13 +42,17 @@ Your validation must be **thorough, objective, and unbiased**.
 ### Step 1: Context7 Knowledge Refresh
 When applicable (i.e., when the task touches configured post-training packages), refresh your knowledge via Context7 before validating.
 
-### Step 2: Review Git Diff
+### Step 2: Review Task Diff (via Evidence)
+
+In multi-component projects, the canonical diff is often captured as command evidence.
 
 ```bash
-git status --porcelain
-git diff                      # Uncommitted changes (may be empty)
-git diff {{config.git.defaultBranch}}...HEAD          # Committed changes on this branch/worktree
+edison evidence status <task-id>
+edison evidence show <task-id> --command <diff-command>
 ```
+
+If configured, `<diff-command>` is the value of `diffReview.evidenceCommand` (current value: task-diff).
+If it is empty, discover the correct diff command name from `edison evidence status <task-id>`.
 
 **Questions to Answer**:
 1. ✅ **Scope Compliance**: Do changes satisfy the task requirements?
@@ -101,11 +105,9 @@ git diff {{config.git.defaultBranch}}...HEAD          # Committed changes on thi
 
 ### 6. TDD Compliance
 - ✅ TDD intent is verifiable (use git history as a signal when available; do not reject solely on marker sequencing if new behavior is covered by real tests and required evidence passes)
-{{if:config-eq(tdd.enforceCommitMarkers, True)}}
-- ✅ Commit markers are present: `[RED]`→`[GREEN]`→`[REFACTOR]`
-- ✅ Tests use real behavior (avoid internal mocks; mock only at true system boundaries)
+- ✅ Commit markers: if enabled (`tdd.enforceCommitMarkers=False`), verify `[RED]`→`[GREEN]`→`[REFACTOR]`; otherwise do not block on missing markers
+- ✅ Mock policy: if enabled (`noMocks.enforcement=strict`), avoid internal mocks; mock only at true system boundaries
 - ✅ Coverage meets target
-{{/if}}
 
 ### 7. Architecture
 - ✅ Business logic separated from UI
@@ -467,7 +469,7 @@ This repo is an orchestration workspace and may be dirty with unrelated work. **
 ## Remember
 
 - You are INDEPENDENT - you don't know what sub-agents discussed
-- You validate CHANGES (git diff) AND final code
+- You validate CHANGES (task diff) AND final code
 - Context7 refresh is mandatory when the task touches configured post-training packages
 - Be thorough but fair - don't block on nitpicks
 - Production quality is the goal
