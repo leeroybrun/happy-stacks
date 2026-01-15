@@ -7,6 +7,7 @@ import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo/expo.mjs';
 import { killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
+import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -141,10 +142,10 @@ async function main() {
 
   // Allow happy-stacks to define the default server URL baked into the app bundle.
   // This is read by the app via `process.env.EXPO_PUBLIC_HAPPY_SERVER_URL`.
-  const stacksServerUrl =
-    process.env.HAPPY_STACKS_SERVER_URL?.trim() || process.env.HAPPY_LOCAL_SERVER_URL?.trim() || '';
-  if (stacksServerUrl && !env.EXPO_PUBLIC_HAPPY_SERVER_URL) {
-    env.EXPO_PUBLIC_HAPPY_SERVER_URL = stacksServerUrl;
+  const serverPort = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
+  const { envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort });
+  if (envPublicUrl && !env.EXPO_PUBLIC_HAPPY_SERVER_URL) {
+    env.EXPO_PUBLIC_HAPPY_SERVER_URL = envPublicUrl;
   }
 
   if (json) {
