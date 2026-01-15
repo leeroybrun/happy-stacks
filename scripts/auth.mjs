@@ -16,7 +16,7 @@ import { parseDotenv } from './utils/env/dotenv.mjs';
 import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/auth/dev_key.mjs';
-import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
+import { getExpoStatePaths, isStateProcessRunning } from './utils/expo/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { printAuthLoginInstructions } from './utils/auth/login_ux.mjs';
 import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth/files.mjs';

@@ -1,4 +1,4 @@
-import { runCapture } from './proc/proc.mjs';
+import { runCapture } from '../proc/proc.mjs';
 
 export async function openUrlInBrowser(url, { timeoutMs = 5_000 } = {}) {
   const u = String(url ?? '').trim();

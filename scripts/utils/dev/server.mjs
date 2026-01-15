@@ -6,7 +6,7 @@ import { waitForServerReady } from '../server/server.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from '../net/ports.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
-import { watchDebounced } from '../watch.mjs';
+import { watchDebounced } from '../proc/watch.mjs';
 
 function hashStringToInt(s) {
   let h = 0;

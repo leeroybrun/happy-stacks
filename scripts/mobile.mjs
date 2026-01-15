@@ -5,7 +5,7 @@ import { run, runCapture, spawnProc } from './utils/proc/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/proc/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo.mjs';
+import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo/expo.mjs';
 import { killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
 
 /**

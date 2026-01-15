@@ -5,7 +5,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths/paths.mjs';
-import { inferRemoteNameForOwner, parseGithubOwner } from './utils/worktrees.mjs';
+import { inferRemoteNameForOwner, parseGithubOwner } from './utils/git/worktrees.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';

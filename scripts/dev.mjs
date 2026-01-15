@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { isDaemonRunning, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/server/validate.mjs';
-import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
+import { getExpoStatePaths, isStateProcessRunning } from './utils/expo/expo.mjs';
 import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeStart } from './utils/stack/runtime_state.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
@@ -19,7 +19,7 @@ import { ensureDevCliReady, prepareDaemonAuthSeed, startDevDaemon, watchHappyCli
 import { startDevServer, watchDevServerAndRestart } from './utils/dev/server.mjs';
 import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
-import { openUrlInBrowser } from './utils/browser.mjs';
+import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
 
 function sanitizeDnsLabel(raw, { fallback = 'stack' } = {}) {

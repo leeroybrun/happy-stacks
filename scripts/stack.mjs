@@ -17,7 +17,7 @@ import {
   isComponentWorktreePath,
   resolveComponentSpecToDir,
   worktreeSpecFromDir,
-} from './utils/worktrees.mjs';
+} from './utils/git/worktrees.mjs';
 import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.mjs';
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
@@ -30,7 +30,7 @@ import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
-import { openUrlInBrowser } from './utils/browser.mjs';
+import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth/files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
@@ -44,7 +44,7 @@ import {
   recordStackRuntimeStart,
   readStackRuntimeStateFile,
 } from './utils/stack/runtime_state.mjs';
-import { killPid } from './utils/expo.mjs';
+import { killPid } from './utils/expo/expo.mjs';
 import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
 
 function getEnvValue(obj, key) {

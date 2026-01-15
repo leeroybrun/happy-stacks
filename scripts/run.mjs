@@ -19,7 +19,7 @@ import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
-import { openUrlInBrowser } from './utils/browser.mjs';
+import { openUrlInBrowser } from './utils/ui/browser.mjs';
 
 /**
  * Run the local stack in "production-like" mode:

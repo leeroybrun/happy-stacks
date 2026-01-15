@@ -3,7 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { getComponentDir } from '../paths/paths.mjs';
-import { isPidAlive, readPidState } from '../expo.mjs';
+import { isPidAlive, readPidState } from '../expo/expo.mjs';
 import { stopLocalDaemon } from '../../daemon.mjs';
 import { stopHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { deleteStackRuntimeStateFile, getStackRuntimeStatePath, readStackRuntimeStateFile } from './runtime_state.mjs';

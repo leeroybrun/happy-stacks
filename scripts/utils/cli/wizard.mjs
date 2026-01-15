@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import { listWorktreeSpecs } from '../worktrees.mjs';
+import { listWorktreeSpecs } from '../git/worktrees.mjs';
 
 export function isTty() {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);

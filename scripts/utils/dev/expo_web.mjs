@@ -1,5 +1,5 @@
 import { ensureDepsInstalled, pmSpawnBin } from '../proc/pm.mjs';
-import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, wantsExpoClearCache, writePidState } from '../expo.mjs';
+import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, wantsExpoClearCache, writePidState } from '../expo/expo.mjs';
 import { pickDevMetroPort, resolveStackUiDevPortStart } from './server.mjs';
 import { recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
