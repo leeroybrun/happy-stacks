@@ -4,7 +4,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir, getStackName, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { resolvePublicServerUrl } from './tailscale.mjs';
-import { resolveServerPortFromEnv } from './utils/server/urls.mjs';
+import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -35,31 +35,6 @@ import {
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
   return { port: n, url: `http://127.0.0.1:${n}` };
-}
-
-function resolveEnvPublicUrlForStack({ stackName }) {
-  const candidate = (process.env.HAPPY_LOCAL_SERVER_URL ?? process.env.HAPPY_STACKS_SERVER_URL ?? '').trim();
-
-  // For main, allow the user's global/public URL override (commonly a Tailscale Serve URL).
-  if (stackName === 'main') {
-    return candidate;
-  }
-
-  // For non-main stacks, do NOT inherit a global/server URL override from ~/.happy-stacks/env.local
-  // (which often points at main). Only use a public URL override if it is explicitly present in the
-  // stack env file itself.
-  const envPath =
-    (process.env.HAPPY_STACKS_ENV_FILE ?? '').trim() ||
-    (process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim() ||
-    resolveStackEnvPath(stackName).envPath;
-  try {
-    if (!envPath || !existsSync(envPath)) return '';
-    const raw = readFileSync(envPath, 'utf-8');
-    const env = raw ? parseEnvToObject(raw) : {};
-    return (env.HAPPY_LOCAL_SERVER_URL ?? env.HAPPY_STACKS_SERVER_URL ?? '').toString().trim();
-  } catch {
-    return '';
-  }
 }
 
 function resolveEnvWebappUrlForStack({ stackName }) {
@@ -783,8 +758,7 @@ async function cmdStatus({ json }) {
   const stackName = getStackName();
 
   const { port, url: internalServerUrl } = getInternalServerUrl();
-  const defaultPublicUrl = `http://localhost:${port}`;
-  const envPublicUrl = resolveEnvPublicUrlForStack({ stackName });
+  const { defaultPublicUrl, envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port, stackName });
   const { publicServerUrl } = await resolvePublicServerUrl({
     internalServerUrl,
     defaultPublicUrl,
@@ -869,8 +843,7 @@ async function cmdLogin({ argv, json }) {
   const { kv } = parseArgs(argv);
 
   const { port, url: internalServerUrl } = getInternalServerUrl();
-  const defaultPublicUrl = `http://localhost:${port}`;
-  const envPublicUrl = resolveEnvPublicUrlForStack({ stackName });
+  const { defaultPublicUrl, envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port, stackName });
   const { publicServerUrl } = await resolvePublicServerUrl({
     internalServerUrl,
     defaultPublicUrl,

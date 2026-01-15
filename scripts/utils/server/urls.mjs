@@ -17,15 +17,18 @@ function stackEnvExplicitlySetsPublicUrl({ env, stackName }) {
   }
 }
 
-export function getPublicServerUrlEnvOverride({ env = process.env, serverPort } = {}) {
+export function getPublicServerUrlEnvOverride({ env = process.env, serverPort, stackName = null } = {}) {
   const defaultPublicUrl = `http://localhost:${serverPort}`;
-  const stackName = (env.HAPPY_STACKS_STACK ?? env.HAPPY_LOCAL_STACK ?? '').toString().trim() || getStackName();
+  const name =
+    (stackName ?? '').toString().trim() ||
+    (env.HAPPY_STACKS_STACK ?? env.HAPPY_LOCAL_STACK ?? '').toString().trim() ||
+    getStackName();
 
   let envPublicUrl =
     (env.HAPPY_STACKS_SERVER_URL ?? env.HAPPY_LOCAL_SERVER_URL ?? '').toString().trim() || '';
 
   // Safety: for non-main stacks, ignore a global SERVER_URL unless it was explicitly set in the stack env file.
-  if (stackName !== 'main' && envPublicUrl && !stackEnvExplicitlySetsPublicUrl({ env, stackName })) {
+  if (name !== 'main' && envPublicUrl && !stackEnvExplicitlySetsPublicUrl({ env, stackName: name })) {
     envPublicUrl = '';
   }
 
