@@ -18,3 +18,13 @@ export async function readServerPortFromEnvFile(envPath, { defaultPort = 3005 } 
   return Number.isFinite(n) && n > 0 ? n : Number(defaultPort);
 }
 
+// For stack env files, "missing" means "ephemeral stack" (no pinned port).
+export async function readPinnedServerPortFromEnvFile(envPath) {
+  const v =
+    (await readEnvValueFromFile(envPath, 'HAPPY_STACKS_SERVER_PORT')) ||
+    (await readEnvValueFromFile(envPath, 'HAPPY_LOCAL_SERVER_PORT')) ||
+    '';
+  const n = v ? Number(String(v).trim()) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+

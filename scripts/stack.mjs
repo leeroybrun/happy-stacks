@@ -38,6 +38,7 @@ import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getHomeEnvLocalPath } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
+import { readPinnedServerPortFromEnvFile } from './utils/server/port.mjs';
 import { getEnvValue, getEnvValueAny } from './utils/env/values.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import {
@@ -83,12 +84,7 @@ async function pickNextFreePort(startPort, { reservedPorts = new Set() } = {}) {
 }
 
 async function readPortFromEnvFile(envPath) {
-  const raw = await readExistingEnv(envPath);
-  if (!raw.trim()) return null;
-  const parsed = parseEnvToObject(raw);
-  const portRaw = (parsed.HAPPY_STACKS_SERVER_PORT ?? parsed.HAPPY_LOCAL_SERVER_PORT ?? '').toString().trim();
-  const n = portRaw ? Number(portRaw) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : null;
+  return await readPinnedServerPortFromEnvFile(envPath);
 }
 
 async function readPortsFromEnvFile(envPath) {
