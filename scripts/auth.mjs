@@ -15,14 +15,14 @@ import { dirname } from 'node:path';
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
-import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/dev_auth_key.mjs';
+import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/auth/dev_key.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
-import { printAuthLoginInstructions } from './utils/auth_login_ux.mjs';
-import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth_files.mjs';
-import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
+import { printAuthLoginInstructions } from './utils/auth/login_ux.mjs';
+import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writeSecretFileIfMissing } from './utils/auth/files.mjs';
+import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
-import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
+import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });

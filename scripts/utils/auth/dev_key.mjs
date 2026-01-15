@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { expandHome } from './paths/canonical_home.mjs';
+import { expandHome } from '../paths/canonical_home.mjs';
 
 export function resolveHappyStacksHomeDir(env = process.env) {
   const fromEnv = (env.HAPPY_STACKS_HOME_DIR ?? env.HAPPY_LOCAL_HOME_DIR ?? '').toString().trim();

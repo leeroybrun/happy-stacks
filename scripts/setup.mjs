@@ -16,7 +16,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { parseDotenv } from './utils/env/dotenv.mjs';
 import { installService } from './service.mjs';
-import { getDevAuthKeyPath } from './utils/dev_auth_key.mjs';
+import { getDevAuthKeyPath } from './utils/auth/dev_key.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 
 function boolFromFlagsOrKv({ flags, kv, onFlag, offFlag, key, defaultValue }) {

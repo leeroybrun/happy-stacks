@@ -24,19 +24,19 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack/stop.mjs';
-import { writeDevAuthKey } from './utils/dev_auth_key.mjs';
+import { writeDevAuthKey } from './utils/auth/dev_key.mjs';
 import { startDevServer } from './utils/dev/server.mjs';
 import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/browser.mjs';
-import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth_files.mjs';
-import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth_sources.mjs';
+import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth/files.mjs';
+import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getHomeEnvLocalPath } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
-import { resolveHandyMasterSecretFromStack } from './utils/handy_master_secret.mjs';
+import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
