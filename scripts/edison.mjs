@@ -2,7 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { resolveStackEnvPath, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
-import { parseDotenv } from './utils/env/dotenv.mjs';
+import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
@@ -374,11 +374,6 @@ async function inferTaskIdFromArgs({ rootDir, edisonArgs }) {
     }
   }
   return '';
-}
-
-function parseEnvToObject(raw) {
-  const parsed = parseDotenv(raw);
-  return Object.fromEntries(parsed.entries());
 }
 
 function resolveComponentDirsFromStackEnv({ rootDir, stackEnv }) {

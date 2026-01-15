@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { parseDotenv } from './utils/env/dotenv.mjs';
+import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/auth/dev_key.mjs';
@@ -107,11 +107,6 @@ async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
 // NOTE: common fs helpers live in scripts/utils/fs/ops.mjs
 
 // (auth file copy/link helpers live in scripts/utils/auth/files.mjs)
-
-function parseEnvToObject(raw) {
-  const parsed = parseDotenv(raw);
-  return Object.fromEntries(parsed.entries());
-}
 
 function getStackDir(stackName) {
   return resolveStackEnvPath(stackName).baseDir;

@@ -2,16 +2,11 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { parseDotenv } from '../env/dotenv.mjs';
+import { parseEnvToObject } from '../env/dotenv.mjs';
 import { resolveStackEnvPath } from '../paths/paths.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './sources.mjs';
 import { getEnvValue } from '../env/values.mjs';
 import { readTextIfExists } from '../fs/ops.mjs';
-
-function parseEnvToObject(raw) {
-  const parsed = parseDotenv(raw ?? '');
-  return Object.fromEntries(parsed.entries());
-}
 
 function stackExistsSync(stackName) {
   if (stackName === 'main') return true;

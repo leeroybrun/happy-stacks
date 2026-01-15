@@ -20,7 +20,7 @@ import {
   worktreeSpecFromDir,
 } from './utils/git/worktrees.mjs';
 import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.mjs';
-import { parseDotenv } from './utils/env/dotenv.mjs';
+import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
@@ -275,11 +275,6 @@ async function readExistingEnv(path) {
   } catch {
     return '';
   }
-}
-
-function parseEnvToObject(raw) {
-  const parsed = parseDotenv(raw);
-  return Object.fromEntries(parsed.entries());
 }
 
 function stackExistsSync(stackName) {

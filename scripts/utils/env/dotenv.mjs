@@ -28,3 +28,6 @@ export function parseDotenv(contents) {
   return out;
 }
 
+export function parseEnvToObject(contents) {
+  return Object.fromEntries(parseDotenv(contents));
+}
