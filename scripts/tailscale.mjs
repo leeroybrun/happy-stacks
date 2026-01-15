@@ -4,6 +4,7 @@ import { run, runCapture } from './utils/proc/proc.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { getInternalServerUrl } from './utils/server/urls.mjs';
+import { resolveCommandPath } from './utils/proc/commands.mjs';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 
@@ -130,7 +131,7 @@ async function resolveTailscaleCmd() {
 
   // Try PATH first (without executing `tailscale`, which can hang in some environments).
   try {
-    const found = (await runCapture('sh', ['-lc', 'command -v tailscale 2>/dev/null || true'], { env: tailscaleEnv(), timeoutMs: tailscaleProbeTimeoutMs() })).trim();
+    const found = await resolveCommandPath('tailscale', { env: tailscaleEnv(), timeoutMs: tailscaleProbeTimeoutMs() });
     if (found) {
       return found;
     }

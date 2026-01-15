@@ -2,6 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { runCapture } from './utils/proc/proc.mjs';
+import { resolveCommandPath } from './utils/proc/commands.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/net/ports.mjs';
 import { getServerComponentName } from './utils/server/server.mjs';
@@ -302,7 +303,7 @@ async function main() {
 
   // happy wrapper
   try {
-    const happyPath = (await runCapture('sh', ['-lc', 'command -v happy'])).trim();
+    const happyPath = await resolveCommandPath('happy');
     if (happyPath) {
       report.checks.happyOnPath = { ok: true, path: happyPath };
       if (!json) console.log(`✅ happy on PATH: ${happyPath}`);
@@ -314,7 +315,7 @@ async function main() {
 
   // happys on PATH
   try {
-    const happysPath = (await runCapture('sh', ['-lc', 'command -v happys'])).trim();
+    const happysPath = await resolveCommandPath('happys');
     if (happysPath) {
       report.checks.happysOnPath = { ok: true, path: happysPath };
       if (!json) console.log(`✅ happys on PATH: ${happysPath}`);
