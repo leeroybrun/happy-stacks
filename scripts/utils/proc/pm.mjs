@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 
 import { pathExists } from '../fs/fs.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
+import { commandExists } from './commands.mjs';
 import { getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 
@@ -53,15 +54,6 @@ async function computeGitWorktreeSignature(dir) {
     };
   } catch {
     return null;
-  }
-}
-
-async function commandExists(cmd, options = {}) {
-  try {
-    await runCapture(cmd, ['--version'], options);
-    return true;
-  } catch {
-    return false;
   }
 }
 
