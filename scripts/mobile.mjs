@@ -59,7 +59,7 @@ async function main() {
         '',
         'Notes:',
         '- This script is designed to avoid editing upstream `components/happy` config in-place.',
-        '- It sets EXPO_PUBLIC_HAPPY_SERVER_URL from HAPPY_STACKS_SERVER_URL (legacy: HAPPY_LOCAL_SERVER_URL) if provided.',
+        '- If you explicitly set HAPPY_STACKS_SERVER_URL (legacy: HAPPY_LOCAL_SERVER_URL), it bakes that URL into the app via EXPO_PUBLIC_HAPPY_SERVER_URL.',
       ].join('\n'),
     });
     return;
