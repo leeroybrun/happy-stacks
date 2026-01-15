@@ -1,17 +1,11 @@
 import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { expandHome } from '../paths/canonical_home.mjs';
-
-export function resolveHappyStacksHomeDir(env = process.env) {
-  const fromEnv = (env.HAPPY_STACKS_HOME_DIR ?? env.HAPPY_LOCAL_HOME_DIR ?? '').toString().trim();
-  return fromEnv ? expandHome(fromEnv) : join(homedir(), '.happy-stacks');
-}
+import { getHappyStacksHomeDir } from '../paths/paths.mjs';
 
 export function getDevAuthKeyPath(env = process.env) {
-  return join(resolveHappyStacksHomeDir(env), 'keys', 'dev-auth.json');
+  return join(getHappyStacksHomeDir(env), 'keys', 'dev-auth.json');
 }
 
 function base64UrlToBytes(s) {

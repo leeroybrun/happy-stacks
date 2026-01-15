@@ -18,8 +18,8 @@ export function getRootDir(importMetaUrl) {
   return dirname(dirname(fileURLToPath(importMetaUrl)));
 }
 
-export function getHappyStacksHomeDir() {
-  const fromEnv = (process.env.HAPPY_STACKS_HOME_DIR ?? '').trim();
+export function getHappyStacksHomeDir(env = process.env) {
+  const fromEnv = (env.HAPPY_STACKS_HOME_DIR ?? env.HAPPY_LOCAL_HOME_DIR ?? '').trim();
   if (fromEnv) {
     return expandHome(fromEnv);
   }
