@@ -13,6 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readLastLines } from './utils/fs/tail.mjs';
 
 /**
  * Manage the autostart service installed by `happys bootstrap -- --autostart`.
@@ -284,16 +285,6 @@ async function postStartDiagnostics() {
   const stateFile = join(cliHomeDir, 'daemon.state.json');
   const lockFile = join(cliHomeDir, 'daemon.state.json.lock');
   const logsDir = join(cliHomeDir, 'logs');
-
-  const readLastLines = async (path, lines = 60) => {
-    try {
-      const raw = await readFile(path, 'utf-8');
-      const parts = raw.split('\n');
-      return parts.slice(Math.max(0, parts.length - lines)).join('\n');
-    } catch {
-      return null;
-    }
-  };
 
   const latestDaemonLog = async () => {
     try {

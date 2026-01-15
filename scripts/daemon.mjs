@@ -3,6 +3,7 @@ import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getStacksStorageRoot } from './utils/paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { runCaptureIfCommandExists } from './utils/proc/commands.mjs';
+import { readLastLines } from './utils/fs/tail.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -169,16 +170,6 @@ function getLatestDaemonLogPath(homeDir) {
     const files = readdirSync(logsDir).filter((f) => f.endsWith('-daemon.log')).sort();
     if (!files.length) return null;
     return join(logsDir, files[files.length - 1]);
-  } catch {
-    return null;
-  }
-}
-
-function readLastLines(path, lines = 60) {
-  try {
-    const content = readFileSync(path, 'utf-8');
-    const parts = content.split('\n');
-    return parts.slice(Math.max(0, parts.length - lines)).join('\n');
   } catch {
     return null;
   }
@@ -464,7 +455,7 @@ export async function startLocalDaemonWithAuth({
     const logPath =
       getLatestDaemonLogPath(cliHomeDir) ||
       ((!isSandboxed() || sandboxAllowsGlobalSideEffects()) ? getLatestDaemonLogPath(join(homedir(), '.happy')) : null);
-    const excerpt = logPath ? readLastLines(logPath, 120) : null;
+    const excerpt = logPath ? await readLastLines(logPath, 120) : null;
     return { ok: false, exitCode, excerpt, logPath };
   };
 
