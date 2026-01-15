@@ -11,6 +11,8 @@ import { expandHome } from './utils/paths/canonical_home.mjs';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths/paths.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
+import { readJsonIfExists } from './utils/fs/json.mjs';
+import { readPackageJsonVersion } from './utils/fs/package_json.mjs';
 
 function cachePaths() {
   const home = getHappyStacksHomeDir();
@@ -19,15 +21,6 @@ function cachePaths() {
     cacheDir: join(home, 'cache'),
     updateJson: join(home, 'cache', 'update.json'),
   };
-}
-
-async function readJsonSafe(path) {
-  try {
-    const raw = await readFile(path, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }
 
 async function writeJsonSafe(path, obj) {
@@ -43,25 +36,14 @@ async function writeJsonSafe(path, obj) {
   }
 }
 
-async function readPkgVersion(pkgJsonPath) {
-  try {
-    const raw = await readFile(pkgJsonPath, 'utf-8');
-    const pkg = JSON.parse(raw);
-    const v = String(pkg.version ?? '').trim();
-    return v || null;
-  } catch {
-    return null;
-  }
-}
-
 async function getRuntimeInstalledVersion() {
   const runtimeDir = getRuntimeDir();
   const pkgJson = join(runtimeDir, 'node_modules', 'happy-stacks', 'package.json');
-  return await readPkgVersion(pkgJson);
+  return await readPackageJsonVersion(pkgJson);
 }
 
 async function getInvokerVersion({ rootDir }) {
-  return await readPkgVersion(join(rootDir, 'package.json'));
+  return await readPackageJsonVersion(join(rootDir, 'package.json'));
 }
 
 async function fetchLatestVersion() {
@@ -102,7 +84,7 @@ async function cmdStatus({ rootDir, argv }) {
   const runtimeDir = getRuntimeDir();
   const runtimeVersion = await getRuntimeInstalledVersion();
 
-  const cached = await readJsonSafe(updateJson);
+  const cached = await readJsonIfExists(updateJson, { defaultValue: null });
 
   let latest = cached?.latest ?? null;
   let checkedAt = cached?.checkedAt ?? null;

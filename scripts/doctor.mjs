@@ -12,12 +12,13 @@ import { tailscaleServeStatus } from './tailscale.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { assertServerComponentDirMatches } from './utils/server/validate.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
+import { readJsonIfExists } from './utils/fs/json.mjs';
+import { readPackageJsonVersion } from './utils/fs/package_json.mjs';
 
 /**
  * Doctor script for common happy-stacks failure modes.
@@ -55,26 +56,6 @@ async function fetchHealth(url) {
     return root;
   }
   return health.ok ? health : root;
-}
-
-async function readJsonSafe(path) {
-  try {
-    const raw = await readFile(path, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-async function readPkgVersion(path) {
-  try {
-    const raw = await readFile(path, 'utf-8');
-    const pkg = JSON.parse(raw);
-    const v = String(pkg.version ?? '').trim();
-    return v || null;
-  } catch {
-    return null;
-  }
 }
 
 async function resolveSwiftbarPluginsDir() {
@@ -117,8 +98,8 @@ async function main() {
   const workspaceDir = getWorkspaceDir(rootDir);
   const updateCachePath = join(homeDir, 'cache', 'update.json');
   const runtimePkgJson = join(runtimeDir, 'node_modules', 'happy-stacks', 'package.json');
-  const runtimeVersion = await readPkgVersion(runtimePkgJson);
-  const updateCache = existsSync(updateCachePath) ? await readJsonSafe(updateCachePath) : null;
+  const runtimeVersion = await readPackageJsonVersion(runtimePkgJson);
+  const updateCache = await readJsonIfExists(updateCachePath, { defaultValue: null });
 
   const autostart = getDefaultAutostartPaths();
   const stackCtx = resolveStackContext({ env: process.env, autostart });
