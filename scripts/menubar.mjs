@@ -9,6 +9,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { normalizeProfile } from './utils/cli/normalize.mjs';
 
 async function ensureSwiftbarAssets({ cliRootDir }) {
   const homeDir = getHappyStacksHomeDir();
@@ -57,14 +58,6 @@ function removeSwiftbarPlugins({ patterns }) {
   }
   const out = String(res.stdout ?? '').trim();
   return out || null;
-}
-
-function normalizeMenubarMode(raw) {
-  const v = String(raw ?? '').trim().toLowerCase();
-  if (!v) return '';
-  if (v === 'selfhost' || v === 'self-host' || v === 'self_host' || v === 'host') return 'selfhost';
-  if (v === 'dev' || v === 'developer') return 'dev';
-  return '';
 }
 
 async function main() {
@@ -128,7 +121,7 @@ async function main() {
   if (cmd === 'mode') {
     const positionals = argv.filter((a) => !a.startsWith('--'));
     const raw = positionals[1] ?? '';
-    const mode = normalizeMenubarMode(raw);
+    const mode = normalizeProfile(raw);
     if (!mode) {
       throw new Error('[menubar] usage: happys menubar mode <selfhost|dev> [--json]');
     }

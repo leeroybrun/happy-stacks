@@ -2,35 +2,14 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
-import { ensureDepsInstalled, requirePnpm } from './utils/proc/pm.mjs';
+import { ensureDepsInstalled } from './utils/proc/pm.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run } from './utils/proc/proc.mjs';
-import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { detectPackageManagerCmd, pickFirstScript, readPackageJsonScripts } from './utils/proc/package_scripts.mjs';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 
-async function detectPackageManagerCmd(dir) {
-  if (await pathExists(join(dir, 'yarn.lock'))) {
-    return { name: 'yarn', cmd: 'yarn', argsForScript: (script) => ['-s', script] };
-  }
-  await requirePnpm();
-  return { name: 'pnpm', cmd: 'pnpm', argsForScript: (script) => ['--silent', script] };
-}
-
-async function readScripts(dir) {
-  try {
-    const raw = await readFile(join(dir, 'package.json'), 'utf-8');
-    const pkg = JSON.parse(raw);
-    const scripts = pkg?.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
-    return scripts;
-  } catch {
-    return null;
-  }
-}
-
 function pickLintScript(scripts) {
-  if (!scripts) return null;
   const candidates = [
     'lint',
     'lint:ci',
@@ -39,7 +18,7 @@ function pickLintScript(scripts) {
     'eslint',
     'eslint:check',
   ];
-  return candidates.find((k) => typeof scripts[k] === 'string' && scripts[k].trim()) ?? null;
+  return pickFirstScript(scripts, candidates);
 }
 
 async function main() {
@@ -86,7 +65,7 @@ async function main() {
       continue;
     }
 
-    const scripts = await readScripts(dir);
+    const scripts = await readPackageJsonScripts(dir);
     if (!scripts) {
       results.push({ component, ok: true, skipped: true, dir, reason: 'no package.json' });
       continue;
