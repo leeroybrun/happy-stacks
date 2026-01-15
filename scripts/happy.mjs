@@ -4,20 +4,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { expandHome } from './utils/paths/canonical_home.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
-
-function resolveCliHomeDir() {
-  const fromExplicit = (process.env.HAPPY_HOME_DIR ?? '').trim();
-  if (fromExplicit) {
-    return expandHome(fromExplicit);
-  }
-  const fromStacks = (process.env.HAPPY_STACKS_CLI_HOME_DIR ?? process.env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').trim();
-  if (fromStacks) {
-    return expandHome(fromStacks);
-  }
-  return join(getDefaultAutostartPaths().baseDir, 'cli');
-}
+import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { resolveCliHomeDir } from './utils/stack/dirs.mjs';
 
 async function main() {
   const argv = process.argv.slice(2);

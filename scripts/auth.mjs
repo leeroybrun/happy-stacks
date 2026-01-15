@@ -25,9 +25,12 @@ import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
-import { expandHome } from './utils/paths/canonical_home.mjs';
 import { stackExistsSync } from './utils/stack/stacks.mjs';
-import { getCliHomeDirFromEnvOrDefault, getServerLightDataDirFromEnvOrDefault } from './utils/stack/dirs.mjs';
+import {
+  getCliHomeDirFromEnvOrDefault,
+  getServerLightDataDirFromEnvOrDefault,
+  resolveCliHomeDir,
+} from './utils/stack/dirs.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -58,8 +61,6 @@ function resolveEnvPublicUrlForStack({ stackName }) {
     return '';
   }
 }
-
-const expandTilde = expandHome;
 
 function resolveEnvWebappUrlForStack({ stackName }) {
   const candidate = (process.env.HAPPY_WEBAPP_URL ?? '').trim();
@@ -108,14 +109,6 @@ async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
 // NOTE: common fs helpers live in scripts/utils/fs/ops.mjs
 
 // (auth file copy/link helpers live in scripts/utils/auth/files.mjs)
-
-function resolveCliHomeDir() {
-  const fromEnv = (process.env.HAPPY_LOCAL_CLI_HOME_DIR ?? process.env.HAPPY_STACKS_CLI_HOME_DIR ?? '').trim();
-  if (fromEnv) {
-    return expandTilde(fromEnv);
-  }
-  return join(getDefaultAutostartPaths().baseDir, 'cli');
-}
 
 function fileHasContent(path) {
   try {
