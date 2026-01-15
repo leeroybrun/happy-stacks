@@ -22,28 +22,20 @@ import { normalizeProfile, normalizeServerComponent } from './utils/cli/normaliz
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { commandExists } from './utils/proc/commands.mjs';
 import { readEnvValueFromFile } from './utils/env/read.mjs';
+import { readServerPortFromEnvFile, resolveServerPortFromEnv } from './utils/server/port.mjs';
 
 async function resolveMainServerPort() {
   // Priority:
   // - explicit env var
   // - main stack env file (preferred)
   // - default
-  const fromEnv =
-    (process.env.HAPPY_LOCAL_SERVER_PORT ?? process.env.HAPPY_STACKS_SERVER_PORT ?? '').toString().trim();
-  if (fromEnv) {
-    const n = Number(fromEnv);
-    return Number.isFinite(n) && n > 0 ? n : 3005;
+  const hasEnvOverride =
+    (process.env.HAPPY_STACKS_SERVER_PORT ?? process.env.HAPPY_LOCAL_SERVER_PORT ?? '').toString().trim() !== '';
+  if (hasEnvOverride) {
+    return resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
   }
   const envPath = resolveStackEnvPath('main').envPath;
-  const v =
-    (await readEnvValueFromFile(envPath, 'HAPPY_LOCAL_SERVER_PORT')) ||
-    (await readEnvValueFromFile(envPath, 'HAPPY_STACKS_SERVER_PORT')) ||
-    '';
-  if (v) {
-    const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? n : 3005;
-  }
-  return 3005;
+  return await readServerPortFromEnvFile(envPath, { defaultPort: 3005 });
 }
 
 async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, tailscaleWanted, menubarMode }) {
