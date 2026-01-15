@@ -301,17 +301,33 @@ export async function pmExecBin(dirOrOpts, binArg, argsArg, optsArg) {
 }
 
 export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = {}) {
-  const pm = await getComponentPm(dir);
+  const usesObjectStyle = typeof dir === 'object' && dir !== null;
+  const componentDir = usesObjectStyle ? dir.dir : dir;
+  const componentLabel = usesObjectStyle ? dir.label : label;
+  const componentBin = usesObjectStyle ? dir.bin : bin;
+  const componentArgs = usesObjectStyle ? (dir.args ?? []) : (args ?? []);
+  const componentEnv = usesObjectStyle ? (dir.env ?? process.env) : (env ?? process.env);
+  const options = usesObjectStyle ? (dir.options ?? {}) : {};
+
+  const pm = await getComponentPm(componentDir);
   if (pm.name === 'yarn') {
-    return spawnProc(label, pm.cmd, ['run', bin, ...args], env, { cwd: dir });
+    return spawnProc(componentLabel, pm.cmd, ['run', componentBin, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
   }
-  return spawnProc(label, pm.cmd, ['exec', bin, ...args], env, { cwd: dir });
+  return spawnProc(componentLabel, pm.cmd, ['exec', componentBin, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
 }
 
 export async function pmSpawnScript(dir, label, script, args, { env = process.env } = {}) {
-  const pm = await getComponentPm(dir);
+  const usesObjectStyle = typeof dir === 'object' && dir !== null;
+  const componentDir = usesObjectStyle ? dir.dir : dir;
+  const componentLabel = usesObjectStyle ? dir.label : label;
+  const componentScript = usesObjectStyle ? dir.script : script;
+  const componentArgs = usesObjectStyle ? (dir.args ?? []) : (args ?? []);
+  const componentEnv = usesObjectStyle ? (dir.env ?? process.env) : (env ?? process.env);
+  const options = usesObjectStyle ? (dir.options ?? {}) : {};
+
+  const pm = await getComponentPm(componentDir);
   if (pm.name === 'yarn') {
-    return spawnProc(label, pm.cmd, ['run', script, ...args], env, { cwd: dir });
+    return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
   }
-  return spawnProc(label, pm.cmd, ['run', script, ...args], env, { cwd: dir });
+  return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
 }
