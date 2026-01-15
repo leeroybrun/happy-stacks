@@ -2,6 +2,7 @@ import { spawnProc, run, runCapture } from './utils/proc/proc.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getStacksStorageRoot } from './utils/paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { runCaptureIfCommandExists } from './utils/proc/commands.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,7 +29,7 @@ export async function cleanupStaleDaemonState(homeDir) {
 
   const lsofHasPath = async (pid, pathNeedle) => {
     try {
-      const out = await runCapture('sh', ['-lc', `command -v lsof >/dev/null 2>&1 && lsof -nP -p ${pid} 2>/dev/null || true`]);
+      const out = await runCaptureIfCommandExists('lsof', ['-nP', '-p', String(pid)]);
       return out.includes(pathNeedle);
     } catch {
       return false;
@@ -297,7 +298,7 @@ async function killDaemonFromLockFile({ cliHomeDir }) {
   // We do this by checking that `lsof -p <pid>` includes the lock path (or state file path).
   let ownsLock = false;
   try {
-    const out = await runCapture('sh', ['-lc', `command -v lsof >/dev/null 2>&1 && lsof -nP -p ${pid} 2>/dev/null || true`]);
+    const out = await runCaptureIfCommandExists('lsof', ['-nP', '-p', String(pid)]);
     ownsLock = out.includes(lockPath) || out.includes(join(cliHomeDir, 'daemon.state.json')) || out.includes(join(cliHomeDir, 'logs'));
   } catch {
     ownsLock = false;

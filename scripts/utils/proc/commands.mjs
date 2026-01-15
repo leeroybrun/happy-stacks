@@ -18,6 +18,16 @@ export async function resolveCommandPath(cmd, { cwd, env, timeoutMs } = {}) {
   }
 }
 
+export async function runCaptureIfCommandExists(cmd, args, { cwd, env, timeoutMs } = {}) {
+  const resolved = await resolveCommandPath(cmd, { cwd, env, timeoutMs });
+  if (!resolved) return '';
+  try {
+    return await runCapture(resolved, args, { cwd, env, timeoutMs });
+  } catch {
+    return '';
+  }
+}
+
 export async function commandExists(cmd, { cwd } = {}) {
   return Boolean(await resolveCommandPath(cmd, { cwd }));
 }

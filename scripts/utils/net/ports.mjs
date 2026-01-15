@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import net from 'node:net';
-import { runCapture } from '../proc/proc.mjs';
+import { runCaptureIfCommandExists } from '../proc/commands.mjs';
 
 async function listListenPids(port) {
   if (!Number.isFinite(port) || port <= 0) return [];
@@ -9,10 +9,7 @@ async function listListenPids(port) {
   let raw = '';
   try {
     // `lsof` exits non-zero if no matches; normalize to empty output.
-    raw = await runCapture('sh', [
-      '-lc',
-      `command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null || true`,
-    ]);
+    raw = await runCaptureIfCommandExists('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
   } catch {
     raw = '';
   }
