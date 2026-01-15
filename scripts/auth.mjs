@@ -25,6 +25,7 @@ import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -56,9 +57,7 @@ function resolveEnvPublicUrlForStack({ stackName }) {
   }
 }
 
-function expandTilde(p) {
-  return p.replace(/^~(?=\/)/, homedir());
-}
+const expandTilde = expandHome;
 
 function resolveEnvWebappUrlForStack({ stackName }) {
   const candidate = (process.env.HAPPY_WEBAPP_URL ?? '').trim();
