@@ -23,6 +23,7 @@ import { copyFileIfMissing, linkFileIfMissing, removeFileOrSymlinkIfExists, writ
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
+import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -81,16 +82,6 @@ function resolveEnvWebappUrlForStack({ stackName }) {
   }
 }
 
-function sanitizeDnsLabel(raw, { fallback = 'stack' } = {}) {
-  const s = String(raw ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return s || fallback;
-}
-
 async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
   try {
     const baseDir = getStackDir(stackName);
@@ -127,7 +118,7 @@ async function readTextIfExists(path) {
   }
 }
 
-// (auth file copy/link helpers live in scripts/utils/auth_files.mjs)
+// (auth file copy/link helpers live in scripts/utils/auth/files.mjs)
 
 function parseEnvToObject(raw) {
   const parsed = parseDotenv(raw);

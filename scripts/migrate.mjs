@@ -12,6 +12,7 @@ import { ensureDepsInstalled } from './utils/proc/pm.mjs';
 import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './utils/server/infra/happy_server_infra.mjs';
 import { runCapture } from './utils/proc/proc.mjs';
 import { pickNextFreeTcpPort } from './utils/net/ports.mjs';
+import { getEnvValue } from './utils/env/values.mjs';
 
 function usage() {
   return [
@@ -32,10 +33,6 @@ async function readEnvObject(envPath) {
   } catch {
     return {};
   }
-}
-
-function getEnvValue(env, key) {
-  return (env?.[key] ?? '').toString().trim();
 }
 
 function parseFileDatabaseUrl(url) {

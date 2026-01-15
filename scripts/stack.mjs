@@ -37,6 +37,8 @@ import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
 import { getHomeEnvLocalPath } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
+import { getEnvValue, getEnvValueAny } from './utils/env/values.mjs';
+import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import {
   deleteStackRuntimeStateFile,
   getStackRuntimeStatePath,
@@ -46,19 +48,6 @@ import {
 } from './utils/stack/runtime_state.mjs';
 import { killPid } from './utils/expo/expo.mjs';
 import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
-
-function getEnvValue(obj, key) {
-  const v = (obj?.[key] ?? '').toString().trim();
-  return v || '';
-}
-
-function getEnvValueAny(obj, keys) {
-  for (const k of keys) {
-    const v = getEnvValue(obj, k);
-    if (v) return v;
-  }
-  return '';
-}
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -171,16 +160,6 @@ function randomToken(lenBytes = 24) {
   return base64Url(randomBytes(lenBytes));
 }
 
-function sanitizeDnsLabel(raw, { fallback = 'happy' } = {}) {
-  const s = String(raw ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return s || fallback;
-}
-
 async function ensureDir(p) {
   await mkdir(p, { recursive: true });
 }
@@ -196,7 +175,7 @@ async function readTextIfExists(path) {
   }
 }
 
-// auth file copy/link helpers live in scripts/utils/auth_files.mjs
+// auth file copy/link helpers live in scripts/utils/auth/files.mjs
 
 function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {
   const fromEnv = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').trim();

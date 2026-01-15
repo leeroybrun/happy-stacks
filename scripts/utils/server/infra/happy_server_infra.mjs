@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { parseDotenv } from '../../env/dotenv.mjs';
 import { ensureEnvFileUpdated } from '../../env/env_file.mjs';
+import { sanitizeDnsLabel } from '../../net/dns.mjs';
 import { pickNextFreeTcpPort } from '../../net/ports.mjs';
 import { pmExecBin } from '../../proc/pm.mjs';
 import { run, runCapture } from '../../proc/proc.mjs';
@@ -20,16 +21,6 @@ function base64Url(buf) {
 
 function randomToken(lenBytes = 24) {
   return base64Url(randomBytes(lenBytes));
-}
-
-function sanitizeDnsLabel(raw, { fallback = 'happy' } = {}) {
-  const s = String(raw ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return s || fallback;
 }
 
 function coercePort(v) {

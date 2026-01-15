@@ -21,16 +21,7 @@ import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
-
-function sanitizeDnsLabel(raw, { fallback = 'stack' } = {}) {
-  const s = String(raw ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return s || fallback;
-}
+import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 
 /**
  * Dev mode stack:

@@ -18,17 +18,7 @@ import { parseDotenv } from './utils/env/dotenv.mjs';
 import { installService } from './service.mjs';
 import { getDevAuthKeyPath } from './utils/auth/dev_key.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
-
-function boolFromFlagsOrKv({ flags, kv, onFlag, offFlag, key, defaultValue }) {
-  if (flags.has(offFlag)) return false;
-  if (flags.has(onFlag)) return true;
-  if (key && kv.has(key)) {
-    const raw = String(kv.get(key) ?? '').trim().toLowerCase();
-    if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'y') return true;
-    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'n') return false;
-  }
-  return defaultValue;
-}
+import { boolFromFlags, boolFromFlagsOrKv } from './utils/cli/flags.mjs';
 
 function normalizeProfile(raw) {
   const v = (raw ?? '').trim().toLowerCase();
@@ -44,12 +34,6 @@ function normalizeServer(raw) {
   if (v === 'light' || v === 'server-light' || v === 'happy-server-light') return 'happy-server-light';
   if (v === 'server' || v === 'full' || v === 'happy-server') return 'happy-server';
   return '';
-}
-
-function boolFromFlags({ flags, onFlag, offFlag, defaultValue }) {
-  if (flags.has(offFlag)) return false;
-  if (flags.has(onFlag)) return true;
-  return defaultValue;
 }
 
 async function commandExists(cmd) {

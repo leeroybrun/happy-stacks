@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { parseDotenv } from '../env/dotenv.mjs';
 import { resolveStackEnvPath } from '../paths/paths.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './sources.mjs';
+import { getEnvValue } from '../env/values.mjs';
 
 async function readTextIfExists(path) {
   try {
@@ -21,11 +22,6 @@ async function readTextIfExists(path) {
 function parseEnvToObject(raw) {
   const parsed = parseDotenv(raw ?? '');
   return Object.fromEntries(parsed.entries());
-}
-
-function getEnvValue(env, key) {
-  const v = (env?.[key] ?? '').toString().trim();
-  return v || '';
 }
 
 function stackExistsSync(stackName) {

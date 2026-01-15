@@ -1,14 +1,5 @@
 import { getStackName } from './paths.mjs';
-
-function sanitizeDnsLabel(raw, { fallback = 'stack' } = {}) {
-  const s = String(raw ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-  return s || fallback;
-}
+import { sanitizeDnsLabel } from '../net/dns.mjs';
 
 export function resolveLocalhostHost({ stackMode, stackName = getStackName() } = {}) {
   if (!stackMode) return 'localhost';
