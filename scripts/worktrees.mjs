@@ -9,6 +9,7 @@ import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHo
 import { inferRemoteNameForOwner, parseGithubOwner } from './utils/git/worktrees.mjs';
 import { getWorktreesRoot } from './utils/git/worktrees.mjs';
 import { parseGithubPullRequest, sanitizeSlugPart } from './utils/git/refs.mjs';
+import { readTextIfExists } from './utils/fs/ops.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
@@ -448,7 +449,7 @@ async function cmdMigrate({ rootDir }) {
   const envPath = explicitEnv ? explicitEnv : hasHomeConfig ? resolveUserConfigEnvPath({ cliRootDir: rootDir }) : join(rootDir, 'env.local');
 
   if (await pathExists(envPath)) {
-    const raw = await readFile(envPath, 'utf-8');
+    const raw = (await readTextIfExists(envPath)) ?? '';
     const rewrite = (v) => {
       if (!v.includes('/components/')) {
         return v;
