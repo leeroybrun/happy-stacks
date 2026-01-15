@@ -1,10 +1,8 @@
-import { chmod, copyFile, lstat, mkdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, lstat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-async function ensureDir(p) {
-  await mkdir(p, { recursive: true });
-}
+import { ensureDir } from '../fs/ops.mjs';
 
 export async function removeFileOrSymlinkIfExists(path) {
   try {

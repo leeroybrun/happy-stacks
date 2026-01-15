@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
+import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc/proc.mjs';
@@ -159,21 +160,6 @@ function base64Url(buf) {
 
 function randomToken(lenBytes = 24) {
   return base64Url(randomBytes(lenBytes));
-}
-
-async function ensureDir(p) {
-  await mkdir(p, { recursive: true });
-}
-
-async function readTextIfExists(path) {
-  try {
-    if (!existsSync(path)) return null;
-    const raw = await readFile(path, 'utf-8');
-    const t = raw.trim();
-    return t ? t : null;
-  } catch {
-    return null;
-  }
 }
 
 // auth file copy/link helpers live in scripts/utils/auth/files.mjs

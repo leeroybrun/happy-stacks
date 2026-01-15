@@ -1,11 +1,9 @@
 import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
-import { parseDotenv } from './utils/env/dotenv.mjs';
 import { printResult } from './utils/cli/cli.mjs';
+import { readEnvObjectFromFile } from './utils/env/read.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 
@@ -107,15 +105,7 @@ function inferStackNameFromForwardedArgs(args) {
   return (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
 }
 
-async function readEnvObject(path) {
-  try {
-    if (!path || !existsSync(path)) return {};
-    const raw = await readFile(path, 'utf-8');
-    return Object.fromEntries(parseDotenv(raw).entries());
-  } catch {
-    return {};
-  }
-}
+const readEnvObject = readEnvObjectFromFile;
 
 function formatComponentRef({ rootDir, component, dir }) {
   const raw = String(dir ?? '').trim();

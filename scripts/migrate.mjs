@@ -5,8 +5,8 @@ import { createRequire } from 'node:module';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { parseDotenv } from './utils/env/dotenv.mjs';
 import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
+import { readEnvObjectFromFile } from './utils/env/read.mjs';
 import { resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled } from './utils/proc/pm.mjs';
 import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './utils/server/infra/happy_server_infra.mjs';
@@ -26,14 +26,7 @@ function usage() {
   ].join('\n');
 }
 
-async function readEnvObject(envPath) {
-  try {
-    const raw = await readFile(envPath, 'utf-8');
-    return Object.fromEntries(parseDotenv(raw).entries());
-  } catch {
-    return {};
-  }
-}
+const readEnvObject = readEnvObjectFromFile;
 
 function parseFileDatabaseUrl(url) {
   const raw = String(url ?? '').trim();

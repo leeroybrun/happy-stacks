@@ -17,3 +17,14 @@ export async function readEnvValueFromFile(envPath, key, { defaultValue = '' } =
   }
 }
 
+export async function readEnvObjectFromFile(envPath) {
+  try {
+    const p = String(envPath ?? '').trim();
+    if (!p || !existsSync(p)) return {};
+    const raw = await readFile(p, 'utf-8');
+    return Object.fromEntries(parseDotenv(raw ?? '').entries());
+  } catch {
+    return {};
+  }
+}
+

@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,17 +6,7 @@ import { parseDotenv } from '../env/dotenv.mjs';
 import { resolveStackEnvPath } from '../paths/paths.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './sources.mjs';
 import { getEnvValue } from '../env/values.mjs';
-
-async function readTextIfExists(path) {
-  try {
-    if (!path || !existsSync(path)) return null;
-    const raw = await readFile(path, 'utf-8');
-    const t = raw.trim();
-    return t ? t : null;
-  } catch {
-    return null;
-  }
-}
+import { readTextIfExists } from '../fs/ops.mjs';
 
 function parseEnvToObject(raw) {
   const parsed = parseDotenv(raw ?? '');

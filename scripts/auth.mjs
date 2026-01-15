@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { parseDotenv } from './utils/env/dotenv.mjs';
@@ -24,6 +24,7 @@ import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sour
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
+import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -103,20 +104,7 @@ async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
   }
 }
 
-async function ensureDir(p) {
-  await mkdir(p, { recursive: true });
-}
-
-async function readTextIfExists(path) {
-  try {
-    if (!existsSync(path)) return null;
-    const raw = await readFile(path, 'utf-8');
-    const t = raw.trim();
-    return t ? t : null;
-  } catch {
-    return null;
-  }
-}
+// NOTE: common fs helpers live in scripts/utils/fs/ops.mjs
 
 // (auth file copy/link helpers live in scripts/utils/auth/files.mjs)
 

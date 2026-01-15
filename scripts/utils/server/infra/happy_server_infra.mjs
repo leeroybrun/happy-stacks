@@ -4,8 +4,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { parseDotenv } from '../../env/dotenv.mjs';
 import { ensureEnvFileUpdated } from '../../env/env_file.mjs';
+import { readEnvObjectFromFile } from '../../env/read.mjs';
 import { sanitizeDnsLabel } from '../../net/dns.mjs';
 import { pickNextFreeTcpPort } from '../../net/ports.mjs';
 import { pmExecBin } from '../../proc/pm.mjs';
@@ -28,14 +28,7 @@ function coercePort(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function readEnvObject(envPath) {
-  try {
-    const raw = await readFile(envPath, 'utf-8');
-    return Object.fromEntries(parseDotenv(raw).entries());
-  } catch {
-    return {};
-  }
-}
+const readEnvObject = readEnvObjectFromFile;
 
 async function ensureTextFile({ path, generate }) {
   if (existsSync(path)) {
