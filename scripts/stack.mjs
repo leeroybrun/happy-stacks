@@ -48,6 +48,7 @@ import {
 } from './utils/stack/runtime_state.mjs';
 import { killPid } from './utils/expo/expo.mjs';
 import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
+import { sanitizeSlugPart } from './utils/git/refs.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -2084,16 +2085,6 @@ function envKeyForComponentDir({ serverComponent, component }) {
   if (component === 'happy-server-light') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT';
   // Fallback; caller should not use.
   return `HAPPY_STACKS_COMPONENT_DIR_${component.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
-}
-
-function sanitizeSlugPart(s) {
-  return String(s ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._/-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
 }
 
 async function cmdDuplicate({ rootDir, argv }) {

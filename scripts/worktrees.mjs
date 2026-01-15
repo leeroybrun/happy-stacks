@@ -7,6 +7,8 @@ import { run, runCapture } from './utils/proc/proc.mjs';
 import { commandExists } from './utils/proc/commands.mjs';
 import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths/paths.mjs';
 import { inferRemoteNameForOwner, parseGithubOwner } from './utils/git/worktrees.mjs';
+import { getWorktreesRoot } from './utils/git/worktrees.mjs';
+import { parseGithubPullRequest, sanitizeSlugPart } from './utils/git/refs.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
@@ -21,10 +23,6 @@ function getActiveStackName() {
 
 function isMainStack() {
   return getActiveStackName() === 'main';
-}
-
-function getWorktreesRoot(rootDir) {
-  return join(getComponentsDir(rootDir), '.worktrees');
 }
 
 function resolveComponentWorktreeDir({ rootDir, component, spec }) {
@@ -50,32 +48,6 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
 
   // Interpret as <owner>/<rest...> under components/.worktrees/<component>/.
   return join(worktreesRoot, component, ...raw.split('/'));
-}
-
-function parseGithubPullRequest(input) {
-  const raw = (input ?? '').trim();
-  if (!raw) return null;
-  if (/^\d+$/.test(raw)) {
-    return { number: Number(raw), owner: null, repo: null };
-  }
-  // https://github.com/<owner>/<repo>/pull/<num>
-  const m = raw.match(/github\.com\/(?<owner>[^/]+)\/(?<repo>[^/]+)\/pull\/(?<num>\d+)/);
-  if (!m?.groups?.num) return null;
-  return {
-    number: Number(m.groups.num),
-    owner: m.groups.owner ?? null,
-    repo: m.groups.repo ?? null,
-  };
-}
-
-function sanitizeSlugPart(s) {
-  return (s ?? '')
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._/-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
 
 async function isWorktreeClean(dir) {
