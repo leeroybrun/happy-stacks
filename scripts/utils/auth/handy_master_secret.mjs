@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,12 +6,7 @@ import { resolveStackEnvPath } from '../paths/paths.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './sources.mjs';
 import { getEnvValue } from '../env/values.mjs';
 import { readTextIfExists } from '../fs/ops.mjs';
-
-function stackExistsSync(stackName) {
-  if (stackName === 'main') return true;
-  const envPath = resolveStackEnvPath(stackName).envPath;
-  return existsSync(envPath);
-}
+import { stackExistsSync } from '../stack/stacks.mjs';
 
 export async function resolveHandyMasterSecretFromStack({
   stackName,

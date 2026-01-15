@@ -23,7 +23,7 @@ import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
-import { listAllStackNames } from './utils/stack/stacks.mjs';
+import { listAllStackNames, stackExistsSync } from './utils/stack/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack/stop.mjs';
 import { writeDevAuthKey } from './utils/auth/dev_key.mjs';
 import { startDevServer } from './utils/dev/server.mjs';
@@ -275,12 +275,6 @@ async function readExistingEnv(path) {
   } catch {
     return '';
   }
-}
-
-function stackExistsSync(stackName) {
-  if (stackName === 'main') return true;
-  const envPath = getStackEnvPath(stackName);
-  return existsSync(envPath);
 }
 
 function resolveDefaultComponentDirs({ rootDir }) {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { getLegacyStorageRoot, getStacksStorageRoot } from '../paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from '../env/sandbox.mjs';
+import { resolveStackEnvPath } from '../paths/paths.mjs';
 
 export async function listAllStackNames() {
   const names = new Set(['main']);
@@ -35,4 +36,10 @@ export async function listAllStackNames() {
   }
 
   return Array.from(names).sort();
+}
+
+export function stackExistsSync(stackName) {
+  const name = String(stackName ?? '').trim() || 'main';
+  if (name === 'main') return true;
+  return existsSync(resolveStackEnvPath(name).envPath);
 }

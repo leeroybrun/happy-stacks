@@ -26,6 +26,7 @@ import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_sec
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
+import { stackExistsSync } from './utils/stack/stacks.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -113,12 +114,6 @@ function getStackDir(stackName) {
 
 function getStackEnvPath(stackName) {
   return resolveStackEnvPath(stackName).envPath;
-}
-
-function stackExistsSync(stackName) {
-  if (stackName === 'main') return true;
-  const envPath = getStackEnvPath(stackName);
-  return existsSync(envPath);
 }
 
 function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {

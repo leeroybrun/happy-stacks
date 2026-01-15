@@ -6,6 +6,7 @@ import { printResult } from './utils/cli/cli.mjs';
 import { readEnvObjectFromFile } from './utils/env/read.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
+import { getEnvValueAny } from './utils/env/values.mjs';
 
 function stripAnsi(s) {
   // eslint-disable-next-line no-control-regex
@@ -122,12 +123,6 @@ function formatComponentRef({ rootDir, component, dir }) {
   return abs;
 }
 
-function getEnvVal(env, k1, k2) {
-  const a = String(env?.[k1] ?? '').trim();
-  if (a) return a;
-  return String(env?.[k2] ?? '').trim();
-}
-
 async function buildStackSummaryLines({ rootDir, stackName }) {
   const { envPath, baseDir } = resolveStackEnvPath(stackName);
   const env = await readEnvObject(envPath);
@@ -135,7 +130,7 @@ async function buildStackSummaryLines({ rootDir, stackName }) {
   const runtime = await readStackRuntimeStateFile(runtimePath);
 
   const serverComponent =
-    getEnvVal(env, 'HAPPY_STACKS_SERVER_COMPONENT', 'HAPPY_LOCAL_SERVER_COMPONENT') || 'happy-server-light';
+    getEnvValueAny(env, ['HAPPY_STACKS_SERVER_COMPONENT', 'HAPPY_LOCAL_SERVER_COMPONENT']) || 'happy-server-light';
 
   const ports = runtime?.ports && typeof runtime.ports === 'object' ? runtime.ports : {};
   const expoWebPort = runtime?.expo && typeof runtime.expo === 'object' ? runtime.expo.webPort : null;
