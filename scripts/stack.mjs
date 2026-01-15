@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+// NOTE: random bytes usage centralized in scripts/utils/crypto/tokens.mjs
 import { homedir } from 'node:os';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 
@@ -48,20 +48,14 @@ import {
   readStackRuntimeStateFile,
 } from './utils/stack/runtime_state.mjs';
 import { killPid } from './utils/expo/expo.mjs';
+import { getCliHomeDirFromEnvOrDefault, getServerLightDataDirFromEnvOrDefault } from './utils/stack/dirs.mjs';
+import { randomToken } from './utils/crypto/tokens.mjs';
 import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
 import { sanitizeSlugPart } from './utils/git/refs.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
   return name;
-}
-
-function getStackDir(stackName) {
-  return resolveStackEnvPath(stackName).baseDir;
-}
-
-function getStackEnvPath(stackName) {
-  return resolveStackEnvPath(stackName).envPath;
 }
 
 function getDefaultPortStart() {
@@ -150,29 +144,7 @@ async function collectReservedStackPorts({ excludeStackName = null } = {}) {
   return reserved;
 }
 
-function base64Url(buf) {
-  return Buffer.from(buf)
-    .toString('base64')
-    .replaceAll('+', '-')
-    .replaceAll('/', '_')
-    .replaceAll('=', '');
-}
-
-function randomToken(lenBytes = 24) {
-  return base64Url(randomBytes(lenBytes));
-}
-
 // auth file copy/link helpers live in scripts/utils/auth/files.mjs
-
-function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {
-  const fromEnv = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').trim();
-  return fromEnv || join(stackBaseDir, 'cli');
-}
-
-function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
-  const fromEnv = (env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim();
-  return fromEnv || join(stackBaseDir, 'server-light');
-}
 
 async function copyAuthFromStackIntoNewStack({
   fromStackName,
@@ -221,8 +193,8 @@ async function copyAuthFromStackIntoNewStack({
         'If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
     );
   }
-  const sourceBaseDir = legacy ? getLegacyHappyBaseDir() : getStackDir(fromStackName);
-  const sourceEnvRaw = legacy ? '' : await readExistingEnv(getStackEnvPath(fromStackName));
+  const sourceBaseDir = legacy ? getLegacyHappyBaseDir() : resolveStackEnvPath(fromStackName).baseDir;
+  const sourceEnvRaw = legacy ? '' : await readExistingEnv(resolveStackEnvPath(fromStackName).envPath);
   const sourceEnv = parseEnvToObject(sourceEnvRaw);
   const sourceCli = legacy ? join(sourceBaseDir, 'cli') : getCliHomeDirFromEnvOrDefault({ stackBaseDir: sourceBaseDir, env: sourceEnv });
   const targetCli = stackEnv.HAPPY_STACKS_CLI_HOME_DIR;
@@ -290,9 +262,9 @@ function resolveDefaultComponentDirs({ rootDir }) {
 }
 
 async function writeStackEnv({ stackName, env }) {
-  const stackDir = getStackDir(stackName);
+  const stackDir = resolveStackEnvPath(stackName).baseDir;
   await ensureDir(stackDir);
-  const envPath = getStackEnvPath(stackName);
+  const envPath = resolveStackEnvPath(stackName).envPath;
   const next = stringifyEnv(env);
   const existing = await readExistingEnv(envPath);
   if (existing !== next) {
@@ -302,7 +274,7 @@ async function writeStackEnv({ stackName, env }) {
 }
 
 async function withStackEnv({ stackName, fn, extraEnv = {} }) {
-  const envPath = getStackEnvPath(stackName);
+  const envPath = resolveStackEnvPath(stackName).envPath;
   if (!stackExistsSync(stackName)) {
     throw new Error(
       `[stack] stack "${stackName}" does not exist yet.\n` +
@@ -559,7 +531,7 @@ async function cmdNew({ rootDir, argv, emit = true }) {
     throw new Error(`[stack] invalid server component: ${serverComponent}`);
   }
 
-  const baseDir = getStackDir(stackName);
+  const baseDir = resolveStackEnvPath(stackName).baseDir;
   const uiBuildDir = join(baseDir, 'ui');
   const cliHomeDir = join(baseDir, 'cli');
 
@@ -759,7 +731,7 @@ async function cmdEdit({ rootDir, argv }) {
     throw new Error('[stack] usage: happys stack edit <name> [--interactive]');
   }
 
-  const envPath = getStackEnvPath(stackName);
+  const envPath = resolveStackEnvPath(stackName).envPath;
   const raw = await readExistingEnv(envPath);
   const existingEnv = parseEnvToObject(raw);
 
@@ -784,7 +756,7 @@ async function cmdEdit({ rootDir, argv }) {
   const config = await withRl((rl) => interactiveEdit({ rootDir, rl, stackName, existingEnv, defaults }));
 
   // Build next env, starting from existing env but enforcing stack-scoped invariants.
-  const baseDir = getStackDir(stackName);
+  const baseDir = resolveStackEnvPath(stackName).baseDir;
   const uiBuildDir = join(baseDir, 'ui');
   const cliHomeDir = join(baseDir, 'cli');
 
@@ -1849,7 +1821,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         const internalServerUrl = `http://127.0.0.1:${serverPort}`;
         const publicServerUrl = `http://localhost:${serverPort}`;
 
-        const autostart = { stackName: name, baseDir: getStackDir(name) };
+        const autostart = { stackName: name, baseDir: resolveStackEnvPath(name).baseDir };
         const children = [];
 
         await withStackEnv({
@@ -2047,7 +2019,7 @@ function parseServerComponentFromEnv(env) {
 }
 
 async function readStackEnvObject(stackName) {
-  const envPath = getStackEnvPath(stackName);
+  const envPath = resolveStackEnvPath(stackName).envPath;
   const raw = await readExistingEnv(envPath);
   const env = raw ? parseEnvToObject(raw) : {};
   return { envPath, env };
@@ -2135,7 +2107,7 @@ async function cmdDuplicate({ rootDir, argv }) {
   }
 
   // Apply component dir overrides to the destination stack env file.
-  const toEnvPath = getStackEnvPath(toStack);
+  const toEnvPath = resolveStackEnvPath(toStack).envPath;
   if (updates.length) {
     await ensureEnvFileUpdated({ envPath: toEnvPath, updates });
   }
@@ -2522,8 +2494,8 @@ async function cmdPrStack({ rootDir, argv }) {
 
 async function cmdInfoInternal({ rootDir, stackName }) {
   // Minimal extraction from cmdInfo to avoid re-parsing argv/printing. Used by cmdPrStack.
-  const baseDir = getStackDir(stackName);
-  const envPath = getStackEnvPath(stackName);
+  const baseDir = resolveStackEnvPath(stackName).baseDir;
+  const envPath = resolveStackEnvPath(stackName).envPath;
   const envRaw = await readExistingEnv(envPath);
   const stackEnv = envRaw ? parseEnvToObject(envRaw) : {};
   const runtimeStatePath = getStackRuntimeStatePath(stackName);
@@ -2877,7 +2849,7 @@ async function main() {
     const noDocker = stopFlags.has('--no-docker');
     const aggressive = stopFlags.has('--aggressive');
     const sweepOwned = stopFlags.has('--sweep-owned');
-    const baseDir = getStackDir(stackName);
+    const baseDir = resolveStackEnvPath(stackName).baseDir;
     const out = await withStackEnv({
       stackName,
       fn: async ({ env }) => {

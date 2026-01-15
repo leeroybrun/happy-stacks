@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,18 +9,7 @@ import { sanitizeDnsLabel } from '../../net/dns.mjs';
 import { pickNextFreeTcpPort } from '../../net/ports.mjs';
 import { pmExecBin } from '../../proc/pm.mjs';
 import { run, runCapture } from '../../proc/proc.mjs';
-
-function base64Url(buf) {
-  return Buffer.from(buf)
-    .toString('base64')
-    .replaceAll('+', '-')
-    .replaceAll('/', '_')
-    .replaceAll('=', '');
-}
-
-function randomToken(lenBytes = 24) {
-  return base64Url(randomBytes(lenBytes));
-}
+import { randomToken } from '../../crypto/tokens.mjs';
 
 function coercePort(v) {
   const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;

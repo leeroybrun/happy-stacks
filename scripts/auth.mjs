@@ -27,6 +27,7 @@ import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
 import { stackExistsSync } from './utils/stack/stacks.mjs';
+import { getCliHomeDirFromEnvOrDefault, getServerLightDataDirFromEnvOrDefault } from './utils/stack/dirs.mjs';
 
 function getInternalServerUrl() {
   const n = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
@@ -47,7 +48,7 @@ function resolveEnvPublicUrlForStack({ stackName }) {
   const envPath =
     (process.env.HAPPY_STACKS_ENV_FILE ?? '').trim() ||
     (process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim() ||
-    getStackEnvPath(stackName);
+    resolveStackEnvPath(stackName).envPath;
   try {
     if (!envPath || !existsSync(envPath)) return '';
     const raw = readFileSync(envPath, 'utf-8');
@@ -72,7 +73,7 @@ function resolveEnvWebappUrlForStack({ stackName }) {
   const envPath =
     (process.env.HAPPY_STACKS_ENV_FILE ?? '').trim() ||
     (process.env.HAPPY_LOCAL_ENV_FILE ?? '').trim() ||
-    getStackEnvPath(stackName);
+    resolveStackEnvPath(stackName).envPath;
   try {
     if (!envPath || !existsSync(envPath)) return '';
     const raw = readFileSync(envPath, 'utf-8');
@@ -85,7 +86,7 @@ function resolveEnvWebappUrlForStack({ stackName }) {
 
 async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
   try {
-    const baseDir = getStackDir(stackName);
+    const baseDir = resolveStackEnvPath(stackName).baseDir;
     const uiDir = getComponentDir(rootDir, 'happy');
     const uiPaths = getExpoStatePaths({
       baseDir,
@@ -107,24 +108,6 @@ async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
 // NOTE: common fs helpers live in scripts/utils/fs/ops.mjs
 
 // (auth file copy/link helpers live in scripts/utils/auth/files.mjs)
-
-function getStackDir(stackName) {
-  return resolveStackEnvPath(stackName).baseDir;
-}
-
-function getStackEnvPath(stackName) {
-  return resolveStackEnvPath(stackName).envPath;
-}
-
-function getCliHomeDirFromEnvOrDefault({ stackBaseDir, env }) {
-  const fromEnv = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').trim();
-  return fromEnv || join(stackBaseDir, 'cli');
-}
-
-function getServerLightDataDirFromEnvOrDefault({ stackBaseDir, env }) {
-  const fromEnv = (env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim();
-  return fromEnv || join(stackBaseDir, 'server-light');
-}
 
 function resolveCliHomeDir() {
   const fromEnv = (process.env.HAPPY_LOCAL_CLI_HOME_DIR ?? process.env.HAPPY_STACKS_CLI_HOME_DIR ?? '').trim();
@@ -646,8 +629,8 @@ async function cmdCopyFrom({ argv, json }) {
     }
   }
 
-  const sourceBaseDir = isLegacySource ? getLegacyHappyBaseDir() : getStackDir(fromStackName);
-  const sourceEnvRaw = isLegacySource ? '' : await readTextIfExists(getStackEnvPath(fromStackName));
+  const sourceBaseDir = isLegacySource ? getLegacyHappyBaseDir() : resolveStackEnvPath(fromStackName).baseDir;
+  const sourceEnvRaw = isLegacySource ? '' : await readTextIfExists(resolveStackEnvPath(fromStackName).envPath);
   const sourceEnv = sourceEnvRaw ? parseEnvToObject(sourceEnvRaw) : {};
   const sourceCli = isLegacySource
     ? join(sourceBaseDir, 'cli')
@@ -705,7 +688,7 @@ async function cmdCopyFrom({ argv, json }) {
       if (targetServerComponent === 'happy-server' && withInfra && managed) {
         const { port } = getInternalServerUrl();
         const publicServerUrl = `http://localhost:${port}`;
-        const envPath = getStackEnvPath(stackName);
+        const envPath = resolveStackEnvPath(stackName).envPath;
         const infra = await ensureHappyServerManagedInfra({
           stackName,
           baseDir: targetBaseDir,
