@@ -2,6 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/proc/pm.mjs';
+import { resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { dirname, join } from 'node:path';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tailscaleServeHttpsUrl } from './tailscale.mjs';
@@ -43,9 +44,7 @@ async function main() {
   const uiDir = getComponentDir(rootDir, 'happy');
   await requireDir('happy', uiDir);
 
-  const serverPort = process.env.HAPPY_LOCAL_SERVER_PORT
-    ? parseInt(process.env.HAPPY_LOCAL_SERVER_PORT, 10)
-    : 3005;
+  const serverPort = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
 
   // For Tauri builds we embed an explicit API base URL (tauri:// origins cannot use window.location.origin).
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;

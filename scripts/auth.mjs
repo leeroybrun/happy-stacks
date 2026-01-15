@@ -26,6 +26,7 @@ import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox
 import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_secret.mjs';
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 import { stackExistsSync } from './utils/stack/stacks.mjs';
+import { checkDaemonState } from './daemon.mjs';
 import {
   getCliHomeDirFromEnvOrDefault,
   getServerLightDataDirFromEnvOrDefault,
@@ -70,46 +71,6 @@ function fileHasContent(path) {
   } catch {
     return false;
   }
-}
-
-function checkDaemonState(cliHomeDir) {
-  const statePath = join(cliHomeDir, 'daemon.state.json');
-  const lockPath = join(cliHomeDir, 'daemon.state.json.lock');
-
-  const alive = (pid) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  if (existsSync(statePath)) {
-    try {
-      const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-      const pid = Number(state?.pid);
-      if (Number.isFinite(pid) && pid > 0) {
-        return alive(pid) ? { status: 'running', pid } : { status: 'stale_state', pid };
-      }
-      return { status: 'bad_state' };
-    } catch {
-      return { status: 'bad_state' };
-    }
-  }
-
-  if (existsSync(lockPath)) {
-    try {
-      const pid = Number(readFileSync(lockPath, 'utf-8').trim());
-      if (Number.isFinite(pid) && pid > 0) {
-        return alive(pid) ? { status: 'starting', pid } : { status: 'stale_lock', pid };
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return { status: 'stopped' };
 }
 
 function authLoginSuggestion(stackName) {

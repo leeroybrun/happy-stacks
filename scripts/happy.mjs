@@ -4,9 +4,9 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { getComponentDir, getRootDir, getStackName } from './utils/paths/paths.mjs';
 import { resolveCliHomeDir } from './utils/stack/dirs.mjs';
-import { getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
+import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -31,12 +31,12 @@ async function main() {
 
   const rootDir = getRootDir(import.meta.url);
 
-  const portRaw = (process.env.HAPPY_STACKS_SERVER_PORT ?? process.env.HAPPY_LOCAL_SERVER_PORT ?? '').trim();
-  const port = portRaw ? Number(portRaw) : 3005;
-  const serverPort = Number.isFinite(port) ? port : 3005;
+  const stackName =
+    (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').toString().trim() || getStackName();
+  const serverPort = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
 
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
-  const { publicServerUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort });
+  const { publicServerUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort, stackName });
 
   const cliHomeDir = resolveCliHomeDir();
 
