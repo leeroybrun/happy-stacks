@@ -18,25 +18,10 @@ import { installService } from './service.mjs';
 import { getDevAuthKeyPath } from './utils/auth/dev_key.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { boolFromFlags, boolFromFlagsOrKv } from './utils/cli/flags.mjs';
+import { normalizeProfile, normalizeServerComponent } from './utils/cli/normalize.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { commandExists } from './utils/proc/commands.mjs';
 import { readEnvValueFromFile } from './utils/env/read.mjs';
-
-function normalizeProfile(raw) {
-  const v = (raw ?? '').trim().toLowerCase();
-  if (!v) return '';
-  if (v === 'selfhost' || v === 'self-host' || v === 'self_host' || v === 'host') return 'selfhost';
-  if (v === 'dev' || v === 'developer' || v === 'develop') return 'dev';
-  return '';
-}
-
-function normalizeServer(raw) {
-  const v = (raw ?? '').trim().toLowerCase();
-  if (!v) return '';
-  if (v === 'light' || v === 'server-light' || v === 'happy-server-light') return 'happy-server-light';
-  if (v === 'server' || v === 'full' || v === 'happy-server') return 'happy-server';
-  return '';
-}
 
 async function resolveMainServerPort() {
   // Priority:
@@ -320,8 +305,8 @@ async function cmdSetup({ rootDir, argv }) {
   const supportsAutostart = platform === 'darwin' || platform === 'linux';
   const supportsMenubar = platform === 'darwin';
 
-  const serverFromArg = normalizeServer(kv.get('--server'));
-  let serverComponent = serverFromArg || normalizeServer(process.env.HAPPY_STACKS_SERVER_COMPONENT) || 'happy-server-light';
+  const serverFromArg = normalizeServerComponent(kv.get('--server'));
+  let serverComponent = serverFromArg || normalizeServerComponent(process.env.HAPPY_STACKS_SERVER_COMPONENT) || 'happy-server-light';
   if (profile === 'selfhost' && interactive && !serverFromArg) {
     serverComponent = await withRl(async (rl) => {
       const picked = await promptSelect(rl, {
