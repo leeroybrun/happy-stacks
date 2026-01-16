@@ -110,6 +110,42 @@ function stripGlobalOpt(argv, { name, aliases = [] }) {
   return { value: '', argv };
 }
 
+function applyVerbosityIfRequested(argv) {
+  // Global verbosity:
+  // - supports -v/-vv/-vvv anywhere before/after the command
+  // - supports --verbose and --verbose=N
+  //
+  // We set HAPPY_STACKS_VERBOSE (0-3) and strip these args so downstream scripts don't need to support them.
+  let level = Number.isFinite(Number(process.env.HAPPY_STACKS_VERBOSE)) ? Number(process.env.HAPPY_STACKS_VERBOSE) : null;
+  let next = [];
+  for (const a of argv) {
+    if (a === '-v' || a === '-vv' || a === '-vvv') {
+      const n = a.length - 1;
+      level = Math.max(level ?? 0, n);
+      continue;
+    }
+    if (a === '--verbose') {
+      level = Math.max(level ?? 0, 1);
+      continue;
+    }
+    if (a.startsWith('--verbose=')) {
+      const raw = a.slice('--verbose='.length).trim();
+      const n = Number(raw);
+      if (Number.isFinite(n)) {
+        level = Math.max(level ?? 0, Math.max(0, Math.min(3, Math.floor(n))));
+      } else {
+        level = Math.max(level ?? 0, 1);
+      }
+      continue;
+    }
+    next.push(a);
+  }
+  if (level != null) {
+    process.env.HAPPY_STACKS_VERBOSE = String(Math.max(0, Math.min(3, Math.floor(level))));
+  }
+  return next;
+}
+
 function applySandboxDirIfRequested(argv) {
   const explicit = (process.env.HAPPY_STACKS_SANDBOX_DIR ?? '').trim();
   const { value, argv: nextArgv } = stripGlobalOpt(argv, { name: '--sandbox-dir', aliases: ['--sandbox'] });
@@ -248,7 +284,8 @@ function runNodeScript(cliRootDir, scriptRelPath, args) {
 function main() {
   const cliRootDir = getCliRootDir();
   const initialArgv = process.argv.slice(2);
-  const { argv, enabled: sandboxed } = applySandboxDirIfRequested(initialArgv);
+  const argv0 = applyVerbosityIfRequested(initialArgv);
+  const { argv, enabled: sandboxed } = applySandboxDirIfRequested(argv0);
   void sandboxed;
   maybeReexecToCliRoot(cliRootDir);
 

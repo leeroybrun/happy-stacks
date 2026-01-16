@@ -1,6 +1,6 @@
 import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
-import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 // NOTE: random bytes usage centralized in scripts/utils/crypto/tokens.mjs
@@ -851,7 +851,7 @@ async function cmdEdit({ rootDir, argv }) {
   printResult({ json, data: { stackName, envPath: wrote, port, serverComponent }, text: `[stack] updated ${stackName}\n[stack] env: ${wrote}` });
 }
 
-async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {} }) {
+async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {}, background = false }) {
   await withStackEnv({
     stackName,
     extraEnv,
@@ -912,6 +912,13 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
             }
           } else if (scriptPath === 'dev.mjs') {
             console.log(`[stack] ${stackName}: ui: unknown (missing expo.webPort in stack.runtime.json)`);
+          }
+
+          // Opt-in: allow starting mobile Metro alongside an already-running stack without restarting the runner.
+          // This is important for workflows like re-running `setup-pr` with --mobile after the stack is already up.
+          const wantsMobile = args.includes('--mobile') || args.includes('--with-mobile');
+          if (wantsMobile) {
+            await run(process.execPath, [join(rootDir, 'scripts', 'mobile.mjs'), '--metro'], { cwd: rootDir, env });
           }
           return;
         }
@@ -1043,13 +1050,35 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
             : {}),
         };
 
+        // Background mode: send runner output to a stack-scoped log file so quiet flows can
+        // remain clean while still providing actionable error logs.
+        const stackBaseDir = resolveStackEnvPath(stackName).baseDir;
+        const logsDir = join(stackBaseDir, 'logs');
+        const logPath = join(logsDir, `${scriptPath.replace(/\.mjs$/, '')}.${Date.now()}.log`);
+        if (background) {
+          await ensureDir(logsDir);
+        }
+
+        let logHandle = null;
+        let outFd = null;
+        if (background) {
+          logHandle = await open(logPath, 'a');
+          outFd = logHandle.fd;
+        }
+
         // Spawn the runner (long-lived) and record its pid + ports for other stack-scoped commands.
         const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], {
           cwd: rootDir,
           env: childEnv,
-          stdio: 'inherit',
+          stdio: background ? ['ignore', outFd ?? 'ignore', outFd ?? 'ignore'] : 'inherit',
           shell: false,
+          detached: background && process.platform !== 'win32',
         });
+        try {
+          await logHandle?.close();
+        } catch {
+          // ignore
+        }
 
         // Record the chosen ports immediately (before the runner finishes booting), so other stack commands
         // can resolve the correct endpoints and `--restart` can reliably reuse the same ports.
@@ -1059,7 +1088,49 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           ephemeral: true,
           ownerPid: child.pid,
           ports,
+          ...(background ? { logPath } : {}),
         }).catch(() => {});
+
+        if (background) {
+          // Keep stack.runtime.json so stack-scoped stop/restart can manage this runner.
+          // This mode is used by higher-level commands that want to run guided auth steps
+          // without mixing them into server logs.
+          const internalServerUrl = `http://127.0.0.1:${ports.server}`;
+
+          // Fail fast if the runner dies immediately or never exposes HTTP.
+          try {
+            const exitedEarly = await Promise.race([
+              new Promise((resolvePromise) => {
+                child.once('exit', (code, sig) => resolvePromise({ kind: 'exit', code: code ?? 0, sig: sig ?? null }));
+                child.once('error', () => resolvePromise({ kind: 'error' }));
+              }),
+              (async () => {
+                await waitForHttpOk(`${internalServerUrl}/health`, { timeoutMs: 20_000, intervalMs: 300 });
+                return { kind: 'ready' };
+              })(),
+            ]);
+
+            if (exitedEarly.kind !== 'ready') {
+              throw new Error(`[stack] ${stackName}: runner exited before becoming ready. log: ${logPath}`);
+            }
+          } catch (e) {
+            // Best-effort cleanup on boot failure.
+            try {
+              const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').toString();
+              await killPidOwnedByStack(child.pid, { stackName, envPath, cliHomeDir, label: 'runner', json: false });
+            } catch {
+              // ignore
+            }
+            await deleteStackRuntimeStateFile(runtimeStatePath).catch(() => {});
+            throw e;
+          }
+
+          if (!wantsJson) {
+            console.log(`[stack] ${stackName}: logs: ${logPath}`);
+          }
+          try { child.unref(); } catch { /* ignore */ }
+          return;
+        }
 
         try {
           await new Promise((resolvePromise, rejectPromise) => {
@@ -1079,6 +1150,9 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
       }
 
       // Pinned port stack: run normally under the pinned env.
+      if (background) {
+        throw new Error('[stack] --background is only supported for ephemeral-port stacks');
+      }
       await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
     },
   });
@@ -2160,13 +2234,14 @@ async function cmdPrStack({ rootDir, argv }) {
       json,
       data: {
         usage:
-          'happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--json] [-- <stack dev/start args...>]',
+          'happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--background] [--mobile] [--json] [-- <stack dev/start args...>]',
       },
       text: [
         '[stack] usage:',
         '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start]',
-        '    [--seed-auth] [--copy-auth-from=<stack|legacy>] [--link-auth] [--with-infra] [--auth-force]',
-        '    [--remote=upstream] [--deps=none|link|install|link-or-install] [--update] [--force]',
+        '    [--seed-auth] [--copy-auth-from=<stack>] [--link-auth] [--with-infra] [--auth-force]',
+        '    [--remote=upstream] [--deps=none|link|install|link-or-install] [--update] [--force] [--background]',
+        '    [--mobile]   # also start Expo dev-client Metro for mobile',
         '    [--json] [-- <stack dev/start args...>]',
         '',
         'examples:',
@@ -2181,7 +2256,7 @@ async function cmdPrStack({ rootDir, argv }) {
         '  happys stack pr pr123 --happy=123 --happy-cli=456 --seed-auth --copy-auth-from=dev-auth --dev',
         '',
         '  # Reuse an existing non-stacks Happy install for auth seeding',
-        '  happys stack pr pr123 --happy=123 --seed-auth --copy-auth-from=legacy --link-auth --dev',
+        '  (deprecated) legacy ~/.happy is not supported for reliable seeding',
         '',
         'notes:',
         '  - This composes existing commands: `happys stack new`, `happys stack wt ...`, and `happys stack auth ...`',
@@ -2238,6 +2313,9 @@ async function cmdPrStack({ rootDir, argv }) {
   if (wantsDev && wantsStart) {
     throw new Error('[stack] pr: choose either --dev or --start (not both)');
   }
+
+  const wantsMobile = flags.has('--mobile') || flags.has('--with-mobile');
+  const background = flags.has('--background') || flags.has('--bg') || (kv.get('--background') ?? '').trim() === '1';
 
   const seedAuthFlag = flags.has('--seed-auth') ? true : flags.has('--no-seed-auth') ? false : null;
   const authFromFlag = (kv.get('--copy-auth-from') ?? '').trim();
@@ -2442,12 +2520,18 @@ async function cmdPrStack({ rootDir, argv }) {
   // 4) Optional: start dev / start.
   if (wantsDev) {
     progress(`[stack] pr: ${stackName}: starting dev...`);
-    const args = passthrough.length ? ['--', ...passthrough] : [];
-    await cmdRunScript({ rootDir, stackName, scriptPath: 'dev.mjs', args });
+    const args = [
+      ...(wantsMobile ? ['--mobile'] : []),
+      ...(passthrough.length ? ['--', ...passthrough] : []),
+    ];
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'dev.mjs', args, background });
   } else if (wantsStart) {
     progress(`[stack] pr: ${stackName}: starting...`);
-    const args = passthrough.length ? ['--', ...passthrough] : [];
-    await cmdRunScript({ rootDir, stackName, scriptPath: 'run.mjs', args });
+    const args = [
+      ...(wantsMobile ? ['--mobile'] : []),
+      ...(passthrough.length ? ['--', ...passthrough] : []),
+    ];
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'run.mjs', args, background });
   }
 
   const info = await cmdInfoInternal({ rootDir, stackName });
@@ -2500,10 +2584,15 @@ async function cmdInfoInternal({ rootDir, stackName }) {
     runtimeState?.expo && typeof runtimeState.expo === 'object' && Number(runtimeState.expo.webPort) > 0
       ? Number(runtimeState.expo.webPort)
       : null;
+  const mobilePort =
+    runtimeState?.expo && typeof runtimeState.expo === 'object' && Number(runtimeState.expo.mobilePort) > 0
+      ? Number(runtimeState.expo.mobilePort)
+      : null;
 
   const host = resolveLocalhostHost({ stackMode: true, stackName });
   const internalServerUrl = serverPort ? `http://127.0.0.1:${serverPort}` : null;
   const uiUrl = uiPort ? `http://${host}:${uiPort}` : null;
+  const mobileUrl = mobilePort ? `http://localhost:${mobilePort}` : null;
 
   const componentSpecs = [
     { component: 'happy', keys: ['HAPPY_STACKS_COMPONENT_DIR_HAPPY', 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY'] },
@@ -2546,11 +2635,13 @@ async function cmdInfoInternal({ rootDir, stackName }) {
       host,
       internalServerUrl,
       uiUrl,
+      mobileUrl,
     },
     ports: {
       server: serverPort,
       backend: backendPort,
       ui: uiPort,
+      mobile: mobilePort,
     },
     components,
   };

@@ -18,6 +18,7 @@ import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls
 import { ensureDevCliReady, prepareDaemonAuthSeed, startDevDaemon, watchHappyCliAndRestartDaemon } from './utils/dev/daemon.mjs';
 import { startDevServer, watchDevServerAndRestart } from './utils/dev/server.mjs';
 import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
+import { startDevExpoMobile } from './utils/dev/expo_mobile.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
@@ -37,13 +38,14 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--watch', '--no-watch', '--no-browser'], json: true },
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--watch', '--no-watch', '--no-browser', '--mobile'], json: true },
       text: [
         '[dev] usage:',
         '  happys dev [--server=happy-server|happy-server-light] [--restart] [--json]',
         '  happys dev --watch      # rebuild/restart happy-cli daemon on file changes (TTY default)',
         '  happys dev --no-watch   # disable watch mode (always disabled in non-interactive mode)',
         '  happys dev --no-browser # do not open the UI in your browser automatically',
+        '  happys dev --mobile     # also start Expo dev-client Metro for mobile',
         '  note: --json prints the resolved config (dry-run) and exits.',
       ].join('\n'),
     });
@@ -58,6 +60,7 @@ async function main() {
 
   const startUi = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_UI ?? '1') !== '0';
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
+  const startMobile = flags.has('--mobile') || flags.has('--with-mobile');
   const noBrowser = flags.has('--no-browser') || (process.env.HAPPY_STACKS_NO_BROWSER ?? process.env.HAPPY_LOCAL_NO_BROWSER ?? '').toString().trim() === '1';
 
   const serverDir = getComponentDir(rootDir, serverComponentName);
@@ -112,6 +115,7 @@ async function main() {
         internalServerUrl,
         publicServerUrl,
         startUi,
+        startMobile,
         startDaemon,
         cliHomeDir,
       },
@@ -298,6 +302,29 @@ async function main() {
         console.warn(`[local] ui: failed to open browser automatically (${res.error}).`);
       }
     }
+  }
+
+  const reservedPorts = new Set();
+  if (uiRes?.port && Number.isFinite(uiRes.port) && uiRes.port > 0) {
+    reservedPorts.add(Number(uiRes.port));
+  }
+
+  const mobileRes = await startDevExpoMobile({
+    startMobile,
+    uiDir,
+    autostart,
+    baseEnv,
+    apiServerUrl: uiApiUrl,
+    restart,
+    stackMode,
+    runtimeStatePath,
+    stackName,
+    envPath,
+    children,
+    reservedPorts,
+  });
+  if (startMobile && mobileRes?.port) {
+    console.log(`[local] mobile: metro http://localhost:${mobileRes.port}`);
   }
 
   const shutdown = async () => {

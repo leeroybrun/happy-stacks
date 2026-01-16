@@ -1,8 +1,8 @@
-import { ensureDepsInstalled, pmSpawnBin } from '../proc/pm.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, wantsExpoClearCache, writePidState } from '../expo/expo.mjs';
-import { pickDevMetroPort, resolveStackUiDevPortStart } from './server.mjs';
+import { pickUiDevMetroPort } from '../expo/metro_ports.mjs';
 import { recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
+import { expoSpawn } from '../expo/command.mjs';
 
 export async function startDevExpoWebUi({
   startUi,
@@ -20,7 +20,6 @@ export async function startDevExpoWebUi({
 }) {
   if (!startUi) return { ok: true, skipped: true, reason: 'disabled' };
 
-  await ensureDepsInstalled(uiDir, 'happy');
   const uiEnv = { ...baseEnv };
   delete uiEnv.CI;
   uiEnv.EXPO_PUBLIC_HAPPY_SERVER_URL = apiServerUrl;
@@ -65,12 +64,7 @@ export async function startDevExpoWebUi({
     };
   }
 
-  const strategy =
-    (baseEnv.HAPPY_STACKS_UI_DEV_PORT_STRATEGY ?? baseEnv.HAPPY_LOCAL_UI_DEV_PORT_STRATEGY ?? 'ephemeral').toString().trim() ||
-    'ephemeral';
-  const stable = strategy === 'stable';
-  const startPort = stackMode && stable ? resolveStackUiDevPortStart({ env: baseEnv, stackName }) : 8081;
-  const metroPort = await pickDevMetroPort({ startPort });
+  const metroPort = await pickUiDevMetroPort({ env: baseEnv, stackMode, stackName });
   uiEnv.RCT_METRO_PORT = String(metroPort);
 
   const uiArgs = ['start', '--web', '--port', String(metroPort)];
@@ -92,7 +86,7 @@ export async function startDevExpoWebUi({
 
   // eslint-disable-next-line no-console
   console.log(`[local] ui: starting Expo web (metro port=${metroPort})`);
-  const ui = await pmSpawnBin({ label: 'ui', dir: uiDir, bin: 'expo', args: uiArgs, env: uiEnv, options: spawnOptions });
+  const ui = await expoSpawn({ label: 'ui', dir: uiDir, args: uiArgs, env: uiEnv, options: spawnOptions });
   children.push(ui);
 
   if (stackMode && runtimeStatePath) {

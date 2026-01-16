@@ -38,6 +38,14 @@ export function getHappysRegistry() {
       description: 'One-shot: set up + run a PR stack (maintainer-friendly)',
     },
     {
+      name: 'review-pr',
+      aliases: ['reviewPR', 'reviewpr'],
+      kind: 'node',
+      scriptRelPath: 'scripts/review_pr.mjs',
+      rootUsage: 'happys review-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
+      description: 'Run setup-pr in a temporary sandbox (auto-cleaned)',
+    },
+    {
       name: 'uninstall',
       kind: 'node',
       scriptRelPath: 'scripts/uninstall.mjs',

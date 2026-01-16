@@ -559,9 +559,9 @@ Most commands support `--help` and `--json`.
 ### Core run commands
 
 - **`happys start`**: production-like run (no Expo)
-  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--no-browser`
+  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--no-browser`, `--mobile`
 - **`happys dev`**: dev run (server + daemon + Expo web)
-  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--watch`, `--no-watch`, `--no-browser`
+  - Flags: `--server=happy-server|happy-server-light`, `--restart`, `--no-daemon`, `--no-ui`, `--watch`, `--no-watch`, `--no-browser`, `--mobile`
 - **`happys stop`**: stop stacks and related processes
   - Flags: `--except-stacks=main,exp1`, `--yes`, `--aggressive`, `--sweep-owned`, `--no-docker`, `--no-service`
 

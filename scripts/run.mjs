@@ -20,6 +20,7 @@ import { resolveStackContext } from './utils/stack/context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
+import { startDevExpoMobile } from './utils/dev/expo_mobile.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -37,7 +38,7 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--no-browser'], json: true },
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--no-browser', '--mobile'], json: true },
       text: [
         '[start] usage:',
         '  happys start [--server=happy-server|happy-server-light] [--restart] [--json]',
@@ -67,6 +68,7 @@ async function main() {
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
   const serveUiWanted = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
   const serveUi = serveUiWanted;
+  const startMobile = flags.has('--mobile') || flags.has('--with-mobile');
   const noBrowser = flags.has('--no-browser') || (process.env.HAPPY_STACKS_NO_BROWSER ?? process.env.HAPPY_LOCAL_NO_BROWSER ?? '').toString().trim() === '1';
   const uiPrefix = process.env.HAPPY_LOCAL_UI_PREFIX?.trim() ? process.env.HAPPY_LOCAL_UI_PREFIX.trim() : '/';
   const autostart = getDefaultAutostartPaths();
@@ -78,12 +80,16 @@ async function main() {
 
   const serverDir = getComponentDir(rootDir, serverComponentName);
   const cliDir = getComponentDir(rootDir, 'happy-cli');
+  const uiDir = getComponentDir(rootDir, 'happy');
 
   assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
   assertServerPrismaProviderMatches({ serverComponentName, serverDir });
 
   await requireDir(serverComponentName, serverDir);
   await requireDir('happy-cli', cliDir);
+  if (startMobile) {
+    await requireDir('happy', uiDir);
+  }
 
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
 
@@ -99,12 +105,14 @@ async function main() {
         mode: 'start',
         serverComponentName,
         serverDir,
+        uiDir,
         cliDir,
         serverPort,
         internalServerUrl,
         publicServerUrl,
         startDaemon,
         serveUi,
+        startMobile,
         uiPrefix,
         uiBuildDir,
         cliHomeDir,
@@ -125,7 +133,7 @@ async function main() {
   let shuttingDown = false;
   const baseEnv = { ...process.env };
   const stackCtx = resolveStackContext({ env: baseEnv, autostart });
-  const { stackMode, runtimeStatePath, stackName, ephemeral } = stackCtx;
+  const { stackMode, runtimeStatePath, stackName, envPath, ephemeral } = stackCtx;
 
   // Ensure happy-cli is install+build ready before starting the daemon.
   const buildCli = (baseEnv.HAPPY_STACKS_CLI_BUILD ?? baseEnv.HAPPY_LOCAL_CLI_BUILD ?? '1').toString().trim() !== '0';
@@ -133,6 +141,9 @@ async function main() {
 
   // Ensure server deps exist before any Prisma/docker work.
   await ensureDepsInstalled(serverDir, serverComponentName);
+  if (startMobile) {
+    await ensureDepsInstalled(uiDir, 'happy');
+  }
 
   // Public URL automation:
   // - Only the main stack should ever auto-enable Tailscale Serve by default.
@@ -372,6 +383,23 @@ async function main() {
       publicServerUrl,
       isShuttingDown: () => shuttingDown,
       forceRestart: restart,
+    });
+  }
+
+  // Optional: start Expo dev-client Metro for mobile reviewers.
+  if (startMobile) {
+    await startDevExpoMobile({
+      startMobile,
+      uiDir,
+      autostart,
+      baseEnv,
+      apiServerUrl: publicServerUrl,
+      restart,
+      stackMode,
+      runtimeStatePath,
+      stackName,
+      envPath,
+      children,
     });
   }
 

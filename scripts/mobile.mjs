@@ -1,6 +1,5 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { pickNextFreeTcpPort } from './utils/net/ports.mjs';
 import { run, runCapture, spawnProc } from './utils/proc/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/proc/pm.mjs';
@@ -8,6 +7,11 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo/expo.mjs';
 import { killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
+import { pickMobileDevMetroPort } from './utils/expo/metro_ports.mjs';
+import { resolveMobileExpoConfig } from './utils/mobile/config.mjs';
+import { resolveStackContext } from './utils/stack/context.mjs';
+import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
+import { expoExec, expoSpawn } from './utils/expo/command.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -70,19 +74,6 @@ async function main() {
   await requireDir('happy', uiDir);
   await ensureDepsInstalled(uiDir, 'happy');
 
-  const sanitizeBundleIdSegment = (s) =>
-    (s ?? '')
-      .toString()
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'user';
-
-  const defaultLocalBundleId = (() => {
-    const user = sanitizeBundleIdSegment(process.env.USER ?? process.env.USERNAME ?? 'user');
-    return `com.happy.local.${user}.dev`;
-  })();
-
   async function readXcdeviceList() {
     if (process.platform !== 'darwin') {
       return [];
@@ -97,21 +88,6 @@ async function main() {
   // Default to the existing dev bundle identifier, which is also registered as a URL scheme
   // (Info.plist includes `com.slopus.happy.dev`), so iOS will open the dev build instead of the App Store app.
   const appEnv = process.env.APP_ENV ?? kv.get('--app-env') ?? 'development';
-  const iosAppName =
-    kv.get('--ios-app-name') ??
-    process.env.HAPPY_STACKS_IOS_APP_NAME ??
-    process.env.HAPPY_LOCAL_IOS_APP_NAME ??
-    '';
-  const iosBundleId =
-    kv.get('--ios-bundle-id') ??
-    process.env.HAPPY_STACKS_IOS_BUNDLE_ID ??
-    process.env.HAPPY_LOCAL_IOS_BUNDLE_ID ??
-    defaultLocalBundleId;
-  const scheme =
-    kv.get('--scheme') ??
-    process.env.HAPPY_STACKS_MOBILE_SCHEME ??
-    process.env.HAPPY_LOCAL_MOBILE_SCHEME ??
-    iosBundleId;
   const host = kv.get('--host') ?? process.env.HAPPY_STACKS_MOBILE_HOST ?? process.env.HAPPY_LOCAL_MOBILE_HOST ?? 'lan';
   const portRaw = kv.get('--port') ?? process.env.HAPPY_STACKS_MOBILE_PORT ?? process.env.HAPPY_LOCAL_MOBILE_PORT ?? '8081';
   // Default behavior:
@@ -126,7 +102,14 @@ async function main() {
     APP_ENV: appEnv,
   };
 
+  const cfgBase = resolveMobileExpoConfig({ env });
+  const iosAppName = (kv.get('--ios-app-name') ?? cfgBase.iosAppName ?? '').toString();
+  const iosBundleId = (kv.get('--ios-bundle-id') ?? cfgBase.iosBundleId ?? '').toString();
+  const scheme = (kv.get('--scheme') ?? cfgBase.scheme ?? iosBundleId).toString();
+
   const autostart = getDefaultAutostartPaths();
+  const stackCtx = resolveStackContext({ env, autostart });
+  const { stackMode, runtimeStatePath, stackName, envPath } = stackCtx;
   const mobilePaths = getExpoStatePaths({
     baseDir: autostart.baseDir,
     kind: 'mobile-dev',
@@ -179,7 +162,7 @@ async function main() {
     if (shouldClean) {
       prebuildArgs.push('--clean');
     }
-    await pmExecBin({ dir: uiDir, bin: 'expo', args: prebuildArgs, env });
+    await expoExec({ dir: uiDir, args: prebuildArgs, env, ensureDepsLabel: 'happy' });
 
     // Always patch iOS props if iOS was generated.
     if (platform === 'ios' || platform === 'all') {
@@ -293,7 +276,7 @@ async function main() {
     // Ensure CocoaPods doesn't crash due to locale issues.
     env.LANG = env.LANG ?? 'en_US.UTF-8';
     env.LC_ALL = env.LC_ALL ?? 'en_US.UTF-8';
-    await pmExecBin({ dir: uiDir, bin: 'expo', args, env });
+    await expoExec({ dir: uiDir, args, env, ensureDepsLabel: 'happy' });
   }
 
   if (!shouldStartMetro) {
@@ -304,12 +287,20 @@ async function main() {
   if (!restart && running.running) {
     // eslint-disable-next-line no-console
     console.log(`[mobile] Metro already running for this stack/worktree (pid=${running.state.pid}, port=${running.state.port})`);
+    if (stackMode && runtimeStatePath) {
+      const pid = Number(running.state?.pid);
+      const port = Number(running.state?.port);
+      if (Number.isFinite(pid) && pid > 1) {
+        await recordStackRuntimeUpdate(runtimeStatePath, {
+          processes: { expoMobilePid: pid },
+          expo: { mobilePort: Number.isFinite(port) && port > 0 ? port : null },
+        }).catch(() => {});
+      }
+    }
     return;
   }
   if (restart && running.state?.pid) {
     const prevPid = Number(running.state.pid);
-    const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || autostart.stackName;
-    const envPath = (process.env.HAPPY_STACKS_ENV_FILE ?? process.env.HAPPY_LOCAL_ENV_FILE ?? '').toString();
     const res = await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-mobile', json: true });
     if (!res.killed) {
       // eslint-disable-next-line no-console
@@ -320,9 +311,9 @@ async function main() {
     }
   }
 
-  const requestedPort = Number.parseInt(String(portRaw), 10);
-  const startPort = Number.isFinite(requestedPort) && requestedPort > 0 ? requestedPort : 8081;
-  const portNumber = await pickNextFreeTcpPort(startPort);
+  // Port selection: reuse the same stable/ephemeral strategy used by `happys dev` when configured.
+  // Back-compat: HAPPY_STACKS_MOBILE_PORT is treated as the "forced" port knob (picked if free, otherwise scan).
+  const portNumber = await pickMobileDevMetroPort({ env, stackMode, stackName });
   env.RCT_METRO_PORT = String(portNumber);
 
   // Start Metro for a dev client.
@@ -332,8 +323,14 @@ async function main() {
   if (wantsExpoClearCache({ env })) {
     args.push('--clear');
   }
-  const child = await pmSpawnBin({ label: 'mobile', dir: uiDir, bin: 'expo', args, env });
+  const child = await expoSpawn({ label: 'mobile', dir: uiDir, args, env, ensureDepsLabel: 'happy' });
   await writePidState(mobilePaths.statePath, { pid: child.pid, port: portNumber, uiDir, startedAt: new Date().toISOString() });
+  if (stackMode && runtimeStatePath) {
+    await recordStackRuntimeUpdate(runtimeStatePath, {
+      processes: { expoMobilePid: child.pid },
+      expo: { mobilePort: portNumber },
+    }).catch(() => {});
+  }
 
   await new Promise(() => {});
 }

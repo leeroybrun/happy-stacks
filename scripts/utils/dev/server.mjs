@@ -7,36 +7,26 @@ import { isTcpPortFree, pickNextFreeTcpPort } from '../net/ports.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
-
-function hashStringToInt(s) {
-  let h = 0;
-  const str = String(s ?? '');
-  for (let i = 0; i < str.length; i++) {
-    h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  }
-  return h >>> 0;
-}
+import { pickMetroPort, resolveStablePortStart } from '../expo/metro_ports.mjs';
 
 export function resolveStackUiDevPortStart({ env = process.env, stackName }) {
-  const baseRaw = (env.HAPPY_STACKS_UI_DEV_PORT_BASE ?? env.HAPPY_LOCAL_UI_DEV_PORT_BASE ?? '8081').toString().trim();
-  const rangeRaw = (env.HAPPY_STACKS_UI_DEV_PORT_RANGE ?? env.HAPPY_LOCAL_UI_DEV_PORT_RANGE ?? '1000').toString().trim();
-  const base = Number(baseRaw);
-  const range = Number(rangeRaw);
-  const b = Number.isFinite(base) ? base : 8081;
-  const r = Number.isFinite(range) && range > 0 ? range : 1000;
-  return b + (hashStringToInt(stackName) % r);
+  return resolveStablePortStart({
+    env: {
+      ...env,
+      HAPPY_STACKS_UI_DEV_PORT_BASE: (env.HAPPY_STACKS_UI_DEV_PORT_BASE ?? env.HAPPY_LOCAL_UI_DEV_PORT_BASE ?? '8081').toString(),
+      HAPPY_STACKS_UI_DEV_PORT_RANGE: (env.HAPPY_STACKS_UI_DEV_PORT_RANGE ?? env.HAPPY_LOCAL_UI_DEV_PORT_RANGE ?? '1000').toString(),
+    },
+    stackName,
+    baseKey: 'HAPPY_STACKS_UI_DEV_PORT_BASE',
+    rangeKey: 'HAPPY_STACKS_UI_DEV_PORT_RANGE',
+    defaultBase: 8081,
+    defaultRange: 1000,
+  });
 }
 
 export async function pickDevMetroPort({ startPort, reservedPorts = new Set(), host = '127.0.0.1' } = {}) {
-  const forcedRaw = (process.env.HAPPY_STACKS_UI_DEV_PORT ?? process.env.HAPPY_LOCAL_UI_DEV_PORT ?? '').toString().trim();
-  if (forcedRaw) {
-    const forced = Number(forcedRaw);
-    if (Number.isFinite(forced) && forced > 0) {
-      const ok = await isTcpPortFree(forced, { host });
-      if (ok) return forced;
-    }
-  }
-  return await pickNextFreeTcpPort(startPort, { reservedPorts, host });
+  const forcedPort = (process.env.HAPPY_STACKS_UI_DEV_PORT ?? process.env.HAPPY_LOCAL_UI_DEV_PORT ?? '').toString().trim();
+  return await pickMetroPort({ startPort, forcedPort, reservedPorts, host });
 }
 
 export async function startDevServer({

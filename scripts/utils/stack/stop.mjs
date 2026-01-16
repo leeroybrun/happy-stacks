@@ -199,7 +199,11 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
     actions.errors.push({ step: 'expo-ui', error: e instanceof Error ? e.message : String(e) });
   }
   try {
-    actions.mobile = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile', stateFileName: 'expo.state.json', envPath, json });
+    // Prefer the modern "mobile-dev" state (used by happys mobile and --mobile in dev/start).
+    const killedDev = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile-dev', stateFileName: 'mobile.state.json', envPath, json });
+    // Back-compat: older experimental paths used kind=mobile + expo.state.json.
+    const killedLegacy = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile', stateFileName: 'expo.state.json', envPath, json });
+    actions.mobile = [...killedDev, ...killedLegacy];
   } catch (e) {
     actions.errors.push({ step: 'expo-mobile', error: e instanceof Error ? e.message : String(e) });
   }

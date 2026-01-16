@@ -198,6 +198,12 @@ happys stack pr pr123 \
   --dev
 ```
 
+Optional: also start Expo dev-client Metro for mobile reviewers:
+
+```bash
+happys stack pr pr123 --happy=123 --happy-cli=456 --dev --mobile
+```
+
 Optional: run it in a self-contained sandbox folder (delete it to uninstall completely):
 
 ```bash
@@ -226,12 +232,16 @@ npx happy-stacks setup-pr \
   --happy-cli=https://github.com/slopus/happy-cli/pull/456
 ```
 
-Optional: run it in a self-contained sandbox folder (delete it to uninstall completely):
+Optional: include Expo dev-client Metro for mobile reviewers (works with both default `--dev` and `--start`):
 
 ```bash
-SANDBOX="$(mktemp -d /tmp/happy-stacks-sandbox.XXXXXX)"
-npx happy-stacks --sandbox-dir "$SANDBOX" setup-pr --happy=123 --happy-cli=456
-rm -rf "$SANDBOX"
+npx happy-stacks setup-pr --happy=123 --happy-cli=456 --mobile
+```
+
+Optional: run it in a self-contained sandbox folder (auto-cleaned):
+
+```bash
+npx happy-stacks review-pr --happy=123 --happy-cli=456
 ```
 
 Short form (PR numbers):

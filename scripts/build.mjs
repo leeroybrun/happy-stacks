@@ -7,6 +7,8 @@ import { dirname, join } from 'node:path';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tailscaleServeHttpsUrl } from './tailscale.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
+import { ensureExpoIsolationEnv, getExpoStatePaths, wantsExpoClearCache } from './utils/expo/expo.mjs';
+import { expoExec } from './utils/expo/command.mjs';
 
 /**
  * Build a lightweight static web UI bundle (no Expo dev server).
@@ -87,7 +89,17 @@ async function main() {
   };
 
   // Expo CLI is available via node_modules/.bin once dependencies are installed.
-  await pmExecBin({ dir: uiDir, bin: 'expo', args: ['export', '--platform', 'web', '--output-dir', outDir], env });
+  {
+    const paths = getExpoStatePaths({
+      baseDir: getDefaultAutostartPaths().baseDir,
+      kind: 'ui-export',
+      projectDir: uiDir,
+      stateFileName: 'ui.export.state.json',
+    });
+    await ensureExpoIsolationEnv({ env, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir: paths.tmpDir });
+    const args = ['export', '--platform', 'web', '--output-dir', outDir, ...(wantsExpoClearCache({ env }) ? ['-c'] : [])];
+    await expoExec({ dir: uiDir, args, env, ensureDepsLabel: 'happy' });
+  }
 
   if (json) {
     printResult({ json, data: { ok: true, outDir, tauriBuilt: false } });
@@ -146,13 +158,30 @@ async function main() {
   };
   delete tauriEnv.EXPO_PUBLIC_WEB_BASE_URL;
 
-  await pmExecBin({
+  {
+    const paths = getExpoStatePaths({
+      baseDir: getDefaultAutostartPaths().baseDir,
+      kind: 'ui-export-tauri',
+      projectDir: uiDir,
+      stateFileName: 'ui.export.tauri.state.json',
+    });
+    await ensureExpoIsolationEnv({ env: tauriEnv, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir: paths.tmpDir });
+  }
+
+  await expoExec({
     dir: uiDir,
-    bin: 'expo',
-    // Important: clear bundler cache so EXPO_PUBLIC_* inlining doesn't reuse
-    // the previous (web) export's transform results.
-    args: ['export', '--platform', 'web', '--output-dir', tauriDistDir, '-c'],
+    args: [
+      'export',
+      '--platform',
+      'web',
+      '--output-dir',
+      tauriDistDir,
+      // Important: clear bundler cache so EXPO_PUBLIC_* inlining doesn't reuse
+      // the previous (web) export's transform results.
+      '-c',
+    ],
     env: tauriEnv,
+    ensureDepsLabel: 'happy',
   });
 
   // Build the Tauri app using a generated config that skips upstream beforeBuildCommand (which uses yarn).

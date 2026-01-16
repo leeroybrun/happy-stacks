@@ -18,6 +18,8 @@ import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
 
+const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
+
 function getActiveStackName() {
   return (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
 }
@@ -430,11 +432,9 @@ async function migrateComponentWorktrees({ rootDir, component }) {
 }
 
 async function cmdMigrate({ rootDir }) {
-  const components = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
-
   let totalMoved = 0;
   let totalRenamed = 0;
-  for (const component of components) {
+  for (const component of DEFAULT_COMPONENTS) {
     const res = await migrateComponentWorktrees({ rootDir, component });
     totalMoved += res.moved;
     totalRenamed += res.renamed;
@@ -1422,8 +1422,6 @@ async function cmdCursor({ rootDir, argv }) {
   throw new Error("[wt] Cursor CLI 'cursor' not found on PATH (and non-macOS fallback is unavailable).");
 }
 
-const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
-
 async function cmdSyncAll({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
@@ -1556,43 +1554,48 @@ async function cmdNewInteractive({ rootDir, argv }) {
   });
 }
 
-async function cmdList({ rootDir, args }) {
-  const component = args[0];
-  if (!component) {
-    throw new Error('[wt] usage: happys wt list <component>');
-  }
-
+async function cmdListOne({ rootDir, component }) {
   const wtRoot = getWorktreesRoot(rootDir);
   const dir = join(wtRoot, component);
-  if (!(await pathExists(dir))) {
-    return { component, activeDir: (process.env[key] ?? '').trim() || join(getComponentsDir(rootDir), component), worktrees: [] };
-  }
-
-  const leafs = [];
-  const walk = async (d) => {
-    const entries = await readdir(d, { withFileTypes: true });
-    for (const e of entries) {
-      if (!e.isDirectory()) {
-        continue;
-      }
-      const p = join(d, e.name);
-      leafs.push(p);
-      await walk(p);
-    }
-  };
-  await walk(dir);
-  leafs.sort();
-
   const key = componentDirEnvKey(component);
   const active = (process.env[key] ?? '').trim() || join(getComponentsDir(rootDir), component);
 
-  const worktrees = [];
-  for (const p of leafs) {
-    if (await pathExists(join(p, '.git'))) {
-      worktrees.push(p);
-    }
+  if (!(await pathExists(dir))) {
+    return { component, activeDir: active, worktrees: [] };
   }
+
+  const worktrees = [];
+  const walk = async (d) => {
+    // In git worktrees, ".git" is usually a file that points to the shared git dir.
+    // If this is a worktree root, record it and do not descend into it (avoids traversing huge trees like node_modules).
+    if (await pathExists(join(d, '.git'))) {
+      worktrees.push(d);
+      return;
+    }
+    const entries = await readdir(d, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name === 'node_modules') continue;
+      if (e.name.startsWith('.')) continue;
+      await walk(join(d, e.name));
+    }
+  };
+  await walk(dir);
+  worktrees.sort();
+
   return { component, activeDir: active, worktrees };
+}
+
+async function cmdList({ rootDir, args }) {
+  const component = args[0];
+  if (!component) {
+    const results = [];
+    for (const c of DEFAULT_COMPONENTS) {
+      results.push(await cmdListOne({ rootDir, component: c }));
+    }
+    return { components: DEFAULT_COMPONENTS, results };
+  }
+  return await cmdListOne({ rootDir, component });
 }
 
 async function main() {
@@ -1616,7 +1619,7 @@ async function main() {
         '  happys wt migrate [--json]',
         '  happys wt sync <component> [--remote=<name>] [--json]',
         '  happys wt sync-all [--remote=<name>] [--json]',
-        '  happys wt list <component> [--json]',
+        '  happys wt list [component] [--json]',
         '  happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--force] [--interactive|-i] [--json]',
         '  happys wt duplicate <component> <fromWorktreeSpec|path|active|default> <newSlug> [--remote=<name>] [--deps=none|link|install|link-or-install] [--use] [--json]',
         '  happys wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
@@ -1637,7 +1640,7 @@ async function main() {
         '  "<absolute path>": explicit checkout path',
         '',
         'components:',
-        '  happy | happy-cli | happy-server-light | happy-server',
+        `  ${DEFAULT_COMPONENTS.join(' | ')}`,
       ].join('\n'),
     });
     return;
@@ -1796,9 +1799,15 @@ async function main() {
     if (json) {
       printResult({ json, data: res });
     } else {
-      const lines = [`[wt] ${res.component} worktrees:`, `- active: ${res.activeDir}`];
-      for (const p of res.worktrees) {
-        lines.push(`- ${p}`);
+      const results = Array.isArray(res?.results) ? res.results : [res];
+      const lines = [];
+      for (const r of results) {
+        lines.push(`[wt] ${r.component} worktrees:`);
+        lines.push(`- active: ${r.activeDir}`);
+        for (const p of r.worktrees) {
+          lines.push(`- ${p}`);
+        }
+        lines.push('');
       }
       printResult({ json: false, text: lines.join('\n') });
     }
