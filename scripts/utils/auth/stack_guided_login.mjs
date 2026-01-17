@@ -183,7 +183,7 @@ async function detectSymlinkedNodeModules({ worktreeDir }) {
   }
 }
 
-async function assertExpoWebappBundlesOrThrow({ rootDir, stackName, webappUrl }) {
+export async function assertExpoWebappBundlesOrThrow({ rootDir, stackName, webappUrl }) {
   const u = new URL(webappUrl);
   const port = u.port ? Number(u.port) : null;
   const probeHost = Number.isFinite(port) ? '127.0.0.1' : u.hostname;
@@ -322,8 +322,11 @@ export async function guidedStackAuthLoginNow({ rootDir, stackName, env = proces
     throw new Error('[auth] cannot start guided login: web UI URL is empty');
   }
 
+  const skipBundleCheck = (env.HAPPY_STACKS_AUTH_SKIP_BUNDLE_CHECK ?? env.HAPPY_LOCAL_AUTH_SKIP_BUNDLE_CHECK ?? '').toString().trim() === '1';
   // Surface common "blank page" issues (Metro resolver errors) even in quiet mode.
-  await assertExpoWebappBundlesOrThrow({ rootDir, stackName, webappUrl: resolved });
+  if (!skipBundleCheck) {
+    await assertExpoWebappBundlesOrThrow({ rootDir, stackName, webappUrl: resolved });
+  }
 
   await guidedStackWebSignupThenLogin({ webappUrl: resolved, stackName });
   await run(process.execPath, [join(rootDir, 'scripts', 'stack.mjs'), 'auth', stackName, '--', 'login'], {

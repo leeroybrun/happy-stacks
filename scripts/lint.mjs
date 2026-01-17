@@ -61,7 +61,11 @@ async function main() {
         })
       : null;
   if (inferred) {
-    process.env[componentDirEnvKey(inferred.component)] = inferred.repoDir;
+    const stacksKey = componentDirEnvKey(inferred.component);
+    const legacyKey = stacksKey.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+    if (!(process.env[stacksKey] ?? '').toString().trim() && !(process.env[legacyKey] ?? '').toString().trim()) {
+      process.env[stacksKey] = inferred.repoDir;
+    }
   }
 
   const requested = positionals.length ? positionals : inferred ? [inferred.component] : ['all'];

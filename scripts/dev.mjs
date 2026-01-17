@@ -25,6 +25,7 @@ import { sanitizeDnsLabel } from './utils/net/dns.mjs';
 import { getAccountCountForServerComponent, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
 import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
+import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
 
 /**
  * Dev mode stack:
@@ -64,7 +65,12 @@ async function main() {
     components: ['happy', 'happy-cli', 'happy-server-light', 'happy-server'],
   });
   if (inferred) {
-    process.env[componentDirEnvKey(inferred.component)] = inferred.repoDir;
+    const stacksKey = componentDirEnvKey(inferred.component);
+    const legacyKey = stacksKey.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+    // Stack env should win. Only infer from CWD when the component dir isn't already configured.
+    if (!(process.env[stacksKey] ?? '').toString().trim() && !(process.env[legacyKey] ?? '').toString().trim()) {
+      process.env[stacksKey] = inferred.repoDir;
+    }
   }
 
   const serverComponentName = getServerComponentName({ kv });
@@ -310,19 +316,35 @@ async function main() {
     quiet: false,
   });
 
-  await startDevDaemon({
-    startDaemon,
-    cliBin,
-    cliHomeDir,
-    internalServerUrl,
-    publicServerUrl,
-    restart,
-    isShuttingDown: () => shuttingDown,
-  });
+  if (startDaemon) {
+    const gate = daemonStartGate({ env: baseEnv, cliHomeDir });
+    if (!gate.ok) {
+      // In orchestrated auth flows (setup-pr/review-pr), we intentionally keep server/UI up
+      // for guided login and start daemon post-auth from the orchestrator.
+      if (gate.reason === 'auth_flow_missing_credentials') {
+        console.log('[local] auth flow: skipping daemon start until credentials exist');
+      } else {
+        const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+        if (!isInteractive) {
+          throw new Error(formatDaemonAuthRequiredError({ stackName, cliHomeDir }));
+        }
+      }
+    } else {
+      await startDevDaemon({
+        startDaemon,
+        cliBin,
+        cliHomeDir,
+        internalServerUrl,
+        publicServerUrl,
+        restart,
+        isShuttingDown: () => shuttingDown,
+      });
+    }
+  }
 
   const cliWatcher = watchHappyCliAndRestartDaemon({
     enabled: watchEnabled,
-    startDaemon,
+    startDaemon: startDaemon && daemonStartGate({ env: baseEnv, cliHomeDir }).ok,
     buildCli,
     cliDir,
     cliBin,

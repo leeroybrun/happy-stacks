@@ -207,4 +207,3 @@ export async function runCaptureResult(cmd, args, options = {}) {
     });
   });
 }
-

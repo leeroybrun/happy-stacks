@@ -454,9 +454,14 @@ export async function startLocalDaemonWithAuth({
   publicServerUrl,
   isShuttingDown,
   forceRestart = false,
+  env = process.env,
+  stackName = null,
 }) {
-  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
-  const baseEnv = { ...process.env };
+  const resolvedStackName =
+    (stackName ?? '').toString().trim() ||
+    (env.HAPPY_STACKS_STACK ?? env.HAPPY_LOCAL_STACK ?? '').toString().trim() ||
+    'main';
+  const baseEnv = { ...env };
   const daemonEnv = getDaemonEnv({ baseEnv, cliHomeDir, internalServerUrl, publicServerUrl });
 
   const distEntrypoint = resolveHappyCliDistEntrypoint(cliBin);
@@ -525,7 +530,7 @@ export async function startLocalDaemonWithAuth({
   }
 
   // Best-effort: for the main stack, also stop the legacy global daemon home (~/.happy) to prevent legacy overlap.
-  if (stackName === 'main' && (!isSandboxed() || sandboxAllowsGlobalSideEffects())) {
+  if (resolvedStackName === 'main' && (!isSandboxed() || sandboxAllowsGlobalSideEffects())) {
     const legacyEnv = { ...daemonEnv, HAPPY_HOME_DIR: join(homedir(), '.happy') };
     try {
       await new Promise((resolve) => {
@@ -555,6 +560,16 @@ export async function startLocalDaemonWithAuth({
     });
 
     if (exitCode === 0) {
+      return { ok: true, exitCode, excerpt: null, logPath: null };
+    }
+
+    // Some daemon versions (or transient races) can return non-zero even if the daemon
+    // is already running / starting for this stack home dir (e.g. "lock already held").
+    // In those cases, fail-open and keep the stack running; callers can still surface
+    // daemon status separately.
+    await delay(500);
+    const stateAfter = checkDaemonState(cliHomeDir);
+    if (stateAfter.status === 'running' || stateAfter.status === 'starting') {
       return { ok: true, exitCode, excerpt: null, logPath: null };
     }
 
@@ -590,6 +605,14 @@ export async function startLocalDaemonWithAuth({
       const ok = await waitForCredentialsFile({ path: credentialsPath, timeoutMs: 10 * 60_000, isShuttingDown });
       if (!ok) {
         throw new Error('Timed out waiting for daemon credentials (auth login not completed)');
+      }
+
+      // If a daemon start attempt was already in-flight (or a previous daemon is already running),
+      // avoid a second concurrent start and treat it as success.
+      await delay(500);
+      const stateAfterCreds = checkDaemonState(cliHomeDir);
+      if (stateAfterCreds.status === 'running' || stateAfterCreds.status === 'starting') {
+        return;
       }
 
       console.log('[local] credentials detected, retrying daemon start...');

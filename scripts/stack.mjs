@@ -1165,9 +1165,12 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
 
         // Background dev auth flow (automatic):
         // If we're starting `dev.mjs` in background and the stack is not authenticated yet,
-        // keep the stack alive for login by:
-        // - letting the daemon wait for credentials (instead of exiting immediately)
-        // - marking this as an auth-flow so guided URL resolution fails closed (never opens server port as "UI")
+        // keep the stack alive for guided login by marking this as an auth-flow so URL resolution
+        // fails closed (never opens server port as "UI").
+        //
+        // IMPORTANT:
+        // We must NOT start the daemon before credentials exist in orchestrated flows (setup-pr/review-pr),
+        // because the daemon can enter its own auth flow and become stranded (lock held, no machine registration).
         if (background && scriptPath === 'dev.mjs') {
           const startUi = !args.includes('--no-ui') && (env.HAPPY_LOCAL_UI ?? '1').toString().trim() !== '0';
           const startDaemon = !args.includes('--no-daemon') && (env.HAPPY_LOCAL_DAEMON ?? '1').toString().trim() !== '0';
@@ -1177,8 +1180,6 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
               const cliHomeDir = getCliHomeDirFromEnvOrDefault({ stackBaseDir, env });
               const hasCreds = existsSync(join(cliHomeDir, 'access.key'));
               if (!hasCreds) {
-                childEnv.HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH = '1';
-                childEnv.HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH = '1';
                 childEnv.HAPPY_STACKS_AUTH_FLOW = '1';
                 childEnv.HAPPY_LOCAL_AUTH_FLOW = '1';
               }

@@ -48,7 +48,11 @@ async function main() {
     components: ['happy'],
   });
   if (inferred?.component === 'happy') {
-    process.env[componentDirEnvKey('happy')] = inferred.repoDir;
+    const stacksKey = componentDirEnvKey('happy');
+    const legacyKey = stacksKey.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+    if (!(process.env[stacksKey] ?? '').toString().trim() && !(process.env[legacyKey] ?? '').toString().trim()) {
+      process.env[stacksKey] = inferred.repoDir;
+    }
   }
 
   // Optional: skip building the web UI bundle.

@@ -23,6 +23,7 @@ import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
 import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
+import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -62,7 +63,12 @@ async function main() {
     components: ['happy', 'happy-cli', 'happy-server-light', 'happy-server'],
   });
   if (inferred) {
-    process.env[componentDirEnvKey(inferred.component)] = inferred.repoDir;
+    const stacksKey = componentDirEnvKey(inferred.component);
+    const legacyKey = stacksKey.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
+    // Stack env should win. Only infer from CWD when the component dir isn't already configured.
+    if (!(process.env[stacksKey] ?? '').toString().trim() && !(process.env[legacyKey] ?? '').toString().trim()) {
+      process.env[stacksKey] = inferred.repoDir;
+    }
   }
 
   const serverPort = resolveServerPortFromEnv({ defaultPort: 3005 });
@@ -370,6 +376,16 @@ async function main() {
 
   // Daemon
   if (startDaemon) {
+    const gate = daemonStartGate({ env: baseEnv, cliHomeDir });
+    if (!gate.ok) {
+      const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      // In orchestrated auth flows, keep server/UI up and let the orchestrator start daemon post-auth.
+      if (gate.reason === 'auth_flow_missing_credentials') {
+        console.log('[local] auth flow: skipping daemon start until credentials exist');
+      } else if (!isInteractive) {
+        throw new Error(formatDaemonAuthRequiredError({ stackName: autostart.stackName, cliHomeDir }));
+      }
+    } else {
     const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (serverComponentName === 'happy-server' && happyServerAccountCount == null) {
       const acct = await getAccountCountForServerComponent({
@@ -409,7 +425,10 @@ async function main() {
       publicServerUrl,
       isShuttingDown: () => shuttingDown,
       forceRestart: restart,
+        env: baseEnv,
+        stackName: autostart.stackName,
     });
+    }
   }
 
   // Optional: start Expo dev-client Metro for mobile reviewers.

@@ -7,13 +7,15 @@ import { createStepPrinter, runCommandLogged } from './utils/cli/progress.mjs';
 import { createFileLogForwarder } from './utils/cli/log_forwarder.mjs';
 import { assertCliPrereqs } from './utils/cli/prereqs.mjs';
 import { decidePrAuthPlan } from './utils/auth/guided_pr_auth.mjs';
-import { guidedStackAuthLoginNow, resolveStackWebappUrlForAuth } from './utils/auth/stack_guided_login.mjs';
+import { assertExpoWebappBundlesOrThrow, guidedStackAuthLoginNow, resolveStackWebappUrlForAuth } from './utils/auth/stack_guided_login.mjs';
 import { preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { sanitizeStackName } from './utils/stack/names.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
+import { readEnvObjectFromFile } from './utils/env/read.mjs';
+import { checkDaemonState, startLocalDaemonWithAuth } from './daemon.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -47,6 +49,19 @@ function green(s) {
 function pickReviewerMobileSchemeEnv(env) {
   // For review-pr flows, reviewers typically have the standard Happy dev build on their phone,
   // so default to the canonical `happy://` scheme unless the user explicitly configured one.
+  // If the user explicitly set a review-specific override, honor it.
+  const reviewOverride = (env.HAPPY_STACKS_REVIEW_MOBILE_SCHEME ?? env.HAPPY_LOCAL_REVIEW_MOBILE_SCHEME ?? '').toString().trim();
+  if (reviewOverride) {
+    return { ...env, HAPPY_STACKS_MOBILE_SCHEME: reviewOverride, HAPPY_LOCAL_MOBILE_SCHEME: reviewOverride };
+  }
+
+  // In sandbox review flows, prefer the standard Happy dev build scheme even if the user's global
+  // dev-client scheme is configured for Happy Stacks.
+  if (isSandboxed()) {
+    return { ...env, HAPPY_STACKS_MOBILE_SCHEME: 'happy', HAPPY_LOCAL_MOBILE_SCHEME: 'happy' };
+  }
+
+  // Non-sandbox: keep existing behavior unless nothing is configured at all.
   const explicit =
     (env.HAPPY_STACKS_MOBILE_SCHEME ??
       env.HAPPY_LOCAL_MOBILE_SCHEME ??
@@ -56,17 +71,24 @@ function pickReviewerMobileSchemeEnv(env) {
       .toString()
       .trim();
   if (explicit) return env;
-  return {
-    ...env,
-    HAPPY_STACKS_MOBILE_SCHEME: 'happy',
-    HAPPY_LOCAL_MOBILE_SCHEME: 'happy',
-  };
+  return { ...env, HAPPY_STACKS_MOBILE_SCHEME: 'happy', HAPPY_LOCAL_MOBILE_SCHEME: 'happy' };
 }
 
 async function printReviewerStackSummary({ rootDir, stackName, env, wantsMobile }) {
   try {
     const runtimeStatePath = getStackRuntimeStatePath(stackName);
-    const st = await readStackRuntimeStateFile(runtimeStatePath);
+    // Wait briefly for Expo metadata to land in stack.runtime.json (it can be published slightly
+    // after the server /health check passes, especially after a restart).
+    const deadline = Date.now() + 20_000;
+    let st = await readStackRuntimeStateFile(runtimeStatePath);
+    while (Date.now() < deadline) {
+      const hasExpo = Boolean(st?.expo && typeof st.expo === 'object' && Number(st.expo.port) > 0);
+      if (hasExpo) break;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 250));
+      // eslint-disable-next-line no-await-in-loop
+      st = await readStackRuntimeStateFile(runtimeStatePath);
+    }
     const baseDir = resolveStackEnvPath(stackName, env).baseDir;
     const envPath = resolveStackEnvPath(stackName, env).envPath;
 
@@ -75,6 +97,9 @@ async function printReviewerStackSummary({ rootDir, stackName, env, wantsMobile 
     const uiPort = Number(st?.expo?.webPort ?? st?.expo?.port);
     const mobilePort = Number(st?.expo?.mobilePort ?? st?.expo?.port);
     const runnerLog = String(st?.logs?.runner ?? '').trim();
+    const runnerPid = Number(st?.ownerPid);
+    const serverPid = Number(st?.processes?.serverPid);
+    const expoPid = Number(st?.processes?.expoPid);
 
     const internalServerUrl = Number.isFinite(serverPort) && serverPort > 0 ? `http://127.0.0.1:${serverPort}` : '';
     const uiUrlRaw = Number.isFinite(uiPort) && uiPort > 0 ? `http://localhost:${uiPort}` : '';
@@ -90,6 +115,10 @@ async function printReviewerStackSummary({ rootDir, stackName, env, wantsMobile 
     console.log(`${dim('Env:')}   ${envPath}`);
     // eslint-disable-next-line no-console
     console.log(`${dim('Dir:')}   ${baseDir}`);
+    if (Number.isFinite(runnerPid) && runnerPid > 1) {
+      // eslint-disable-next-line no-console
+      console.log(`${dim('Runner:')} pid=${runnerPid}${Number.isFinite(serverPid) && serverPid > 1 ? ` serverPid=${serverPid}` : ''}${Number.isFinite(expoPid) && expoPid > 1 ? ` expoPid=${expoPid}` : ''}`);
+    }
     if (runnerLog) {
       // eslint-disable-next-line no-console
       console.log(`${dim('Logs:')}  ${runnerLog}`);
@@ -116,8 +145,11 @@ async function printReviewerStackSummary({ rootDir, stackName, env, wantsMobile 
       console.log(`- ${dim('mobile')}:  ${mobilePort} (Metro)`);
     }
 
-    if (wantsMobile && Number.isFinite(mobilePort) && mobilePort > 0) {
-      const payload = resolveMobileQrPayload({ env, port: mobilePort });
+    // Prefer the Metro port recorded by Expo; fall back to the web UI port if needed.
+    const metroPort = Number.isFinite(mobilePort) && mobilePort > 0 ? mobilePort : Number.isFinite(uiPort) && uiPort > 0 ? uiPort : null;
+
+    if (wantsMobile && Number.isFinite(metroPort) && metroPort > 0) {
+      const payload = resolveMobileQrPayload({ env, port: metroPort });
       const qr = await renderQrAscii(payload.payload, { small: true });
 
       // eslint-disable-next-line no-console
@@ -342,10 +374,6 @@ async function main() {
   let stackStartEnv = needsAuthFlow
     ? {
         ...process.env,
-        // Allow the daemon start step to wait for credentials even though we're intentionally
-        // running the stack in background mode to keep logs clean during guided login.
-        HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH: '1',
-        HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH: '1',
         // Hint to the dev runner that it should start the Expo web UI early (before daemon auth),
         // so guided login can open the correct UI origin (not the server port).
         HAPPY_STACKS_AUTH_FLOW: '1',
@@ -428,7 +456,14 @@ async function main() {
   }
 
   // 3) Create/reuse the PR stack and wire worktrees.
-  const startMobileNow = wantsMobile && !needsAuthFlow;
+  // Start Expo with all requested capabilities from the beginning to avoid stop/restart churn.
+  const startMobileNow = wantsMobile;
+  const userDisabledDaemon = forwarded.includes('--no-daemon');
+  const forwardedEffective =
+    needsAuthFlow && !userDisabledDaemon && !forwarded.includes('--no-daemon')
+      ? [...forwarded, '--no-daemon']
+      : forwarded;
+  const injectedNoDaemon = needsAuthFlow && !userDisabledDaemon && forwardedEffective.includes('--no-daemon');
   const stackArgs = [
     'pr',
     stackName,
@@ -449,8 +484,8 @@ async function main() {
     ...(((quietUi && !json) || needsAuthFlow) ? ['--background'] : []),
     ...(json ? ['--json'] : []),
   ];
-  if (forwarded.length) {
-    stackArgs.push('--', ...forwarded);
+  if (forwardedEffective.length) {
+    stackArgs.push('--', ...forwardedEffective);
   }
   if (quietUi) {
     const baseLogDir = join(process.env.HAPPY_STACKS_HOME_DIR ?? join(homedir(), '.happy-stacks'), 'logs', 'setup-pr');
@@ -530,6 +565,8 @@ async function main() {
       try {
         // Use the same env overlay we used to start the stack in background (includes auth-flow markers).
         webappUrl = await resolveStackWebappUrlForAuth({ rootDir, stackName, env: stackStartEnv });
+        // This can take a moment (first bundle compile / resolver errors).
+        await assertExpoWebappBundlesOrThrow({ rootDir, stackName, webappUrl });
         steps.stop('✓', label);
       } catch (e) {
         // For guided login, failing to resolve the UI origin should fail closed (server URL fallback is misleading).
@@ -544,7 +581,13 @@ async function main() {
 
       try {
         forwarder?.pause();
-        await guidedStackAuthLoginNow({ rootDir, stackName, env: stackStartEnv, webappUrl });
+        // We've already checked the web UI bundle above; skip repeating it here.
+        await guidedStackAuthLoginNow({
+          rootDir,
+          stackName,
+          env: { ...stackStartEnv, HAPPY_STACKS_AUTH_SKIP_BUNDLE_CHECK: '1', HAPPY_LOCAL_AUTH_SKIP_BUNDLE_CHECK: '1' },
+          webappUrl,
+        });
       } finally {
         try {
           forwarder?.resume();
@@ -563,6 +606,62 @@ async function main() {
       await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['auth', stackName, '--', 'login'] });
     }
 
+    // After guided login, start daemon now (unless the user explicitly disabled it).
+    // This ensures the machine is registered and appears in the UI.
+    if (injectedNoDaemon && !userDisabledDaemon) {
+      const steps = createStepPrinter({ enabled: Boolean(process.stdout.isTTY && !json) });
+      const label = 'start daemon (post-auth)';
+      steps.start(label);
+      try {
+        const { envPath, baseDir } = resolveStackEnvPath(stackName, stackStartEnv);
+        const stackEnv = await readEnvObjectFromFile(envPath);
+        const mergedEnv = { ...process.env, ...stackEnv };
+
+        const cliHomeDir =
+          (mergedEnv.HAPPY_STACKS_CLI_HOME_DIR ?? mergedEnv.HAPPY_LOCAL_CLI_HOME_DIR ?? '').toString().trim() ||
+          join(baseDir, 'cli');
+        const cliDir =
+          (mergedEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? mergedEnv.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim();
+        if (!cliDir) {
+          throw new Error('[setup-pr] post-auth daemon start failed: HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI is not set');
+        }
+        const cliBin = join(cliDir, 'bin', 'happy.mjs');
+
+        const runtimeStatePath = getStackRuntimeStatePath(stackName);
+        const st = await readStackRuntimeStateFile(runtimeStatePath);
+        const serverPort = Number(st?.ports?.server);
+        if (!Number.isFinite(serverPort) || serverPort <= 0) {
+          throw new Error('[setup-pr] post-auth daemon start failed: could not resolve server port from stack.runtime.json');
+        }
+        const internalServerUrl = `http://127.0.0.1:${serverPort}`;
+        const publicServerUrl = internalServerUrl;
+
+        await startLocalDaemonWithAuth({
+          cliBin,
+          cliHomeDir,
+          internalServerUrl,
+          publicServerUrl,
+          isShuttingDown: () => false,
+          forceRestart: true,
+          env: mergedEnv,
+          stackName,
+        });
+
+        // Verify: daemon wrote state (best-effort wait).
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const s = checkDaemonState(cliHomeDir);
+          if (s.status === 'running') break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        steps.stop('✓', label);
+      } catch (e) {
+        steps.stop('x', label);
+        throw e;
+      }
+    }
+
     if (isSandboxed()) {
       // Fall through to sandbox keepalive below.
     }
@@ -579,14 +678,7 @@ async function main() {
     if (verbosity > 0) {
       await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: restartArgs });
     }
-    // Quiet mode: start mobile after auth to avoid the mobile/web selector during auth.
-    if (quietUi && wantsDev && wantsMobile) {
-      await runNodeScript({
-        rootDir,
-        rel: 'scripts/stack.mjs',
-        args: ['dev', stackName, '--restart', '--mobile', '--background'],
-      });
-    }
+    // Mobile is started up-front (in the initial stack pr start) so we don't need to restart here.
   }
 
   // After login (and after the optional mobile Metro start), print a clear summary so reviewers

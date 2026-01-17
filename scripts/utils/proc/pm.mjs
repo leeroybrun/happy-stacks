@@ -184,13 +184,19 @@ export async function ensureCliBuilt(cliDir, { buildCli }) {
   // - HAPPY_STACKS_CLI_BUILD=0 (legacy: HAPPY_LOCAL_CLI_BUILD=0)
   const modeRaw = (process.env.HAPPY_STACKS_CLI_BUILD_MODE ?? process.env.HAPPY_LOCAL_CLI_BUILD_MODE ?? 'auto').trim().toLowerCase();
   const mode = modeRaw === 'always' || modeRaw === 'auto' || modeRaw === 'never' ? modeRaw : 'auto';
-  if (mode === 'never') {
-    return { built: false, reason: 'mode_never' };
-  }
   const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
   const buildStatePath = resolveBuildStatePath({ label: 'happy-cli', dir: cliDir });
   const gitSig = await computeGitWorktreeSignature(cliDir);
   const prev = await readJsonIfExists(buildStatePath);
+
+  // "never" should prevent rebuild churn, but it must not make the stack unrunnable.
+  // If the dist entrypoint is missing, build once even in "never" mode.
+  if (mode === 'never') {
+    if (await pathExists(distEntrypoint)) {
+      return { built: false, reason: 'mode_never' };
+    }
+    // fallthrough to build
+  }
 
   if (mode === 'auto') {
     // If dist doesn't exist, we must build.
