@@ -11,6 +11,7 @@ import { resolveStackContext } from './utils/stack/context.mjs';
 import { expoExec } from './utils/expo/command.mjs';
 import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
 import { resolveMobileReachableServerUrl } from './utils/server/mobile_api_url.mjs';
+import { patchIosXcodeProjectsForSigningAndIdentity, resolveIosAppXcodeProjects } from './utils/mobile/ios_xcodeproj_patch.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -190,7 +191,6 @@ async function main() {
     if (platform === 'ios' || platform === 'all') {
       const fs = await import('node:fs/promises');
       const podPropsPath = `${uiDir}/ios/Podfile.properties.json`;
-      const pbxprojPath = `${uiDir}/ios/Happydev.xcodeproj/project.pbxproj`;
       try {
         const raw = await fs.readFile(podPropsPath, 'utf-8');
         const json = JSON.parse(raw);
@@ -201,14 +201,17 @@ async function main() {
         // ignore if path missing (platform != ios)
       }
 
-      try {
-        const raw = await fs.readFile(pbxprojPath, 'utf-8');
-        const next = raw.replaceAll('IPHONEOS_DEPLOYMENT_TARGET = 15.1;', 'IPHONEOS_DEPLOYMENT_TARGET = 16.0;');
-        if (next !== raw) {
-          await fs.writeFile(pbxprojPath, next, 'utf-8');
+      const iosProjects = await resolveIosAppXcodeProjects({ uiDir });
+      for (const project of iosProjects) {
+        try {
+          const raw = await fs.readFile(project.pbxprojPath, 'utf-8');
+          const next = raw.replaceAll('IPHONEOS_DEPLOYMENT_TARGET = 15.1;', 'IPHONEOS_DEPLOYMENT_TARGET = 16.0;');
+          if (next !== raw) {
+            await fs.writeFile(project.pbxprojPath, next, 'utf-8');
+          }
+        } catch {
+          // ignore missing/invalid pbxproj; Expo will surface actionable errors if needed
         }
-      } catch {
-        // ignore missing pbxproj (unexpected)
       }
 
       // Ensure CocoaPods doesn't crash due to locale issues.
@@ -271,53 +274,7 @@ async function main() {
       //
       // We force Expo CLI to go through its signing configuration path by clearing any pre-existing
       // team/profile identifiers, so it will re-set the team and include the provisioning flags.
-      try {
-        const fs = await import('node:fs/promises');
-        const pbxprojPath = `${uiDir}/ios/Happydev.xcodeproj/project.pbxproj`;
-        const infoPlistPath = `${uiDir}/ios/Happydev/Info.plist`;
-        const raw = await fs.readFile(pbxprojPath, 'utf-8');
-        let next = raw;
-        // Clear team identifiers (both TargetAttributes and build settings variants).
-        next = next.replaceAll(/^\s*DevelopmentTeam\s*=\s*[^;]+;\s*$/gm, '');
-        next = next.replaceAll(/^\s*DEVELOPMENT_TEAM\s*=\s*[^;]+;\s*$/gm, '');
-        // Clear any pinned provisioning profiles/specifiers (manual signing).
-        next = next.replaceAll(/^\s*PROVISIONING_PROFILE\s*=\s*[^;]+;\s*$/gm, '');
-        next = next.replaceAll(/^\s*PROVISIONING_PROFILE_SPECIFIER\s*=\s*[^;]+;\s*$/gm, '');
-        // Some projects pin code signing identity; remove to let Xcode resolve based on the selected team.
-        next = next.replaceAll(/^\s*CODE_SIGN_IDENTITY\s*=\s*[^;]+;\s*$/gm, '');
-        next = next.replaceAll(/^\s*"CODE_SIGN_IDENTITY\\[sdk=iphoneos\\*\\]"\s*=\s*[^;]+;\s*$/gm, '');
-
-        next = next.replaceAll(/PRODUCT_BUNDLE_IDENTIFIER = [^;]+;/g, `PRODUCT_BUNDLE_IDENTIFIER = ${iosBundleId};`);
-        if (iosAppName && iosAppName.trim()) {
-          const name = iosAppName.trim();
-          const quoted = name.includes(' ') || name.includes('"') ? `"${name.replaceAll('"', '\\"')}"` : name;
-          next = next.replaceAll(/PRODUCT_NAME = [^;]+;/g, `PRODUCT_NAME = ${quoted};`);
-        }
-        if (next !== raw) {
-          await fs.writeFile(pbxprojPath, next, 'utf-8');
-        }
-
-        // iOS home screen display name is CFBundleDisplayName, not PRODUCT_NAME.
-        // Patch it so `--ios-app-name` affects the installed icon label.
-        if (iosAppName && iosAppName.trim()) {
-          try {
-            const plistRaw = await fs.readFile(infoPlistPath, 'utf-8');
-            const desired = iosAppName.trim();
-            const escaped = desired.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-            const replaced = plistRaw.replace(
-              /(<key>CFBundleDisplayName<\/key>\s*<string>)([\s\S]*?)(<\/string>)/m,
-              `$1${escaped}$3`
-            );
-            if (replaced !== plistRaw) {
-              await fs.writeFile(infoPlistPath, replaced, 'utf-8');
-            }
-          } catch {
-            // ignore (missing plist or unexpected format)
-          }
-        }
-      } catch {
-        // ignore
-      }
+      await patchIosXcodeProjectsForSigningAndIdentity({ uiDir, iosBundleId, iosAppName });
     }
 
     const configuration = kv.get('--configuration') ?? 'Debug';
