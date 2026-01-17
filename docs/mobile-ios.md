@@ -8,101 +8,96 @@ see the “Using Happy from your phone” section in the main README.
 - Xcode installed
 - CocoaPods installed (`brew install cocoapods`)
 
-## Step 1: Generate iOS native project + Pods (run when needed)
+## Two supported modes
 
-Run this after pulling changes that affect native deps/config, or if `ios/` was deleted:
+- **Shared dev-client app** (recommended for development):
+  - Install *one* “Happy Stacks Dev” app on your phone.
+  - Run any stack with `--mobile`; scan the QR to open that stack inside the dev-client.
+  - Per-stack auth/storage is isolated via `EXPO_PUBLIC_HAPPY_STORAGE_SCOPE` (set automatically in stack mode).
 
-```bash
-happys mobile:prebuild
-```
+- **Per-stack “release” app** (recommended for demos / strict isolation):
+  - Install a separate iOS app per stack (unique bundle id + scheme).
+  - Each stack app is isolated by iOS app container (no token collisions).
+  
+## Shared dev-client app (install once)
 
-## Step 2: Install the iOS dev build
-
-- **iOS Simulator**:
-
-```bash
-happys mobile --run-ios --device="iPhone 16 Pro"
-```
-
-- **Real iPhone** (requires code signing in Xcode once):
+Install the dedicated Happy Stacks dev-client app on your iPhone (USB):
 
 ```bash
-happys mobile --run-ios --device="Your iPhone"
+happys mobile-dev-client --install
 ```
 
-Tip: you can omit `--device` to auto-pick the first connected iPhone over USB:
+If you want to ensure the dev-client is built from a specific stack’s active `happy` worktree
+(e.g. to include upstream changes that aren’t merged into your default checkout yet), run:
 
 ```bash
-happys mobile --run-ios
+happys stack mobile-dev-client <stack> --install
 ```
 
-To see the exact device names/IDs you can pass:
+Optional:
 
 ```bash
-happys mobile:devices
+happys mobile-dev-client --install --device="Your iPhone"
+happys mobile-dev-client --install --clean
 ```
 
-If you hit a bundle identifier error (e.g. `com.slopus.happy.dev` “not available”), set a unique local bundle id:
+Then run any stack with mobile enabled:
 
 ```bash
-HAPPY_STACKS_IOS_BUNDLE_ID="com.yourname.happy.local.dev" happys mobile --run-ios
-# legacy: HAPPY_LOCAL_IOS_BUNDLE_ID="com.yourname.happy.local.dev" happys mobile --run-ios
+happys stack dev <stack> --mobile
+# or:
+happys dev --mobile
 ```
 
-## Release build (runs without Metro)
+## Per-stack app install (isolated)
 
-Build + install a Release configuration (no Metro required at runtime):
+Install an isolated app for a specific stack (unique bundle id + scheme, Release config, no Metro):
 
 ```bash
-happys mobile:install
+happys stack mobile:install <stack> --name="Happy (<stack>)"
+happys stack mobile:install <stack> --name="Happy PR 272" --device="Your iPhone"
 ```
 
-## Step 3: Start Metro (dev client)
+The chosen app name is persisted in the stack env so you can re-run installs without re-typing it.
 
-- **iOS Simulator**:
+## Notes / troubleshooting
 
-```bash
-happys mobile --host=localhost
-```
+- **QR opens the wrong app**:
+  - The dev-client QR uses the `HAPPY_STACKS_DEV_CLIENT_SCHEME` (default: `happystacks-dev`).
+  - Per-stack installs use a different per-stack scheme, so they should not intercept dev-client QR scans.
 
-- **Real iPhone** (same Wi‑Fi as your Mac):
-
-```bash
-happys mobile --host=lan
-```
-
-Open the dev build and tap Reload. Scanning the QR should open the dev build (not the App Store app).
+- **LAN requirement**:
+  - Physical iPhones must reach Metro over LAN. Happy Stacks defaults to `lan` for dev-client Metro.
 
 ## Bake the default server URL into the app (optional)
 
 If you want the built app to default to your happy-stacks server URL, set this **when building**:
 
 ```bash
-HAPPY_STACKS_SERVER_URL="https://<your-machine>.<tailnet>.ts.net" happys mobile:install
+HAPPY_STACKS_SERVER_URL="https://<your-machine>.<tailnet>.ts.net" happys mobile-dev-client --install
 ```
 
-Note: changing `HAPPY_STACKS_SERVER_URL` requires rebuilding/reinstalling the Release app (`happys mobile:install`).
+Note: changing `HAPPY_STACKS_SERVER_URL` requires rebuilding/reinstalling the app you care about.
 
 You can also set a custom bundle id (recommended for real devices):
 
 ```bash
-HAPPY_STACKS_IOS_BUNDLE_ID="com.yourname.happy.local.dev" HAPPY_STACKS_SERVER_URL="https://<your-machine>.<tailnet>.ts.net" happys mobile:install
+HAPPY_STACKS_IOS_BUNDLE_ID="com.yourname.happy.local.dev" HAPPY_STACKS_SERVER_URL="https://<your-machine>.<tailnet>.ts.net" happys mobile --run-ios
 ```
 
 ## Customizing the app identity (optional)
 
 - **Bundle identifier (recommended for real iPhones)**:
-  - You may *need* this if the default `com.slopus.happy.dev` can’t be registered on your Apple team.
+  - You may *need* this if the default isn’t available for your Apple team.
 
 ```bash
 HAPPY_STACKS_IOS_BUNDLE_ID="com.yourname.happy.local.dev" happys mobile --run-ios
-HAPPY_STACKS_IOS_BUNDLE_ID="com.yourname.happy.local.dev" happys mobile:install
 ```
 
 - **App name (what shows on the home screen)**:
 
 ```bash
-HAPPY_STACKS_IOS_APP_NAME="Happy Local" happys mobile:install
+HAPPY_STACKS_IOS_APP_NAME="Happy Local" happys mobile --run-ios
 ```
 
 ## Suggested env (recommended)
@@ -113,22 +108,9 @@ Add these to your main stack env file (`~/.happy/stacks/main/env`) (or `~/.happy
 # Required if you want the Release app to default to your stack server:
 HAPPY_STACKS_SERVER_URL="https://<your-machine>.<tailnet>.ts.net"
 
-# Strongly recommended for real devices (needs to be unique + owned by your Apple team):
-HAPPY_STACKS_IOS_BUNDLE_ID="com.yourname.happy.local.dev"
+# Optional: default dev-client scheme (must match your installed dev-client app)
+HAPPY_STACKS_DEV_CLIENT_SCHEME="happystacks-dev"
 
 # Optional: home screen name:
 HAPPY_STACKS_IOS_APP_NAME="Happy Local"
-```
-
-## Personal build on iPhone (EAS internal distribution)
-
-```bash
-cd "$HOME/.happy-stacks/workspace/components/happy"
-eas build --profile development --platform ios
-```
-
-Then keep Metro running from `happy-stacks`:
-
-```bash
-happys mobile --host=lan
 ```
