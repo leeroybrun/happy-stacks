@@ -1,7 +1,7 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
-import { run } from './utils/proc/proc.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
 import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { getServerComponentName } from './utils/server/server.mjs';
 import { ensureCliBuilt, ensureDepsInstalled, ensureHappyCliLocalNpmLinked } from './utils/proc/pm.mjs';
@@ -24,8 +24,10 @@ import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox
 
 const DEFAULT_FORK_REPOS = {
   serverLight: 'https://github.com/leeroybrun/happy-server-light.git',
-  // We don't currently maintain a separate fork for full happy-server; default to upstream.
-  serverFull: 'https://github.com/slopus/happy-server.git',
+  // Both server flavors live as branches in the same fork repo:
+  // - happy-server-light (sqlite)
+  // - happy-server (full)
+  serverFull: 'https://github.com/leeroybrun/happy-server-light.git',
   cli: 'https://github.com/leeroybrun/happy-cli.git',
   ui: 'https://github.com/leeroybrun/happy.git',
 };
@@ -44,7 +46,8 @@ function repoUrlsFromOwners({ forkOwner, upstreamOwner }) {
   return {
     forks: {
       serverLight: fork('happy-server-light'),
-      serverFull: fork('happy-server') /* best-effort; user can override */,
+      // Fork convention: server full is a branch in happy-server-light repo (not a separate repo).
+      serverFull: fork('happy-server-light'),
       cli: fork('happy-cli'),
       ui: fork('happy'),
     },
@@ -84,6 +87,51 @@ function getRepoUrls({ repoSource }) {
     cli: process.env.HAPPY_LOCAL_CLI_REPO_URL?.trim() || defaults.cli,
     ui: process.env.HAPPY_LOCAL_UI_REPO_URL?.trim() || defaults.ui,
   };
+}
+
+async function ensureGitBranchCheckedOut({ repoDir, branch, label }) {
+  if (!(await pathExists(join(repoDir, '.git')))) return;
+  const b = String(branch ?? '').trim();
+  if (!b) return;
+
+  try {
+    const head = (await runCapture('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoDir })).trim();
+    if (head && head === b) return;
+  } catch {
+    // ignore
+  }
+
+  // Ensure branch exists locally, otherwise fetch it from origin.
+  let hasLocal = true;
+  try {
+    await run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], { cwd: repoDir });
+  } catch {
+    hasLocal = false;
+  }
+  if (!hasLocal) {
+    try {
+      await run('git', ['fetch', '--quiet', 'origin', b], { cwd: repoDir });
+    } catch {
+      throw new Error(
+        `[local] ${label}: expected branch "${b}" to exist in ${repoDir}.\n` +
+          `[local] Fix: use --forks for happy-server-light (sqlite), or use --server=happy-server with --upstream.`
+      );
+    }
+  }
+
+  try {
+    await run('git', ['checkout', '-q', b], { cwd: repoDir });
+  } catch {
+    // If remote-tracking branch exists but local doesn't, create it.
+    try {
+      await run('git', ['checkout', '-q', '-B', b, `origin/${b}`], { cwd: repoDir });
+    } catch {
+      throw new Error(
+        `[local] ${label}: failed to checkout branch "${b}" in ${repoDir}.\n` +
+          `[local] Fix: re-run with --force in worktree flows, or delete the checkout and re-run install/bootstrap.`
+      );
+    }
+  }
 }
 
 async function ensureComponentPresent({ dir, label, repoUrl, allowClone }) {
@@ -201,7 +249,22 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--forks', '--upstream', '--clone', '--no-clone', '--autostart', '--no-autostart', '--server=...'], json: true },
+      data: {
+        flags: [
+          '--forks',
+          '--upstream',
+          '--clone',
+          '--no-clone',
+          '--autostart',
+          '--no-autostart',
+          '--server=...',
+          '--no-ui-build',
+          '--no-ui-deps',
+          '--no-cli-deps',
+          '--no-cli-build',
+        ],
+        json: true,
+      },
       text: [
         '[bootstrap] usage:',
         '  happys bootstrap [--forks|--upstream] [--server=happy-server|happy-server-light|both] [--json]',
@@ -270,6 +333,17 @@ async function main() {
   const disableAutostart = flags.has('--no-autostart');
 
   const serverComponentName = (wizard?.serverComponentName ?? getServerComponentName({ kv })).trim();
+  // Safety: upstream server-light is not a separate upstream repo/branch today.
+  // Upstream slopus/happy-server is Postgres-only, while happy-server-light requires sqlite.
+  if (repoSource === 'upstream' && (serverComponentName === 'happy-server-light' || serverComponentName === 'both')) {
+    throw new Error(
+      `[bootstrap] --upstream is not supported for happy-server-light (sqlite).\n` +
+        `Reason: upstream ${DEFAULT_UPSTREAM_REPOS.serverLight} does not provide a happy-server-light branch.\n` +
+        `Fix:\n` +
+        `- use --forks (recommended), OR\n` +
+        `- use --server=happy-server with --upstream`
+    );
+  }
   const serverLightDir = getComponentDir(rootDir, 'happy-server-light');
   const serverFullDir = getComponentDir(rootDir, 'happy-server');
   const cliDir = getComponentDir(rootDir, 'happy-cli');
@@ -305,35 +379,57 @@ async function main() {
     allowClone,
   });
 
+  // Ensure expected branches are checked out for server flavors (avoids "server-light directory contains full server" mistakes).
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
+    await ensureGitBranchCheckedOut({ repoDir: serverLightDir, branch: 'happy-server-light', label: 'SERVER' });
+  }
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
+    // In fork mode, full server is a branch in the fork server repo. In upstream mode, use upstream main.
+    const serverFullBranch = repoSource === 'upstream' ? 'main' : 'happy-server';
+    await ensureGitBranchCheckedOut({ repoDir: serverFullDir, branch: serverFullBranch, label: 'SERVER_FULL' });
+  }
+
   const cliDirFinal = cliDir;
   const uiDirFinal = uiDir;
 
   // Install deps
+  const skipUiDeps = flags.has('--no-ui-deps') || (process.env.HAPPY_STACKS_INSTALL_NO_UI_DEPS ?? '').trim() === '1';
+  const skipCliDeps = flags.has('--no-cli-deps') || (process.env.HAPPY_STACKS_INSTALL_NO_CLI_DEPS ?? '').trim() === '1';
   if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
     await ensureDepsInstalled(serverLightDir, 'happy-server-light');
   }
   if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
     await ensureDepsInstalled(serverFullDir, 'happy-server');
   }
-  await ensureDepsInstalled(uiDirFinal, 'happy');
-  await ensureDepsInstalled(cliDirFinal, 'happy-cli');
+  if (!skipUiDeps) {
+    await ensureDepsInstalled(uiDirFinal, 'happy');
+  }
+  if (!skipCliDeps) {
+    await ensureDepsInstalled(cliDirFinal, 'happy-cli');
+  }
 
   // CLI build + link
-  const buildCli = (process.env.HAPPY_LOCAL_CLI_BUILD ?? '1') !== '0';
-  const npmLinkCli = (process.env.HAPPY_LOCAL_NPM_LINK ?? '1') !== '0';
-  await ensureCliBuilt(cliDirFinal, { buildCli });
-  await ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli });
+  const skipCliBuild = flags.has('--no-cli-build') || (process.env.HAPPY_STACKS_INSTALL_NO_CLI_BUILD ?? '').trim() === '1';
+  if (!skipCliBuild) {
+    const buildCli = (process.env.HAPPY_LOCAL_CLI_BUILD ?? '1') !== '0';
+    const npmLinkCli = (process.env.HAPPY_LOCAL_NPM_LINK ?? '1') !== '0';
+    await ensureCliBuilt(cliDirFinal, { buildCli });
+    await ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli });
+  }
 
   // Build UI (so run works without expo dev server)
+  const skipUiBuild = flags.has('--no-ui-build') || (process.env.HAPPY_STACKS_INSTALL_NO_UI_BUILD ?? '').trim() === '1';
   const buildArgs = [join(rootDir, 'scripts', 'build.mjs')];
   // Tauri builds are opt-in (slow + requires additional toolchain).
   const buildTauri = wizard?.buildTauri ?? (flags.has('--tauri') && !flags.has('--no-tauri'));
-  if (buildTauri) {
-    buildArgs.push('--tauri');
-  } else if (flags.has('--no-tauri')) {
-    buildArgs.push('--no-tauri');
+  if (!skipUiBuild) {
+    if (buildTauri) {
+      buildArgs.push('--tauri');
+    } else if (flags.has('--no-tauri')) {
+      buildArgs.push('--no-tauri');
+    }
+    await run(process.execPath, buildArgs, { cwd: rootDir });
   }
-  await run(process.execPath, buildArgs, { cwd: rootDir });
 
   // Optional autostart (macOS)
   if (disableAutostart) {

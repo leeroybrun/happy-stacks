@@ -4,14 +4,13 @@ import { run, runCapture, spawnProc } from './utils/proc/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, pmSpawnBin, requireDir } from './utils/proc/pm.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { ensureExpoIsolationEnv, getExpoStatePaths, isStateProcessRunning, killPid, wantsExpoClearCache, writePidState } from './utils/expo/expo.mjs';
-import { killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
-import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
-import { pickMobileDevMetroPort } from './utils/expo/metro_ports.mjs';
+import { ensureExpoIsolationEnv, getExpoStatePaths } from './utils/expo/expo.mjs';
+import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { resolveMobileExpoConfig } from './utils/mobile/config.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
-import { recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
-import { expoExec, expoSpawn } from './utils/expo/command.mjs';
+import { expoExec } from './utils/expo/command.mjs';
+import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
+import { resolveMobileReachableServerUrl } from './utils/server/mobile_api_url.mjs';
 
 /**
  * Mobile dev helper for the embedded `components/happy` Expo app.
@@ -110,25 +109,48 @@ async function main() {
   const autostart = getDefaultAutostartPaths();
   const stackCtx = resolveStackContext({ env, autostart });
   const { stackMode, runtimeStatePath, stackName, envPath } = stackCtx;
-  const mobilePaths = getExpoStatePaths({
+
+  // Ensure the built iOS app registers the same scheme we use for dev-client QR links.
+  // (Happy app reads EXPO_APP_SCHEME in app.config.js; default remains unchanged when unset.)
+  env.EXPO_APP_SCHEME = scheme;
+  // Ensure the app display name + bundle id are consistent with what we install.
+  // (app.config.js keeps upstream defaults unless these are explicitly set.)
+  if (iosAppName && iosAppName.trim()) {
+    env.EXPO_APP_NAME = iosAppName.trim();
+  }
+  if (iosBundleId && iosBundleId.trim()) {
+    env.EXPO_APP_BUNDLE_ID = iosBundleId.trim();
+  }
+
+  // Always isolate Expo home + TMPDIR to avoid cross-worktree cache pollution (and to keep sandbox runs contained).
+  const expoPaths = getExpoStatePaths({
     baseDir: autostart.baseDir,
-    kind: 'mobile-dev',
+    kind: 'expo-dev',
     projectDir: uiDir,
-    stateFileName: 'mobile.state.json',
+    stateFileName: 'expo.state.json',
   });
   await ensureExpoIsolationEnv({
     env,
-    stateDir: mobilePaths.stateDir,
-    expoHomeDir: mobilePaths.expoHomeDir,
-    tmpDir: mobilePaths.tmpDir,
+    stateDir: expoPaths.stateDir,
+    expoHomeDir: expoPaths.expoHomeDir,
+    tmpDir: expoPaths.tmpDir,
   });
 
   // Allow happy-stacks to define the default server URL baked into the app bundle.
   // This is read by the app via `process.env.EXPO_PUBLIC_HAPPY_SERVER_URL`.
-  const serverPort = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
-  const { envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort });
-  if (envPublicUrl && !env.EXPO_PUBLIC_HAPPY_SERVER_URL) {
-    env.EXPO_PUBLIC_HAPPY_SERVER_URL = envPublicUrl;
+  const serverPort = resolveServerPortFromEnv({ env, defaultPort: 3005 });
+  const allowEnableTailscale =
+    !stackMode || stackName === 'main' || (env.HAPPY_STACKS_TAILSCALE_SERVE ?? env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0').toString().trim() === '1';
+  const resolvedUrls = await resolveServerUrls({ env, serverPort, allowEnable: allowEnableTailscale });
+  if (resolvedUrls.publicServerUrl && !env.EXPO_PUBLIC_HAPPY_SERVER_URL) {
+    env.EXPO_PUBLIC_HAPPY_SERVER_URL = resolvedUrls.publicServerUrl;
+  }
+  if (env.EXPO_PUBLIC_HAPPY_SERVER_URL) {
+    env.EXPO_PUBLIC_HAPPY_SERVER_URL = resolveMobileReachableServerUrl({
+      env,
+      serverUrl: env.EXPO_PUBLIC_HAPPY_SERVER_URL,
+      serverPort,
+    });
   }
 
   if (json) {
@@ -247,13 +269,24 @@ async function main() {
       // xcodebuild fails with:
       //   "Automatic signing is disabled ... pass -allowProvisioningUpdates"
       //
-      // We force Expo CLI to go through its signing configuration path by clearing DEVELOPMENT_TEAM,
-      // so it will re-set the team and include the provisioning flags.
+      // We force Expo CLI to go through its signing configuration path by clearing any pre-existing
+      // team/profile identifiers, so it will re-set the team and include the provisioning flags.
       try {
         const fs = await import('node:fs/promises');
         const pbxprojPath = `${uiDir}/ios/Happydev.xcodeproj/project.pbxproj`;
+        const infoPlistPath = `${uiDir}/ios/Happydev/Info.plist`;
         const raw = await fs.readFile(pbxprojPath, 'utf-8');
-        let next = raw.replaceAll(/^\s*DEVELOPMENT_TEAM = ".*";\s*$/gm, '');
+        let next = raw;
+        // Clear team identifiers (both TargetAttributes and build settings variants).
+        next = next.replaceAll(/^\s*DevelopmentTeam\s*=\s*[^;]+;\s*$/gm, '');
+        next = next.replaceAll(/^\s*DEVELOPMENT_TEAM\s*=\s*[^;]+;\s*$/gm, '');
+        // Clear any pinned provisioning profiles/specifiers (manual signing).
+        next = next.replaceAll(/^\s*PROVISIONING_PROFILE\s*=\s*[^;]+;\s*$/gm, '');
+        next = next.replaceAll(/^\s*PROVISIONING_PROFILE_SPECIFIER\s*=\s*[^;]+;\s*$/gm, '');
+        // Some projects pin code signing identity; remove to let Xcode resolve based on the selected team.
+        next = next.replaceAll(/^\s*CODE_SIGN_IDENTITY\s*=\s*[^;]+;\s*$/gm, '');
+        next = next.replaceAll(/^\s*"CODE_SIGN_IDENTITY\\[sdk=iphoneos\\*\\]"\s*=\s*[^;]+;\s*$/gm, '');
+
         next = next.replaceAll(/PRODUCT_BUNDLE_IDENTIFIER = [^;]+;/g, `PRODUCT_BUNDLE_IDENTIFIER = ${iosBundleId};`);
         if (iosAppName && iosAppName.trim()) {
           const name = iosAppName.trim();
@@ -262,6 +295,25 @@ async function main() {
         }
         if (next !== raw) {
           await fs.writeFile(pbxprojPath, next, 'utf-8');
+        }
+
+        // iOS home screen display name is CFBundleDisplayName, not PRODUCT_NAME.
+        // Patch it so `--ios-app-name` affects the installed icon label.
+        if (iosAppName && iosAppName.trim()) {
+          try {
+            const plistRaw = await fs.readFile(infoPlistPath, 'utf-8');
+            const desired = iosAppName.trim();
+            const escaped = desired.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+            const replaced = plistRaw.replace(
+              /(<key>CFBundleDisplayName<\/key>\s*<string>)([\s\S]*?)(<\/string>)/m,
+              `$1${escaped}$3`
+            );
+            if (replaced !== plistRaw) {
+              await fs.writeFile(infoPlistPath, replaced, 'utf-8');
+            }
+          } catch {
+            // ignore (missing plist or unexpected format)
+          }
         }
       } catch {
         // ignore
@@ -283,54 +335,32 @@ async function main() {
     return;
   }
 
-  const running = await isStateProcessRunning(mobilePaths.statePath);
-  if (!restart && running.running) {
-    // eslint-disable-next-line no-console
-    console.log(`[mobile] Metro already running for this stack/worktree (pid=${running.state.pid}, port=${running.state.port})`);
-    if (stackMode && runtimeStatePath) {
-      const pid = Number(running.state?.pid);
-      const port = Number(running.state?.port);
-      if (Number.isFinite(pid) && pid > 1) {
-        await recordStackRuntimeUpdate(runtimeStatePath, {
-          processes: { expoMobilePid: pid },
-          expo: { mobilePort: Number.isFinite(port) && port > 0 ? port : null },
-        }).catch(() => {});
-      }
-    }
-    return;
-  }
-  if (restart && running.state?.pid) {
-    const prevPid = Number(running.state.pid);
-    const res = await killProcessGroupOwnedByStack(prevPid, { stackName, envPath, label: 'expo-mobile', json: true });
-    if (!res.killed) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[mobile] not stopping existing Metro pid=${prevPid} because it does not look stack-owned.\n` +
-          `[mobile] continuing by starting a new Metro on a free port.`
-      );
-    }
-  }
+  // Unify Expo: one Expo dev server per stack/worktree. If dev mode already started Expo, we reuse it.
+  // If Expo is already running without dev-client enabled, we fail closed (no second Expo).
+  env.HAPPY_STACKS_EXPO_HOST = host;
+  env.HAPPY_LOCAL_EXPO_HOST = host;
+  env.HAPPY_STACKS_MOBILE_HOST = host;
+  env.HAPPY_LOCAL_MOBILE_HOST = host;
+  env.HAPPY_STACKS_MOBILE_SCHEME = scheme;
+  env.HAPPY_LOCAL_MOBILE_SCHEME = scheme;
+  env.HAPPY_STACKS_EXPO_DEV_PORT = String(portRaw);
+  env.HAPPY_LOCAL_EXPO_DEV_PORT = String(portRaw);
 
-  // Port selection: reuse the same stable/ephemeral strategy used by `happys dev` when configured.
-  // Back-compat: HAPPY_STACKS_MOBILE_PORT is treated as the "forced" port knob (picked if free, otherwise scan).
-  const portNumber = await pickMobileDevMetroPort({ env, stackMode, stackName });
-  env.RCT_METRO_PORT = String(portNumber);
-
-  // Start Metro for a dev client.
-  // The critical part is --scheme: without it, Expo defaults to `exp+<slug>` (here `exp+happy`)
-  // which the App Store app also registers, so iOS can open the wrong app.
-  const args = ['start', '--dev-client', '--host', host, '--port', String(portNumber), '--scheme', scheme];
-  if (wantsExpoClearCache({ env })) {
-    args.push('--clear');
-  }
-  const child = await expoSpawn({ label: 'mobile', dir: uiDir, args, env, ensureDepsLabel: 'happy' });
-  await writePidState(mobilePaths.statePath, { pid: child.pid, port: portNumber, uiDir, startedAt: new Date().toISOString() });
-  if (stackMode && runtimeStatePath) {
-    await recordStackRuntimeUpdate(runtimeStatePath, {
-      processes: { expoMobilePid: child.pid },
-      expo: { mobilePort: portNumber },
-    }).catch(() => {});
-  }
+  const children = [];
+  await ensureDevExpoServer({
+    startUi: false,
+    startMobile: true,
+    uiDir,
+    autostart,
+    baseEnv: env,
+    apiServerUrl: env.EXPO_PUBLIC_HAPPY_SERVER_URL ?? '',
+    restart,
+    stackMode,
+    runtimeStatePath,
+    stackName,
+    envPath,
+    children,
+  });
 
   await new Promise(() => {});
 }

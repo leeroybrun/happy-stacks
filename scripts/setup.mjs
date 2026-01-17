@@ -23,6 +23,26 @@ import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { commandExists } from './utils/proc/commands.mjs';
 import { readEnvValueFromFile } from './utils/env/read.mjs';
 import { readServerPortFromEnvFile, resolveServerPortFromEnv } from './utils/server/port.mjs';
+import { guidedStackWebSignupThenLogin } from './utils/auth/guided_stack_web_login.mjs';
+
+async function resolveMainWebappUrlForAuth({ rootDir, port }) {
+  try {
+    const raw = await runCapture(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), 'login', '--print', '--json'], {
+      cwd: rootDir,
+      env: {
+        ...process.env,
+        HAPPY_STACKS_SERVER_PORT: String(port),
+        HAPPY_LOCAL_SERVER_PORT: String(port),
+      },
+    });
+    const parsed = JSON.parse(String(raw ?? '').trim());
+    const cmd = typeof parsed?.cmd === 'string' ? parsed.cmd : '';
+    const m = cmd.match(/HAPPY_WEBAPP_URL="([^"]+)"/);
+    return m?.[1] ? String(m[1]) : '';
+  } catch {
+    return '';
+  }
+}
 
 async function resolveMainServerPort() {
   // Priority:
@@ -39,14 +59,18 @@ async function resolveMainServerPort() {
 }
 
 async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, tailscaleWanted, menubarMode }) {
+  const repoSourceForProfile =
+    profile === 'selfhost' ? (serverComponent === 'happy-server-light' ? 'forks' : 'upstream') : null;
   const updates = [
     { key: 'HAPPY_STACKS_SERVER_COMPONENT', value: serverComponent },
     { key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: serverComponent },
-    // Default for selfhost: upstream.
-    ...(profile === 'selfhost'
+    // Default for selfhost:
+    // - full server: upstream (slopus/*)
+    // - server-light: forks (sqlite server-light is not available upstream today)
+    ...(repoSourceForProfile
       ? [
-          { key: 'HAPPY_STACKS_REPO_SOURCE', value: 'upstream' },
-          { key: 'HAPPY_LOCAL_REPO_SOURCE', value: 'upstream' },
+          { key: 'HAPPY_STACKS_REPO_SOURCE', value: repoSourceForProfile },
+          { key: 'HAPPY_LOCAL_REPO_SOURCE', value: repoSourceForProfile },
         ]
       : []),
     { key: 'HAPPY_STACKS_MENUBAR_MODE', value: menubarMode },
@@ -510,10 +534,11 @@ async function cmdSetup({ rootDir, argv }) {
     }
   } else {
     // Selfhost setup: run non-interactively and keep it simple.
+    const repoFlag = serverComponent === 'happy-server-light' ? '--forks' : '--upstream';
     await runNodeScript({
       rootDir,
       rel: 'scripts/install.mjs',
-      args: [`--server=${serverComponent}`, '--upstream'],
+      args: [`--server=${serverComponent}`, repoFlag],
     });
   }
 
@@ -592,46 +617,20 @@ async function cmdSetup({ rootDir, argv }) {
         // eslint-disable-next-line no-console
         console.log('[setup] auth: already configured (access.key exists)');
       } else {
-        // Before starting an interactive login, offer the best available shortcut in this order:
-        // For selfhost profile:
-        // - prefer reusing legacy ~/.happy creds if present (maintainers often already have a local install)
-        // - otherwise, run the normal login flow
-        let reused = false;
         if (interactive) {
-          const legacyAccessKey = join(homedir(), '.happy', 'cli', 'access.key');
-          const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
-          const hasLegacy = allowLegacy && existsSync(legacyAccessKey);
-
-          if (hasLegacy) {
-            const options = [];
-            if (hasLegacy) {
-              options.push({ label: 'reuse legacy ~/.happy (symlink; stays up to date)', value: 'legacy-link' });
-              options.push({ label: 'reuse legacy ~/.happy (copy; more isolated)', value: 'legacy-copy' });
-            }
-            options.push({ label: 'do login flow instead', value: 'login' });
-
-            const choice = await withRl(async (rl) => {
-              return await promptSelect(rl, {
-                title:
-                  'We found existing credentials on this machine. How should Happy Stacks main authenticate?',
-                options,
-                defaultIndex: 0,
-              });
-            });
-
-            if (choice === 'legacy-link') {
-              await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['copy-from', 'legacy', '--allow-main', '--link'] });
-              reused = existsSync(accessKey);
-            } else if (choice === 'legacy-copy') {
-              await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['copy-from', 'legacy', '--allow-main'] });
-              reused = existsSync(accessKey);
-            }
-          }
+          const webappUrl = await resolveMainWebappUrlForAuth({ rootDir, port });
+          await guidedStackWebSignupThenLogin({ webappUrl, stackName: 'main' });
         }
-
-        if (!reused) {
-          await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['login', `--context=${ctx}`] });
-        }
+        await runNodeScript({
+          rootDir,
+          rel: 'scripts/auth.mjs',
+          args: ['login', `--context=${ctx}`, '--quiet'],
+          env: {
+            ...process.env,
+            HAPPY_STACKS_SERVER_PORT: String(port),
+            HAPPY_LOCAL_SERVER_PORT: String(port),
+          },
+        });
 
         if (!existsSync(accessKey)) {
           // eslint-disable-next-line no-console

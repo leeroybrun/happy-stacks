@@ -40,7 +40,9 @@ function extractHttpsUrl(serveStatusText) {
     .find((l) => l.toLowerCase().includes('https://'));
   if (!line) return null;
   const m = line.match(/https:\/\/\S+/i);
-  return m ? m[0] : null;
+  if (!m) return null;
+  // Avoid trailing slash for base URLs (some consumers treat it as a path prefix).
+  return m[0].replace(/\/+$/, '');
 }
 
 function tailscaleStatusMatchesInternalServerUrl(status, internalServerUrl) {
@@ -78,6 +80,16 @@ export async function tailscaleServeHttpsUrlForInternalServerUrl(internalServerU
 function extractServeEnableUrl(text) {
   const m = String(text ?? '').match(/https:\/\/login\.tailscale\.com\/f\/serve\?node=\S+/i);
   return m ? m[0] : null;
+}
+
+function assertTailscaleAllowed(action) {
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    throw new Error(
+      `[local] tailscale ${action} is disabled in sandbox mode.\n` +
+        `Reason: Tailscale Serve is global machine state and sandbox runs must be isolated.\n` +
+        `If you really want this, set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1`
+    );
+  }
 }
 
 function parseTimeoutMs(raw, defaultMs) {
@@ -173,11 +185,13 @@ export async function tailscaleServeHttpsUrl() {
 }
 
 export async function tailscaleServeStatus() {
+  assertTailscaleAllowed('status');
   const cmd = await resolveTailscaleCmd();
   return await runCapture(cmd, ['serve', 'status'], { env: tailscaleEnv(), timeoutMs: tailscaleProbeTimeoutMs() });
 }
 
 export async function tailscaleServeEnable({ internalServerUrl, timeoutMs } = {}) {
+  assertTailscaleAllowed('enable');
   const cmd = await resolveTailscaleCmd();
   const { upstream, servePath } = getServeConfig(internalServerUrl);
   const args = ['serve', '--bg'];
@@ -215,12 +229,16 @@ export async function tailscaleServeEnable({ internalServerUrl, timeoutMs } = {}
 }
 
 export async function tailscaleServeReset({ timeoutMs } = {}) {
+  assertTailscaleAllowed('reset');
   const cmd = await resolveTailscaleCmd();
   const timeout = Number.isFinite(timeoutMs) ? (timeoutMs > 0 ? timeoutMs : 0) : tailscaleUserResetTimeoutMs();
   await run(cmd, ['serve', 'reset'], { env: tailscaleEnv(), timeoutMs: timeout });
 }
 
 export async function maybeEnableTailscaleServe({ internalServerUrl }) {
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    return null;
+  }
   const enabled = (process.env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0') === '1';
   if (!enabled) {
     return null;
@@ -234,6 +252,9 @@ export async function maybeEnableTailscaleServe({ internalServerUrl }) {
 }
 
 export async function maybeResetTailscaleServe() {
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    return;
+  }
   const enabled = (process.env.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0') === '1';
   const resetOnExit = (process.env.HAPPY_LOCAL_TAILSCALE_RESET_ON_EXIT ?? '0') === '1';
   if (!enabled || !resetOnExit) {
@@ -266,6 +287,7 @@ export async function resolvePublicServerUrl({
   defaultPublicUrl,
   envPublicUrl,
   allowEnable = true,
+  stackName = 'main',
 }) {
   const preferTailscalePublicUrl = (process.env.HAPPY_LOCAL_TAILSCALE_PREFER_PUBLIC_URL ?? '1') !== '0';
   const userExplicitlySetPublicUrl =
@@ -273,6 +295,20 @@ export async function resolvePublicServerUrl({
 
   if (userExplicitlySetPublicUrl || !preferTailscalePublicUrl) {
     return { publicServerUrl: envPublicUrl || defaultPublicUrl, source: 'env' };
+  }
+
+  // Non-main stacks:
+  // - Never auto-enable (global machine state) by default.
+  // - If the caller explicitly allows it AND Tailscale Serve is already configured for this stack's
+  //   internal URL, prefer the HTTPS URL (safe: status must match the internal URL).
+  if (stackName && stackName !== 'main') {
+    if (allowEnable) {
+      const existing = await tailscaleServeHttpsUrlForInternalServerUrl(internalServerUrl);
+      if (existing) {
+        return { publicServerUrl: existing, source: 'tailscale-status' };
+      }
+    }
+    return { publicServerUrl: envPublicUrl || defaultPublicUrl, source: envPublicUrl ? 'env' : 'default' };
   }
 
   // If serve is already configured, use its HTTPS URL if present.

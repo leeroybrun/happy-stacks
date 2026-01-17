@@ -1,13 +1,52 @@
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 
 import { runCapture } from '../proc/proc.mjs';
 import { getDefaultAutostartPaths } from '../paths/paths.mjs';
 import { resolveInstalledCliRoot, resolveInstalledPath } from '../paths/runtime.mjs';
+import { getCanonicalHomeDir } from '../env/config.mjs';
 
 function plistPathForLabel(label) {
   return join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+}
+
+function splitPath(p) {
+  return String(p ?? '')
+    .split(':')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function buildLaunchdPath({ execPath = process.execPath, basePath = process.env.PATH } = {}) {
+  // launchd starts with a minimal environment; ensure common tool paths exist,
+  // and include the current Node binary directory so shell shims that exec `node`
+  // still work (e.g. nvm-managed installs).
+  const nodeDir = execPath ? dirname(execPath) : '';
+  const defaults = splitPath('/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin');
+  const fromNode = nodeDir ? [nodeDir] : [];
+  const fromEnv = splitPath(basePath);
+
+  const seen = new Set();
+  const out = [];
+  for (const part of [...fromNode, ...fromEnv, ...defaults]) {
+    if (seen.has(part)) continue;
+    seen.add(part);
+    out.push(part);
+  }
+  return out.join(':') || '/usr/bin:/bin:/usr/sbin:/sbin';
+}
+
+export function pickLaunchdProgramArgs({ rootDir, execPath = process.execPath } = {}) {
+  // Prefer the stable shim under the canonical home dir (used by selfhost installs).
+  // This keeps the LaunchAgent pointing at a stable path while allowing runtime updates.
+  const happysShim = join(getCanonicalHomeDir(), 'bin', 'happys');
+  if (existsSync(happysShim)) {
+    return [happysShim, 'start'];
+  }
+  // Fallback: call the Node entry directly (works in repo-only installs).
+  return [execPath, resolveInstalledPath(rootDir, 'bin/happys.mjs'), 'start'];
 }
 
 function xmlEscape(s) {
@@ -72,11 +111,12 @@ export async function ensureMacAutostartEnabled({ rootDir, label, env }) {
   await mkdir(dirname(stdoutPath), { recursive: true }).catch(() => {});
   await mkdir(dirname(stderrPath), { recursive: true }).catch(() => {});
 
-  const programArgs = [process.execPath, resolveInstalledPath(rootDir, 'bin/happys.mjs'), 'start'];
+  const programArgs = pickLaunchdProgramArgs({ rootDir, execPath: process.execPath });
   const mergedEnv = {
     ...(env ?? {}),
     // Ensure a reasonable PATH for subprocesses (git/docker/etc) in launchd’s minimal environment.
-    PATH: (process.env.PATH ?? '').trim() || '/usr/bin:/bin:/usr/sbin:/sbin',
+    // Also ensure Node is on PATH for shell shims that exec `node` (common with nvm installs).
+    PATH: buildLaunchdPath({ execPath: process.execPath, basePath: process.env.PATH }),
   };
 
   const xml = plistXml({

@@ -3,27 +3,161 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { isTty } from './utils/cli/wizard.mjs';
 import { getVerbosityLevel } from './utils/cli/verbosity.mjs';
-import { runCommandLogged } from './utils/cli/progress.mjs';
+import { createStepPrinter, runCommandLogged } from './utils/cli/progress.mjs';
+import { createFileLogForwarder } from './utils/cli/log_forwarder.mjs';
+import { assertCliPrereqs } from './utils/cli/prereqs.mjs';
 import { decidePrAuthPlan } from './utils/auth/guided_pr_auth.mjs';
+import { guidedStackAuthLoginNow, resolveStackWebappUrlForAuth } from './utils/auth/stack_guided_login.mjs';
+import { preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { run } from './utils/proc/proc.mjs';
-import { isSandboxed } from './utils/env/sandbox.mjs';
-import { parseGithubPullRequest } from './utils/git/refs.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { sanitizeStackName } from './utils/stack/names.mjs';
+import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { resolveMobileQrPayload } from './utils/mobile/dev_client_links.mjs';
+import { renderQrAscii } from './utils/ui/qr.mjs';
+import { inferPrStackBaseName } from './utils/stack/pr_stack_name.mjs';
 
-function inferStackNameFromPrArgs({ happy, happyCli, server, serverLight }) {
-  const parts = [];
-  const hn = parseGithubPullRequest(happy)?.number ?? null;
-  const cn = parseGithubPullRequest(happyCli)?.number ?? null;
-  const sn = parseGithubPullRequest(server)?.number ?? null;
-  const sln = parseGithubPullRequest(serverLight)?.number ?? null;
-  if (hn) parts.push(`happy${hn}`);
-  if (cn) parts.push(`cli${cn}`);
-  if (sn) parts.push(`server${sn}`);
-  if (sln) parts.push(`light${sln}`);
-  return sanitizeStackName(parts.length ? `pr-${parts.join('-')}` : 'pr', { fallback: 'pr', maxLen: 64 });
+function supportsAnsi() {
+  if (!process.stdout.isTTY) return false;
+  if (process.env.NO_COLOR) return false;
+  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
+  return true;
+}
+
+function bold(s) {
+  return supportsAnsi() ? `\x1b[1m${s}\x1b[0m` : String(s);
+}
+
+function dim(s) {
+  return supportsAnsi() ? `\x1b[2m${s}\x1b[0m` : String(s);
+}
+
+function cyan(s) {
+  return supportsAnsi() ? `\x1b[36m${s}\x1b[0m` : String(s);
+}
+
+function green(s) {
+  return supportsAnsi() ? `\x1b[32m${s}\x1b[0m` : String(s);
+}
+
+function pickReviewerMobileSchemeEnv(env) {
+  // For review-pr flows, reviewers typically have the standard Happy dev build on their phone,
+  // so default to the canonical `happy://` scheme unless the user explicitly configured one.
+  const explicit =
+    (env.HAPPY_STACKS_MOBILE_SCHEME ??
+      env.HAPPY_LOCAL_MOBILE_SCHEME ??
+      env.HAPPY_STACKS_DEV_CLIENT_SCHEME ??
+      env.HAPPY_LOCAL_DEV_CLIENT_SCHEME ??
+      '')
+      .toString()
+      .trim();
+  if (explicit) return env;
+  return {
+    ...env,
+    HAPPY_STACKS_MOBILE_SCHEME: 'happy',
+    HAPPY_LOCAL_MOBILE_SCHEME: 'happy',
+  };
+}
+
+async function printReviewerStackSummary({ rootDir, stackName, env, wantsMobile }) {
+  try {
+    const runtimeStatePath = getStackRuntimeStatePath(stackName);
+    const st = await readStackRuntimeStateFile(runtimeStatePath);
+    const baseDir = resolveStackEnvPath(stackName, env).baseDir;
+    const envPath = resolveStackEnvPath(stackName, env).envPath;
+
+    const serverPort = Number(st?.ports?.server);
+    const backendPort = Number(st?.ports?.backend);
+    const uiPort = Number(st?.expo?.webPort ?? st?.expo?.port);
+    const mobilePort = Number(st?.expo?.mobilePort ?? st?.expo?.port);
+    const runnerLog = String(st?.logs?.runner ?? '').trim();
+
+    const internalServerUrl = Number.isFinite(serverPort) && serverPort > 0 ? `http://127.0.0.1:${serverPort}` : '';
+    const uiUrlRaw = Number.isFinite(uiPort) && uiPort > 0 ? `http://localhost:${uiPort}` : '';
+    const uiUrl = uiUrlRaw ? await preferStackLocalhostUrl(uiUrlRaw, { stackName, env }) : '';
+
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Review details'));
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Stack:')} ${cyan(stackName)}`);
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Env:')}   ${envPath}`);
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Dir:')}   ${baseDir}`);
+    if (runnerLog) {
+      // eslint-disable-next-line no-console
+      console.log(`${dim('Logs:')}  ${runnerLog}`);
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Ports'));
+    if (Number.isFinite(serverPort) && serverPort > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`- ${dim('server')}:  ${serverPort}${internalServerUrl ? ` (${internalServerUrl})` : ''}`);
+    }
+    if (Number.isFinite(backendPort) && backendPort > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`- ${dim('backend')}: ${backendPort}`);
+    }
+    if (Number.isFinite(uiPort) && uiPort > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`- ${dim('web UI')}:  ${uiPort}${uiUrl ? ` (${uiUrl})` : ''}`);
+    }
+    if (wantsMobile && Number.isFinite(mobilePort) && mobilePort > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`- ${dim('mobile')}:  ${mobilePort} (Metro)`);
+    }
+
+    if (wantsMobile && Number.isFinite(mobilePort) && mobilePort > 0) {
+      const payload = resolveMobileQrPayload({ env, port: mobilePort });
+      const qr = await renderQrAscii(payload.payload, { small: true });
+
+      // eslint-disable-next-line no-console
+      console.log('');
+      // eslint-disable-next-line no-console
+      console.log(bold('Mobile (Expo dev-client)'));
+      if (payload.metroUrl) {
+        // eslint-disable-next-line no-console
+        console.log(`- ${dim('Metro')}:  ${payload.metroUrl}`);
+      }
+      if (payload.scheme) {
+        // eslint-disable-next-line no-console
+        console.log(`- ${dim('Scheme')}: ${payload.scheme}://`);
+      }
+      if (payload.deepLink) {
+        // eslint-disable-next-line no-console
+        console.log(`- ${dim('Link')}:   ${payload.deepLink}`);
+      }
+      if (qr.ok && qr.lines.length) {
+        // eslint-disable-next-line no-console
+        console.log('');
+        // eslint-disable-next-line no-console
+        console.log(bold('Scan this QR code with your Happy dev build:'));
+        // eslint-disable-next-line no-console
+        console.log(qr.lines.join('\n'));
+      } else if (!qr.ok) {
+        // eslint-disable-next-line no-console
+        console.log(dim(`(QR unavailable: ${qr.error || 'unknown error'})`));
+      }
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(green('✓ Ready'));
+    // eslint-disable-next-line no-console
+    console.log(dim('Tip: press Ctrl+C when you’re done to stop the stack and clean up the sandbox.'));
+  } catch {
+    // best-effort
+  }
 }
 
 function detectBestAuthSource() {
@@ -70,7 +204,7 @@ async function main() {
       json,
       data: {
         usage:
-          'happys setup-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--json] [-- <stack dev/start args...>]',
+          'happys setup-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile] [--deps=none|link|install|link-or-install] [--forks|--upstream] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--json] [-- <stack dev/start args...>]',
       },
       text: [
         '[setup-pr] usage:',
@@ -97,6 +231,8 @@ async function main() {
     return;
   }
 
+  await assertCliPrereqs({ git: true, pnpm: true });
+
   const prHappy = (kv.get('--happy') ?? '').trim();
   const prCli = (kv.get('--happy-cli') ?? '').trim();
   const prServer = (kv.get('--happy-server') ?? '').trim();
@@ -113,10 +249,18 @@ async function main() {
   if (wantsDev && wantsStart) {
     throw new Error('[setup-pr] choose either --dev or --start (not both)');
   }
-  const wantsMobile = flags.has('--mobile') || flags.has('--with-mobile');
+  const repoSourceFlag = flags.has('--upstream') ? '--upstream' : flags.has('--forks') ? '--forks' : null;
+  const wantsMobile = (flags.has('--mobile') || flags.has('--with-mobile')) && !flags.has('--no-mobile');
+  // Worktree dependency strategy:
+  // - For dev flows (review-pr/setup-pr), prefer reusing base checkout node_modules to avoid reinstalling in worktrees.
+  // - Allow override via --deps=none|link|install|link-or-install.
+  const depsModeArg = (kv.get('--deps') ?? '').trim();
+  const depsMode = depsModeArg || (wantsDev ? 'link-or-install' : 'none');
 
   const stackNameRaw = (kv.get('--name') ?? '').trim();
-  const stackName = stackNameRaw ? sanitizeStackName(stackNameRaw) : inferStackNameFromPrArgs({ happy: prHappy, happyCli: prCli, server: prServer, serverLight: prServerLight });
+  const stackName = stackNameRaw
+    ? sanitizeStackName(stackNameRaw)
+    : inferPrStackBaseName({ happy: prHappy, happyCli: prCli, server: prServer, serverLight: prServerLight, fallback: 'pr' });
 
   // Determine server flavor for bootstrap and stack creation.
   const serverComponent = (kv.get('--server') ?? '').trim() || (prServer ? 'happy-server' : 'happy-server-light');
@@ -153,7 +297,16 @@ async function main() {
 
   // Centralized guided auth decision (prompt early, before noisy install logs).
   // In non-sandbox mode we still guide: offer reusing dev-auth/main first, otherwise guided login.
-  const plan = stackAlreadyAuthed
+  const sandboxNoGlobal = isSandboxed() && !sandboxAllowsGlobalSideEffects();
+  if (sandboxNoGlobal && (seedAuthFlag === true || authFrom)) {
+    throw new Error(
+      '[setup-pr] auth seeding is disabled in sandbox mode.\n' +
+        'Reason: it reuses global machine state (other stacks) and breaks sandbox isolation.\n' +
+        'Use guided login instead, or set: HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+    );
+  }
+
+  let plan = stackAlreadyAuthed
     ? { mode: 'existing' }
     : await decidePrAuthPlan({
         interactive,
@@ -161,6 +314,10 @@ async function main() {
         explicitFrom: authFrom,
         defaultLoginNow: true,
       });
+  if (sandboxNoGlobal && plan?.mode === 'seed') {
+    // Keep sandbox runs isolated by default.
+    plan = { mode: 'login', loginNow: true, reason: 'sandbox_no_global' };
+  }
 
   const best = detectBestAuthSource();
   const effectiveSeedAuth =
@@ -176,9 +333,29 @@ async function main() {
   const effectiveAuthFrom = plan.mode === 'seed' ? plan.from : authFrom || best.from;
   const effectiveLinkAuth = plan.mode === 'seed' ? Boolean(plan.link) : linkAuth != null ? linkAuth : detectLinkDefault();
 
+  // Sandbox default: no cross-stack auth reuse unless explicitly allowed.
+  const sandboxEffectiveSeedAuth = sandboxNoGlobal ? false : effectiveSeedAuth;
+
   // If we're going to guide the user through login, start in background first (even in verbose mode)
   // so auth prompts aren't buried in runner logs.
-  const needsAuthFlow = interactive && !stackAlreadyAuthed && !effectiveSeedAuth && plan.mode === 'login' && plan.loginNow;
+  const needsAuthFlow = interactive && !stackAlreadyAuthed && !sandboxEffectiveSeedAuth && plan.mode === 'login' && plan.loginNow;
+  let stackStartEnv = needsAuthFlow
+    ? {
+        ...process.env,
+        // Allow the daemon start step to wait for credentials even though we're intentionally
+        // running the stack in background mode to keep logs clean during guided login.
+        HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH: '1',
+        HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH: '1',
+        // Hint to the dev runner that it should start the Expo web UI early (before daemon auth),
+        // so guided login can open the correct UI origin (not the server port).
+        HAPPY_STACKS_AUTH_FLOW: '1',
+        HAPPY_LOCAL_AUTH_FLOW: '1',
+      }
+    : process.env;
+  if (wantsMobile) {
+    stackStartEnv = pickReviewerMobileSchemeEnv(stackStartEnv);
+  }
+  // (No extra messaging here; review-pr prints the up-front explanation + enter-to-proceed gate.)
 
   // 1) Ensure happy-stacks home is initialized (idempotent).
   // 2) Bootstrap component repos and deps (idempotent; clones only if missing).
@@ -188,7 +365,7 @@ async function main() {
     const installLog = join(baseLogDir, `install.${Date.now()}.log`);
     try {
       await runCommandLogged({
-        label: 'init happy-stacks home',
+        label: `init happy-stacks home${isSandboxed() ? ' (sandbox)' : ''}`,
         cmd: process.execPath,
         args: [join(rootDir, 'scripts', 'init.mjs'), '--no-bootstrap'],
         cwd: rootDir,
@@ -198,9 +375,21 @@ async function main() {
         showSteps: true,
       });
       await runCommandLogged({
-        label: 'install/clone components',
+        label: `install/clone components${isSandboxed() ? ' (sandbox)' : ''}`,
         cmd: process.execPath,
-        args: [join(rootDir, 'scripts', 'install.mjs'), '--upstream', '--clone', `--server=${bootstrapServer}`],
+        args: [
+          join(rootDir, 'scripts', 'install.mjs'),
+          ...(repoSourceFlag ? [repoSourceFlag] : []),
+          '--clone',
+          `--server=${bootstrapServer}`,
+          ...(wantsDev ? ['--no-ui-build'] : []),
+          // Sandbox dev: avoid wasting time installing base deps we won't run directly.
+          ...(isSandboxed() && wantsDev ? ['--no-ui-deps'] : []),
+          // If the caller provided a happy-cli PR, the PR stack is guaranteed (fail-closed) to pin
+          // HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI to that worktree before starting dev, so building the
+          // base checkout is wasted work.
+          ...(isSandboxed() && wantsDev && prCli ? ['--no-cli-deps', '--no-cli-build'] : []),
+        ],
         cwd: rootDir,
         env: process.env,
         logPath: installLog,
@@ -224,16 +413,23 @@ async function main() {
     }
   } else {
     await runNodeScript({ rootDir, rel: 'scripts/init.mjs', args: ['--no-bootstrap'] });
-    await runNodeScript({ rootDir, rel: 'scripts/install.mjs', args: ['--upstream', '--clone', `--server=${bootstrapServer}`] });
+    await runNodeScript({
+      rootDir,
+      rel: 'scripts/install.mjs',
+      args: [
+        ...(repoSourceFlag ? [repoSourceFlag] : []),
+        '--clone',
+        `--server=${bootstrapServer}`,
+        ...(wantsDev ? ['--no-ui-build'] : []),
+        ...(isSandboxed() && wantsDev ? ['--no-ui-deps'] : []),
+        ...(isSandboxed() && wantsDev && prCli ? ['--no-cli-deps', '--no-cli-build'] : []),
+      ],
+    });
   }
 
   // 3) Create/reuse the PR stack and wire worktrees.
-  if (quietUi) {
-    // eslint-disable-next-line no-console
-    console.log('- [..] start PR stack (logs follow)');
-  }
+  const startMobileNow = wantsMobile && !needsAuthFlow;
   const stackArgs = [
-    'stack',
     'pr',
     stackName,
     ...(prHappy ? [`--happy=${prHappy}`] : []),
@@ -242,18 +438,52 @@ async function main() {
     ...(prServerLight ? [`--happy-server-light=${prServerLight}`] : []),
     `--server=${serverComponent}`,
     '--reuse',
+    ...(depsMode ? [`--deps=${depsMode}`] : []),
     ...(flags.has('--update') ? ['--update'] : []),
     ...(flags.has('--force') ? ['--force'] : []),
-    ...(effectiveSeedAuth ? ['--seed-auth', `--copy-auth-from=${effectiveAuthFrom}`, ...(effectiveLinkAuth ? ['--link-auth'] : [])] : ['--no-seed-auth']),
+    ...(sandboxEffectiveSeedAuth
+      ? ['--seed-auth', `--copy-auth-from=${effectiveAuthFrom}`, ...(effectiveLinkAuth ? ['--link-auth'] : [])]
+      : ['--no-seed-auth']),
     ...(wantsDev ? ['--dev'] : ['--start']),
-    ...(wantsMobile ? ['--mobile'] : []),
+    ...(startMobileNow ? ['--mobile'] : []),
     ...(((quietUi && !json) || needsAuthFlow) ? ['--background'] : []),
     ...(json ? ['--json'] : []),
   ];
   if (forwarded.length) {
     stackArgs.push('--', ...forwarded);
   }
-  await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: stackArgs });
+  if (quietUi) {
+    const baseLogDir = join(process.env.HAPPY_STACKS_HOME_DIR ?? join(homedir(), '.happy-stacks'), 'logs', 'setup-pr');
+    const stackLog = join(baseLogDir, `stack-pr.${Date.now()}.log`);
+    await runCommandLogged({
+      label: `start PR stack${isSandboxed() ? ' (sandbox)' : ''}`,
+      cmd: process.execPath,
+      args: [join(rootDir, 'scripts', 'stack.mjs'), ...stackArgs],
+      cwd: rootDir,
+        env: stackStartEnv,
+      logPath: stackLog,
+      quiet: true,
+      showSteps: true,
+    }).catch((e) => {
+      const logPath = e?.logPath ? String(e.logPath) : stackLog;
+      console.error('[setup-pr] failed to start PR stack.');
+      console.error(`[setup-pr] log: ${logPath}`);
+      process.exit(1);
+    });
+  } else {
+    await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: stackArgs, env: stackStartEnv });
+  }
+
+  // Sandbox UX: if we won't run the guided login flow, explicitly tell the user we're now in "keepalive"
+  // mode and how to exit/cleanup. Otherwise it can look like the command "hung".
+  if (isSandboxed() && interactive && !json && !needsAuthFlow) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log('[setup-pr] Stack is running in the sandbox.');
+    // eslint-disable-next-line no-console
+    console.log('[setup-pr] Press Ctrl+C when you’re done to stop and delete the sandbox.');
+  }
 
   // Guided auth flow:
   // If the user chose "login now", we start in background (quiet mode) then perform login in the foreground.
@@ -262,9 +492,76 @@ async function main() {
   if (needsAuthFlow) {
     // eslint-disable-next-line no-console
     console.log('');
-    // eslint-disable-next-line no-console
-    console.log(`[setup-pr] auth: starting guided login for stack "${stackName}"...`);
-    await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['auth', stackName, '--', 'login'] });
+    if (interactive) {
+      // In verbose mode, tail the runner log so users can debug Expo/auth issues,
+      // but pause forwarding during the guided login prompts (keeps instructions readable).
+      let forwarder = null;
+      if (!json && verbosity > 0) {
+        try {
+          const runtimeStatePath = getStackRuntimeStatePath(stackName);
+          const deadline = Date.now() + 10_000;
+          let logPath = '';
+          while (Date.now() < deadline) {
+            // eslint-disable-next-line no-await-in-loop
+            const st = await readStackRuntimeStateFile(runtimeStatePath);
+            logPath = String(st?.logs?.runner ?? '').trim();
+            if (logPath) break;
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (logPath) {
+            forwarder = createFileLogForwarder({
+              path: logPath,
+              enabled: true,
+              label: 'stack',
+              startFromEnd: false,
+            });
+            await forwarder.start();
+          }
+        } catch {
+          forwarder = null;
+        }
+      }
+
+      const steps = createStepPrinter({ enabled: Boolean(process.stdout.isTTY && !json) });
+      const label = 'prepare login (waiting for web UI)';
+      steps.start(label);
+      let webappUrl = '';
+      try {
+        // Use the same env overlay we used to start the stack in background (includes auth-flow markers).
+        webappUrl = await resolveStackWebappUrlForAuth({ rootDir, stackName, env: stackStartEnv });
+        steps.stop('✓', label);
+      } catch (e) {
+        // For guided login, failing to resolve the UI origin should fail closed (server URL fallback is misleading).
+        steps.stop('x', label);
+        try {
+          await forwarder?.stop();
+        } catch {
+          // ignore
+        }
+        throw e;
+      }
+
+      try {
+        forwarder?.pause();
+        await guidedStackAuthLoginNow({ rootDir, stackName, env: stackStartEnv, webappUrl });
+      } finally {
+        try {
+          forwarder?.resume();
+        } catch {
+          // ignore
+        }
+        try {
+          await forwarder?.stop();
+        } catch {
+          // ignore
+        }
+      }
+    }
+    // `guidedStackAuthLoginNow` already ran `stack auth <name> login` in interactive mode.
+    if (!interactive) {
+      await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['auth', stackName, '--', 'login'] });
+    }
 
     if (isSandboxed()) {
       // Fall through to sandbox keepalive below.
@@ -282,15 +579,46 @@ async function main() {
     if (verbosity > 0) {
       await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: restartArgs });
     }
+    // Quiet mode: start mobile after auth to avoid the mobile/web selector during auth.
+    if (quietUi && wantsDev && wantsMobile) {
+      await runNodeScript({
+        rootDir,
+        rel: 'scripts/stack.mjs',
+        args: ['dev', stackName, '--restart', '--mobile', '--background'],
+      });
+    }
+  }
+
+  // After login (and after the optional mobile Metro start), print a clear summary so reviewers
+  // have everything they need (URLs/ports/logs + QR) without needing verbose logs.
+  if (interactive && !json) {
+    await printReviewerStackSummary({ rootDir, stackName, env: stackStartEnv, wantsMobile });
   }
 
   // Sandbox: keep this process alive so review-pr stays running and can clean up on exit.
   // The stack runner continues in the background; `review-pr` will stop it on Ctrl+C.
+  //
+  // IMPORTANT:
+  // Waiting on a Promise that only resolves on signals is NOT enough to keep Node alive; pending
+  // Promises and signal handlers do not keep the event loop open. We must keep a ref'd handle.
   if (isSandboxed() && interactive && !json) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log('[setup-pr] Stack is running in the sandbox.');
+    // eslint-disable-next-line no-console
+    console.log('[setup-pr] Press Ctrl+C when you’re done to stop and delete the sandbox.');
+
     await new Promise((resolvePromise) => {
-      const onSig = () => resolvePromise();
-      process.on('SIGINT', onSig);
-      process.on('SIGTERM', onSig);
+      const interval = setInterval(() => {}, 1_000);
+      const done = () => {
+        clearInterval(interval);
+        process.off('SIGINT', done);
+        process.off('SIGTERM', done);
+        resolvePromise();
+      };
+      process.on('SIGINT', done);
+      process.on('SIGTERM', done);
     });
   }
 }

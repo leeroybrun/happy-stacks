@@ -9,8 +9,17 @@ import { ensureDir, readTextIfExists, readTextOrEmpty } from './utils/fs/ops.mjs
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc/proc.mjs';
-import { getComponentDir, getComponentsDir, getHappyStacksHomeDir, getLegacyStorageRoot, getRootDir, getStacksStorageRoot, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { isTcpPortFree, pickNextFreeTcpPort } from './utils/net/ports.mjs';
+import {
+  componentDirEnvKey,
+  getComponentDir,
+  getComponentsDir,
+  getHappyStacksHomeDir,
+  getLegacyStorageRoot,
+  getRootDir,
+  getStacksStorageRoot,
+  resolveStackEnvPath,
+} from './utils/paths/paths.mjs';
+import { isTcpPortFree, listListenPids, pickNextFreeTcpPort } from './utils/net/ports.mjs';
 import {
   createWorktree,
   createWorktreeFromBaseWorktree,
@@ -27,10 +36,10 @@ import { listAllStackNames, stackExistsSync } from './utils/stack/stacks.mjs';
 import { stopStackWithEnv } from './utils/stack/stop.mjs';
 import { writeDevAuthKey } from './utils/auth/dev_key.mjs';
 import { startDevServer } from './utils/dev/server.mjs';
-import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
+import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
-import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
+import { resolveLocalhostHost, preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth/files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
@@ -52,23 +61,30 @@ import {
 import { killPid } from './utils/expo/expo.mjs';
 import { getCliHomeDirFromEnvOrDefault, getServerLightDataDirFromEnvOrDefault } from './utils/stack/dirs.mjs';
 import { randomToken } from './utils/crypto/tokens.mjs';
-import { killPidOwnedByStack } from './utils/proc/ownership.mjs';
+import { killPidOwnedByStack, killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
 import { sanitizeSlugPart } from './utils/git/refs.mjs';
 import { isCursorInstalled, openWorkspaceInEditor, writeStackCodeWorkspace } from './utils/stack/editor_workspace.mjs';
+import { readLastLines } from './utils/fs/tail.mjs';
+import { defaultStackReleaseIdentity } from './utils/mobile/identifiers.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
   return name;
 }
 
-function getDefaultPortStart() {
+function getDefaultPortStart(stackName = null) {
   const raw = process.env.HAPPY_STACKS_STACK_PORT_START?.trim()
     ? process.env.HAPPY_STACKS_STACK_PORT_START.trim()
     : process.env.HAPPY_LOCAL_STACK_PORT_START?.trim()
       ? process.env.HAPPY_LOCAL_STACK_PORT_START.trim()
       : '';
-  const n = raw ? Number(raw) : 3005;
-  return Number.isFinite(n) ? n : 3005;
+  // Default port strategy:
+  // - main historically lives at 3005
+  // - non-main stacks should avoid 3005 to reduce accidental collisions/confusion
+  const target = (stackName ?? '').toString().trim() || (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+  const fallback = target === 'main' ? 3005 : 3009;
+  const n = raw ? Number(raw) : fallback;
+  return Number.isFinite(n) ? n : fallback;
 }
 
 async function isPortFree(port) {
@@ -231,7 +247,11 @@ function resolveDefaultComponentDirs({ rootDir }) {
   for (const name of componentNames) {
     const embedded = join(rootDir, 'components', name);
     const workspace = join(getComponentsDir(rootDir), name);
-    const dir = existsSync(embedded) ? embedded : workspace;
+    // CRITICAL:
+    // In sandbox mode, never point stacks at the repo's embedded `components/*` checkouts.
+    // Sandboxes must use the sandbox workspace clones (HAPPY_STACKS_WORKSPACE_DIR/components/*),
+    // otherwise worktrees/branches collide with the user's real machine state.
+    const dir = !isSandboxed() && existsSync(embedded) ? embedded : workspace;
     out[`HAPPY_STACKS_COMPONENT_DIR_${name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = dir;
   }
   return out;
@@ -264,9 +284,46 @@ async function withStackEnv({ stackName, fn, extraEnv = {} }) {
   // exported in their shell, it would otherwise "win" because utils/env.mjs only sets
   // env vars if they are missing/empty.
   const cleaned = { ...process.env };
+  const keepPrefixed = new Set([
+    // Stack/env pointers:
+    'HAPPY_LOCAL_ENV_FILE',
+    'HAPPY_STACKS_ENV_FILE',
+    'HAPPY_LOCAL_STACK',
+    'HAPPY_STACKS_STACK',
+
+    // Sandbox detection + policy (must propagate to child processes).
+    'HAPPY_STACKS_SANDBOX_DIR',
+    'HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL',
+
+    // Sandbox-enforced dirs (without these, sandbox isolation breaks).
+    'HAPPY_STACKS_CLI_ROOT_DISABLE',
+    'HAPPY_STACKS_CANONICAL_HOME_DIR',
+    'HAPPY_STACKS_HOME_DIR',
+    'HAPPY_STACKS_WORKSPACE_DIR',
+    'HAPPY_STACKS_RUNTIME_DIR',
+    'HAPPY_STACKS_STORAGE_DIR',
+    // Legacy prefix mirrors:
+    'HAPPY_LOCAL_CANONICAL_HOME_DIR',
+    'HAPPY_LOCAL_HOME_DIR',
+    'HAPPY_LOCAL_WORKSPACE_DIR',
+    'HAPPY_LOCAL_RUNTIME_DIR',
+    'HAPPY_LOCAL_STORAGE_DIR',
+
+    // Sandbox-safe UX knobs (keep consistent through stack wrappers).
+    'HAPPY_STACKS_VERBOSE',
+    'HAPPY_STACKS_UPDATE_CHECK',
+    'HAPPY_STACKS_UPDATE_CHECK_INTERVAL_MS',
+    'HAPPY_STACKS_UPDATE_NOTIFY_INTERVAL_MS',
+
+    // Guided auth flow coordination across wrappers.
+    // These are intentionally passed through even though most HAPPY_STACKS_* vars are scrubbed.
+    'HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH',
+    'HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH',
+    'HAPPY_STACKS_AUTH_FLOW',
+    'HAPPY_LOCAL_AUTH_FLOW',
+  ]);
   for (const k of Object.keys(cleaned)) {
-    if (k === 'HAPPY_LOCAL_ENV_FILE' || k === 'HAPPY_STACKS_ENV_FILE') continue;
-    if (k === 'HAPPY_LOCAL_STACK' || k === 'HAPPY_STACKS_STACK') continue;
+    if (keepPrefixed.has(k)) continue;
     if (k.startsWith('HAPPY_LOCAL_') || k.startsWith('HAPPY_STACKS_')) {
       delete cleaned[k];
     }
@@ -882,6 +939,29 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
       // True restart = there was an active runner for this stack. If the stack is not running,
       // `--restart` should behave like a normal start (allocate new ephemeral ports if needed).
       const isTrueRestart = wantsRestart && wasRunning;
+
+      // Restart semantics (stack mode):
+      // - Stop stack-owned processes first (runner, daemon, Expo, etc.)
+      // - Never kill arbitrary port listeners
+      // - Preserve previous runtime ports in memory so a true restart can reuse them
+      if (wantsRestart && !wantsJson) {
+        const baseDir = resolveStackEnvPath(stackName).baseDir;
+        try {
+          await stopStackWithEnv({
+            rootDir,
+            stackName,
+            baseDir,
+            env,
+            json: false,
+            noDocker: false,
+            aggressive: false,
+            sweepOwned: true,
+          });
+        } catch {
+          // ignore (fail-closed below on port checks)
+        }
+        await deleteStackRuntimeStateFile(runtimeStatePath).catch(() => {});
+      }
       if (wasRunning) {
         if (!wantsRestart) {
           const serverPart = Number.isFinite(existingPort) && existingPort > 0 ? ` server=${existingPort}` : '';
@@ -922,10 +1002,7 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           }
           return;
         }
-        // Restart: stop the existing runner first.
-        await killPidOwnedByStack(existingOwnerPid, { stackName, envPath, cliHomeDir: (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').toString(), label: 'runner', json: false });
-        // Clear runtime state so we don't keep stale process PIDs; we'll re-create it for the new run below.
-        await deleteStackRuntimeStateFile(runtimeStatePath);
+        // Restart: already handled above (stopStackWithEnv is ownership-gated).
       }
 
       // Ephemeral ports: allocate at start time, store only in runtime state (not in stack env).
@@ -948,7 +1025,7 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           }
         }
 
-        const startPort = getDefaultPortStart();
+        const startPort = getDefaultPortStart(stackName);
         const ports = {};
 
         const parsePortOrNull = (v) => {
@@ -993,6 +1070,42 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           for (const p of toCheck) {
             // eslint-disable-next-line no-await-in-loop
             if (!(await isTcpPortFree(p))) {
+              if (isTrueRestart && !wantsJson) {
+                // Try one more safe cleanup of stack-owned processes and re-check.
+                const baseDir = resolveStackEnvPath(stackName).baseDir;
+                try {
+                  await stopStackWithEnv({
+                    rootDir,
+                    stackName,
+                    baseDir,
+                    env,
+                    json: false,
+                    noDocker: false,
+                    aggressive: false,
+                    sweepOwned: true,
+                  });
+                } catch {
+                  // ignore
+                }
+                // eslint-disable-next-line no-await-in-loop
+                if (await isTcpPortFree(p)) {
+                  continue;
+                }
+
+                // Last resort: if we can prove the listener is stack-owned, kill it.
+                // eslint-disable-next-line no-await-in-loop
+                const pids = await listListenPids(p);
+                const stackBaseDir = resolveStackEnvPath(stackName).baseDir;
+                const cliHomeDir = getCliHomeDirFromEnvOrDefault({ stackBaseDir, env });
+                for (const pid of pids) {
+                  // eslint-disable-next-line no-await-in-loop
+                  await killProcessGroupOwnedByStack(pid, { stackName, envPath, cliHomeDir, label: `port:${p}`, json: false });
+                }
+                // eslint-disable-next-line no-await-in-loop
+                if (await isTcpPortFree(p)) {
+                  continue;
+                }
+              }
               throw new Error(
                 `[stack] ${stackName}: cannot reuse port ${p} on restart (port is not free).\n` +
                   `[stack] Fix: stop the process using it, or re-run without --restart to allocate new ports.`
@@ -1050,6 +1163,31 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
             : {}),
         };
 
+        // Background dev auth flow (automatic):
+        // If we're starting `dev.mjs` in background and the stack is not authenticated yet,
+        // keep the stack alive for login by:
+        // - letting the daemon wait for credentials (instead of exiting immediately)
+        // - marking this as an auth-flow so guided URL resolution fails closed (never opens server port as "UI")
+        if (background && scriptPath === 'dev.mjs') {
+          const startUi = !args.includes('--no-ui') && (env.HAPPY_LOCAL_UI ?? '1').toString().trim() !== '0';
+          const startDaemon = !args.includes('--no-daemon') && (env.HAPPY_LOCAL_DAEMON ?? '1').toString().trim() !== '0';
+          if (startUi && startDaemon) {
+            try {
+              const stackBaseDir = resolveStackEnvPath(stackName).baseDir;
+              const cliHomeDir = getCliHomeDirFromEnvOrDefault({ stackBaseDir, env });
+              const hasCreds = existsSync(join(cliHomeDir, 'access.key'));
+              if (!hasCreds) {
+                childEnv.HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH = '1';
+                childEnv.HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH = '1';
+                childEnv.HAPPY_STACKS_AUTH_FLOW = '1';
+                childEnv.HAPPY_LOCAL_AUTH_FLOW = '1';
+              }
+            } catch {
+              // If we can't resolve CLI home dir, skip auto auth-flow markers (best-effort).
+            }
+          }
+        }
+
         // Background mode: send runner output to a stack-scoped log file so quiet flows can
         // remain clean while still providing actionable error logs.
         const stackBaseDir = resolveStackEnvPath(stackName).baseDir;
@@ -1088,7 +1226,7 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           ephemeral: true,
           ownerPid: child.pid,
           ports,
-          ...(background ? { logPath } : {}),
+          ...(background ? { logs: { runner: logPath } } : {}),
         }).catch(() => {});
 
         if (background) {
@@ -1098,26 +1236,80 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           const internalServerUrl = `http://127.0.0.1:${ports.server}`;
 
           // Fail fast if the runner dies immediately or never exposes HTTP.
+          // IMPORTANT: do not treat "some process answered /health" as success unless our runner
+          // is still alive. Otherwise, if the chosen port is already in use, the runner can exit
+          // and a different stack/process could satisfy the health check (leading to confusing
+          // follow-on behavior like auth using the wrong port).
           try {
-            const exitedEarly = await Promise.race([
-              new Promise((resolvePromise) => {
-                child.once('exit', (code, sig) => resolvePromise({ kind: 'exit', code: code ?? 0, sig: sig ?? null }));
-                child.once('error', () => resolvePromise({ kind: 'error' }));
-              }),
-              (async () => {
-                await waitForHttpOk(`${internalServerUrl}/health`, { timeoutMs: 20_000, intervalMs: 300 });
-                return { kind: 'ready' };
-              })(),
-            ]);
+            let exited = null;
+            const exitPromise = new Promise((resolvePromise) => {
+              child.once('exit', (code, sig) => {
+                exited = { kind: 'exit', code: code ?? 0, sig: sig ?? null };
+                resolvePromise(exited);
+              });
+              child.once('error', (err) => {
+                exited = { kind: 'error', error: err instanceof Error ? err.message : String(err) };
+                resolvePromise(exited);
+              });
+            });
+            const readyPromise = (async () => {
+              const timeoutMsRaw =
+                (process.env.HAPPY_STACKS_STACK_BACKGROUND_READY_TIMEOUT_MS ??
+                  process.env.HAPPY_LOCAL_STACK_BACKGROUND_READY_TIMEOUT_MS ??
+                  '180000')
+                  .toString()
+                  .trim();
+              const timeoutMs = timeoutMsRaw ? Number(timeoutMsRaw) : 180_000;
+              await waitForHttpOk(`${internalServerUrl}/health`, {
+                timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180_000,
+                intervalMs: 300,
+              });
+              return { kind: 'ready' };
+            })();
 
-            if (exitedEarly.kind !== 'ready') {
+            const first = await Promise.race([exitPromise, readyPromise]);
+            if (first.kind !== 'ready') {
               throw new Error(`[stack] ${stackName}: runner exited before becoming ready. log: ${logPath}`);
             }
+            // Even if /health responded, ensure our runner is still alive.
+            // (Prevents false positives when another process owns the port.)
+            if (exited && exited.kind !== 'ready') {
+              throw new Error(`[stack] ${stackName}: runner reported ready but exited immediately. log: ${logPath}`);
+            }
+            if (!isPidAlive(child.pid)) {
+              throw new Error(
+                `[stack] ${stackName}: runner health check passed, but runner is not running.\n` +
+                  `[stack] This usually means the chosen port (${ports.server}) is already in use by another process.\n` +
+                  `[stack] log: ${logPath}`
+              );
+            }
           } catch (e) {
+            // Attach some log context so failures are debuggable even when a higher-level
+            // command cleans up the sandbox directory afterwards.
+            try {
+              const tail = await readLastLines(logPath, 160);
+              if (tail && e instanceof Error) {
+                e.message = `${e.message}\n\n[stack] last runner log lines:\n${tail}`;
+              }
+            } catch {
+              // ignore
+            }
             // Best-effort cleanup on boot failure.
             try {
-              const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? '').toString();
-              await killPidOwnedByStack(child.pid, { stackName, envPath, cliHomeDir, label: 'runner', json: false });
+              // We spawned this runner process, so we can safely terminate it without relying
+              // on ownership heuristics (which can be unreliable on some platforms due to `ps` truncation).
+              if (background && process.platform !== 'win32') {
+                try {
+                  process.kill(-child.pid, 'SIGTERM');
+                } catch {
+                  // ignore
+                }
+              }
+              try {
+                child.kill('SIGTERM');
+              } catch {
+                // ignore
+              }
             } catch {
               // ignore
             }
@@ -1152,6 +1344,25 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
       // Pinned port stack: run normally under the pinned env.
       if (background) {
         throw new Error('[stack] --background is only supported for ephemeral-port stacks');
+      }
+      if (wantsRestart && !wantsJson) {
+        const pinnedPort = coercePort(env.HAPPY_STACKS_SERVER_PORT ?? env.HAPPY_LOCAL_SERVER_PORT);
+        if (pinnedPort && !(await isTcpPortFree(pinnedPort))) {
+          // Last resort: kill listener only if it is stack-owned.
+          const pids = await listListenPids(pinnedPort);
+          const stackBaseDir = resolveStackEnvPath(stackName).baseDir;
+          const cliHomeDir = getCliHomeDirFromEnvOrDefault({ stackBaseDir, env });
+          for (const pid of pids) {
+            // eslint-disable-next-line no-await-in-loop
+            await killProcessGroupOwnedByStack(pid, { stackName, envPath, cliHomeDir, label: `port:${pinnedPort}`, json: false });
+          }
+          if (!(await isTcpPortFree(pinnedPort))) {
+            throw new Error(
+              `[stack] ${stackName}: server port ${pinnedPort} is not free on restart.\n` +
+                `[stack] Refusing to kill unknown listeners. Stop the process using it, or change the pinned port.`
+            );
+          }
+        }
       }
       await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
     },
@@ -1196,9 +1407,25 @@ async function cmdService({ rootDir, stackName, svcCmd }) {
   });
 }
 
+async function getRuntimePortExtraEnv(stackName) {
+  const runtimeStatePath = getStackRuntimeStatePath(stackName);
+  const runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+  const runtimePort = Number(runtimeState?.ports?.server);
+  return Number.isFinite(runtimePort) && runtimePort > 0
+    ? {
+        // Ephemeral stacks (PR stacks) store their chosen ports in stack.runtime.json, not the env file.
+        // Ensure stack-scoped commands that compute URLs don't fall back to 3005 (main default).
+        HAPPY_STACKS_SERVER_PORT: String(runtimePort),
+        HAPPY_LOCAL_SERVER_PORT: String(runtimePort),
+      }
+    : null;
+}
+
 async function cmdTailscale({ rootDir, stackName, subcmd, args }) {
+  const extraEnv = await getRuntimePortExtraEnv(stackName);
   await withStackEnv({
     stackName,
+    ...(extraEnv ? { extraEnv } : {}),
     fn: async ({ env }) => {
       await run(process.execPath, [join(rootDir, 'scripts', 'tailscale.mjs'), subcmd, ...args], { cwd: rootDir, env });
     },
@@ -1233,8 +1460,10 @@ async function cmdAuth({ rootDir, stackName, args }) {
   // Forward to scripts/auth.mjs under the stack env.
   // This makes `happys stack auth <name> ...` resolve CLI home/urls for that stack.
   const forwarded = args[0] === '--' ? args.slice(1) : args;
+  const extraEnv = await getRuntimePortExtraEnv(stackName);
   await withStackEnv({
     stackName,
+    ...(extraEnv ? { extraEnv } : {}),
     fn: async ({ env }) => {
       await run(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), ...forwarded], { cwd: rootDir, env });
     },
@@ -1869,7 +2098,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
 
         const serverPort = await pickNextFreeTcpPort(3005, { host: '127.0.0.1' });
         const internalServerUrl = `http://127.0.0.1:${serverPort}`;
-        const publicServerUrl = `http://localhost:${serverPort}`;
+        const publicServerUrl = await preferStackLocalhostUrl(`http://localhost:${serverPort}`, { stackName: name });
 
         const autostart = { stackName: name, baseDir: resolveStackEnvPath(name).baseDir };
         const children = [];
@@ -1889,9 +2118,14 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               serverComponent === 'happy-server'
                 ? env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER
                 : env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT;
-            const resolvedServerDir = serverDir || getComponentDir(rootDir, serverComponent);
-            const resolvedCliDir = env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI || getComponentDir(rootDir, 'happy-cli');
-            const resolvedUiDir = env.HAPPY_STACKS_COMPONENT_DIR_HAPPY || getComponentDir(rootDir, 'happy');
+            const resolvedServerDir =
+              (serverDir ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_SERVER_LIGHT ?? '').toString().trim() ||
+              getComponentDir(rootDir, serverComponent);
+            const resolvedCliDir =
+              (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim() ||
+              getComponentDir(rootDir, 'happy-cli');
+            const resolvedUiDir =
+              (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY ?? '').toString().trim() || getComponentDir(rootDir, 'happy');
 
             await requireDir(serverComponent, resolvedServerDir);
             await requireDir('happy-cli', resolvedCliDir);
@@ -1918,9 +2152,10 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               });
               serverProc = started.serverProc;
 
-              // Start Expo web UI so /terminal/connect exists for happy-cli web auth.
-              const uiRes = await startDevExpoWebUi({
+              // Start Expo (web) so /terminal/connect exists for happy-cli web auth.
+              const uiRes = await ensureDevExpoServer({
                 startUi: true,
+                startMobile: false,
                 uiDir: resolvedUiDir,
                 autostart,
                 baseEnv: env,
@@ -1939,10 +2174,9 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               }
 
               console.log('');
-              const uiHost = resolveLocalhostHost({ stackMode: true, stackName: name });
               const uiPort = uiRes?.port;
-              const uiRoot = Number.isFinite(uiPort) && uiPort > 0 ? `http://${uiHost}:${uiPort}` : null;
               const uiRootLocalhost = Number.isFinite(uiPort) && uiPort > 0 ? `http://localhost:${uiPort}` : null;
+              const uiRoot = uiRootLocalhost ? await preferStackLocalhostUrl(uiRootLocalhost, { stackName: name }) : null;
               const uiSettings = uiRoot ? `${uiRoot}/settings/account` : null;
 
               console.log('[stack] step 1/3: create a dev-auth account in the UI (this generates the dev key)');
@@ -2132,14 +2366,14 @@ async function cmdDuplicate({ rootDir, argv }) {
     if (!rawDir) continue;
 
     let nextDir = rawDir;
-    if (duplicateWorktrees && isComponentWorktreePath({ rootDir, component, dir: rawDir })) {
-      const spec = worktreeSpecFromDir({ rootDir, component, dir: rawDir });
+    if (duplicateWorktrees && isComponentWorktreePath({ rootDir, component, dir: rawDir, env: fromEnv })) {
+      const spec = worktreeSpecFromDir({ rootDir, component, dir: rawDir, env: fromEnv });
       if (spec) {
         const [owner, ...restParts] = spec.split('/').filter(Boolean);
         const rest = restParts.join('/');
         const slug = `dup/${sanitizeSlugPart(toStack)}/${rest}`;
 
-        const repoDir = join(getComponentsDir(rootDir), component);
+        const repoDir = join(getComponentsDir(rootDir, fromEnv), component);
         const remoteName = await inferRemoteNameForOwner({ repoDir, owner });
         // Base on the existing worktree's HEAD/branch so we get the same commit.
         nextDir = await createWorktreeFromBaseWorktree({
@@ -2149,6 +2383,7 @@ async function cmdDuplicate({ rootDir, argv }) {
           baseWorktreeSpec: spec,
           remoteName,
           depsMode,
+          env: fromEnv,
         });
       }
     }
@@ -2284,7 +2519,7 @@ async function cmdPrStack({ rootDir, argv }) {
     );
   }
 
-  const remoteName = (kv.get('--remote') ?? '').trim() || 'upstream';
+  const remoteNameFromArg = (kv.get('--remote') ?? '').trim();
   const depsMode = (kv.get('--deps') ?? '').trim();
 
   const prHappy = (kv.get('--happy') ?? '').trim();
@@ -2453,6 +2688,7 @@ async function cmdPrStack({ rootDir, argv }) {
   ].filter((x) => x.pr);
 
   const worktrees = [];
+  const stackEnvPath = resolveStackEnvPath(stackName).envPath;
   for (const { component, pr } of prSpecs) {
     progress(`[stack] pr: ${stackName}: fetching PR for ${component} (${pr})...`);
     const out = await withStackEnv({
@@ -2463,7 +2699,7 @@ async function cmdPrStack({ rootDir, argv }) {
           'pr',
           component,
           pr,
-          `--remote=${remoteName}`,
+          ...(remoteNameFromArg ? [`--remote=${remoteNameFromArg}`] : []),
           '--use',
           ...(depsMode ? [`--deps=${depsMode}`] : []),
           ...(doUpdate ? ['--update'] : []),
@@ -2471,11 +2707,35 @@ async function cmdPrStack({ rootDir, argv }) {
           '--json',
         ];
         const stdout = await runCapture(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), ...args], { cwd: rootDir, env });
-        return stdout.trim() ? JSON.parse(stdout.trim()) : null;
+        const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : null;
+
+        // Fail-closed invariant for PR stacks:
+        // If you asked to pin a component to a PR checkout, it MUST be a worktree path under
+        // the active workspace components dir (including sandbox workspace).
+        if (parsed?.path && !isComponentWorktreePath({ rootDir, component, dir: parsed.path, env })) {
+          throw new Error(
+            `[stack] pr: refusing to pin ${component} because the checked out path is not a worktree.\n` +
+              `- expected under: ${join(getComponentsDir(rootDir, env), '.worktrees', component)}/...\n` +
+              `- actual: ${String(parsed.path ?? '').trim()}\n` +
+              `Fix: this is a bug. Please re-run with --force, or delete/recreate the stack (${stackName}).`
+          );
+        }
+
+        return parsed;
       },
     });
-    if (json) {
+    if (out) {
       worktrees.push(out);
+      // Fail-closed invariant for PR stacks:
+      // - if you asked to pin a component to a PR checkout, the stack env file MUST point at that exact worktree dir
+      //   before we start dev/start. Otherwise the stack can accidentally run the base checkout.
+      //
+      // We intentionally do NOT rely solely on `wt pr --use` for this; we make it explicit here.
+      const key = componentDirEnvKey(component);
+      await ensureEnvFileUpdated({ envPath: stackEnvPath, updates: [{ key, value: out.path }] });
+    }
+    if (json) {
+      // collected above
     } else if (out) {
       const short = (sha) => (sha ? String(sha).slice(0, 8) : '');
       const changed = Boolean(out.updated && out.oldHead && out.newHead && out.oldHead !== out.newHead);
@@ -2492,6 +2752,36 @@ async function cmdPrStack({ rootDir, argv }) {
     }
   }
 
+  // Validate that all PR components are pinned correctly before starting.
+  // This prevents "wrong daemon" / "wrong UI" errors that are otherwise extremely confusing in review-pr.
+  if (prSpecs.length) {
+    const afterRaw = await readExistingEnv(stackEnvPath);
+    const afterEnv = parseEnvToObject(afterRaw);
+    for (const wt of worktrees) {
+      const key = componentDirEnvKey(wt.component);
+      const val = (afterEnv[key] ?? '').toString().trim();
+      const expected = resolve(String(wt.path ?? '').trim());
+      const actual = val ? resolve(val) : '';
+      if (!actual) {
+        throw new Error(
+          `[stack] pr: failed to pin ${wt.component} to the PR checkout.\n` +
+            `- missing env key: ${key}\n` +
+            `- expected: ${expected}\n` +
+            `Fix: re-run with --force, or delete/recreate the stack (${stackName}).`
+        );
+      }
+      if (expected && actual !== expected) {
+        throw new Error(
+          `[stack] pr: stack is pinned to the wrong checkout for ${wt.component}.\n` +
+            `- env key: ${key}\n` +
+            `- expected: ${expected}\n` +
+            `- actual:   ${actual}\n` +
+            `Fix: re-run with --force, or delete/recreate the stack (${stackName}).`
+        );
+      }
+    }
+  }
+
   // 3) Optional: seed auth (copies cli creds + master secret + DB Account rows).
   let auth = null;
   if (seedAuth) {
@@ -2504,8 +2794,10 @@ async function cmdPrStack({ rootDir, argv }) {
       ...(authLink ? ['--link'] : []),
     ];
     if (json) {
+      const extraEnv = await getRuntimePortExtraEnv(stackName);
       auth = await withStackEnv({
         stackName,
+        ...(extraEnv ? { extraEnv } : {}),
         fn: async ({ env }) => {
           const stdout = await runCapture(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), ...args, '--json'], { cwd: rootDir, env });
           return stdout.trim() ? JSON.parse(stdout.trim()) : null;
@@ -2592,7 +2884,7 @@ async function cmdInfoInternal({ rootDir, stackName }) {
   const host = resolveLocalhostHost({ stackMode: true, stackName });
   const internalServerUrl = serverPort ? `http://127.0.0.1:${serverPort}` : null;
   const uiUrl = uiPort ? `http://${host}:${uiPort}` : null;
-  const mobileUrl = mobilePort ? `http://localhost:${mobilePort}` : null;
+  const mobileUrl = mobilePort ? await preferStackLocalhostUrl(`http://localhost:${mobilePort}`, { stackName }) : null;
 
   const componentSpecs = [
     { component: 'happy', keys: ['HAPPY_STACKS_COMPONENT_DIR_HAPPY', 'HAPPY_LOCAL_COMPONENT_DIR_HAPPY'] },
@@ -2708,11 +3000,14 @@ async function main() {
           'dev',
           'start',
           'build',
+          'review',
           'typecheck',
           'lint',
           'test',
           'doctor',
           'mobile',
+        'mobile:install',
+        'mobile-dev-client',
           'resume',
           'stop',
           'code',
@@ -2739,11 +3034,14 @@ async function main() {
         '  happys stack dev <name> [-- ...]',
         '  happys stack start <name> [-- ...]',
         '  happys stack build <name> [-- ...]',
+        '  happys stack review <name> [component...] [--reviewers=coderabbit,codex] [--base-remote=<remote>] [--base-branch=<branch>] [--base-ref=<ref>] [--json]',
         '  happys stack typecheck <name> [component...] [--json]',
         '  happys stack lint <name> [component...] [--json]',
         '  happys stack test <name> [component...] [--json]',
         '  happys stack doctor <name> [-- ...]',
         '  happys stack mobile <name> [-- ...]',
+        '  happys stack mobile:install <name> [--name="Happy (exp1)"] [--device=...] [--json]',
+        '  happys stack mobile-dev-client <name> --install [--device=...] [--clean] [--configuration=Debug|Release] [--json]',
         '  happys stack resume <name> <sessionId...> [--json]',
         '  happys stack stop <name> [--aggressive] [--sweep-owned] [--no-docker] [--json]',
         '  happys stack code <name> [--no-stack-dir] [--include-all-components] [--include-cli-home] [--json]',
@@ -2877,11 +3175,15 @@ async function main() {
   const passthrough = argv.slice(2);
 
   if (cmd === 'dev') {
-    await cmdRunScript({ rootDir, stackName, scriptPath: 'dev.mjs', args: passthrough });
+    const background = passthrough.includes('--background') || passthrough.includes('--bg');
+    const args = background ? passthrough.filter((a) => a !== '--background' && a !== '--bg') : passthrough;
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'dev.mjs', args, background });
     return;
   }
   if (cmd === 'start') {
-    await cmdRunScript({ rootDir, stackName, scriptPath: 'run.mjs', args: passthrough });
+    const background = passthrough.includes('--background') || passthrough.includes('--bg');
+    const args = background ? passthrough.filter((a) => a !== '--background' && a !== '--bg') : passthrough;
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'run.mjs', args, background });
     return;
   }
   if (cmd === 'build') {
@@ -2908,12 +3210,74 @@ async function main() {
     await cmdRunScript({ rootDir, stackName, scriptPath: 'test.mjs', args: passthrough, extraEnv: overrides });
     return;
   }
+  if (cmd === 'review') {
+    const { kv } = parseArgs(passthrough);
+    const overrides = resolveTransientComponentOverrides({ rootDir, kv });
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'review.mjs', args: passthrough, extraEnv: overrides });
+    return;
+  }
   if (cmd === 'doctor') {
     await cmdRunScript({ rootDir, stackName, scriptPath: 'doctor.mjs', args: passthrough });
     return;
   }
   if (cmd === 'mobile') {
     await cmdRunScript({ rootDir, stackName, scriptPath: 'mobile.mjs', args: passthrough });
+    return;
+  }
+  if (cmd === 'mobile-dev-client') {
+    // Stack-scoped wrapper so the dev-client can be built from the stack's active happy checkout/worktree.
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'mobile_dev_client.mjs', args: passthrough });
+    return;
+  }
+  if (cmd === 'mobile:install') {
+    const { flags: mFlags, kv: mKv } = parseArgs(passthrough);
+    const device = (mKv.get('--device') ?? '').toString();
+    const name = (mKv.get('--name') ?? mKv.get('--app-name') ?? '').toString().trim();
+    const jsonOut = wantsJson(passthrough, { flags: mFlags }) || json;
+
+    const envPath = resolveStackEnvPath(stackName).envPath;
+    const existingRaw = await readExistingEnv(envPath);
+    const existing = parseEnvToObject(existingRaw);
+
+    const priorName =
+      (existing.HAPPY_STACKS_MOBILE_RELEASE_IOS_APP_NAME ?? existing.HAPPY_LOCAL_MOBILE_RELEASE_IOS_APP_NAME ?? '').toString().trim();
+    const identity = defaultStackReleaseIdentity({
+      stackName,
+      user: process.env.USER ?? process.env.USERNAME ?? 'user',
+      appName: name || priorName || null,
+    });
+
+    // Persist the chosen identity so re-installs are stable and user-friendly.
+    await ensureEnvFileUpdated({
+      envPath,
+      updates: [
+        { key: 'HAPPY_STACKS_MOBILE_RELEASE_IOS_APP_NAME', value: identity.iosAppName },
+        { key: 'HAPPY_STACKS_MOBILE_RELEASE_IOS_BUNDLE_ID', value: identity.iosBundleId },
+        { key: 'HAPPY_STACKS_MOBILE_RELEASE_SCHEME', value: identity.scheme },
+      ],
+    });
+
+    // Install a per-stack release-configured app (isolated container) without starting Metro.
+    const args = [
+      `--app-env=production`,
+      `--ios-app-name=${identity.iosAppName}`,
+      `--ios-bundle-id=${identity.iosBundleId}`,
+      `--scheme=${identity.scheme}`,
+      '--prebuild',
+      '--run-ios',
+      '--configuration=Release',
+      '--no-metro',
+      ...(device ? [`--device=${device}`] : []),
+    ];
+
+    await cmdRunScript({ rootDir, stackName, scriptPath: 'mobile.mjs', args });
+
+    if (jsonOut) {
+      printResult({
+        json: true,
+        data: { ok: true, stackName, installed: true, identity },
+      });
+    }
     return;
   }
   if (cmd === 'resume') {
@@ -2932,7 +3296,9 @@ async function main() {
     const out = await withStackEnv({
       stackName,
       fn: async ({ env }) => {
-        const cliDir = getComponentDir(rootDir, 'happy-cli');
+        // IMPORTANT: use the stack's pinned happy-cli checkout if set.
+        // Do not read component dirs from this process's `process.env` (withStackEnv does not mutate it).
+        const cliDir = (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim() || getComponentDir(rootDir, 'happy-cli');
         const happyBin = join(cliDir, 'bin', 'happy.mjs');
         // Run stack-scoped happy-cli and ask the stack daemon to resume these sessions.
         return await run(process.execPath, [happyBin, 'daemon', 'resume', ...sessionIds], { cwd: rootDir, env });

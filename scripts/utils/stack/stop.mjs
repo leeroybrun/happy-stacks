@@ -126,6 +126,7 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
     daemonSessionsStopped: null,
     daemonStopped: false,
     killedPorts: [],
+    expoDev: [],
     uiDev: [],
     mobile: [],
     infra: null,
@@ -136,7 +137,13 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
   const port = coercePort(env.HAPPY_STACKS_SERVER_PORT ?? env.HAPPY_LOCAL_SERVER_PORT);
   const backendPort = coercePort(env.HAPPY_STACKS_HAPPY_SERVER_BACKEND_PORT ?? env.HAPPY_LOCAL_HAPPY_SERVER_BACKEND_PORT);
   const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? join(baseDir, 'cli')).toString();
-  const cliBin = join(getComponentDir(rootDir, 'happy-cli'), 'bin', 'happy.mjs');
+  // IMPORTANT:
+  // When stopping a stack, always prefer the stack's pinned happy-cli checkout/worktree.
+  // Otherwise, PR stacks can accidentally run the base checkout's CLI bin, which may not be built
+  // (we intentionally skip building base checkouts in some sandbox PR flows).
+  const pinnedCliDir = (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim();
+  const cliDir = pinnedCliDir || getComponentDir(rootDir, 'happy-cli');
+  const cliBin = join(cliDir, 'bin', 'happy.mjs');
   const envPath = (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString();
 
   // Preferred: stop stack-started processes (by PID) recorded in stack.runtime.json.
@@ -194,14 +201,14 @@ export async function stopStackWithEnv({ rootDir, stackName, baseDir, env, json,
   }
 
   try {
-    actions.uiDev = await stopExpoStateDir({ stackName, baseDir, kind: 'ui-dev', stateFileName: 'ui.state.json', envPath, json });
+    actions.expoDev = await stopExpoStateDir({ stackName, baseDir, kind: 'expo-dev', stateFileName: 'expo.state.json', envPath, json });
   } catch (e) {
-    actions.errors.push({ step: 'expo-ui', error: e instanceof Error ? e.message : String(e) });
+    actions.errors.push({ step: 'expo-dev', error: e instanceof Error ? e.message : String(e) });
   }
   try {
-    // Prefer the modern "mobile-dev" state (used by happys mobile and --mobile in dev/start).
+    // Legacy cleanups (best-effort): older runs used separate state dirs.
+    actions.uiDev = await stopExpoStateDir({ stackName, baseDir, kind: 'ui-dev', stateFileName: 'ui.state.json', envPath, json });
     const killedDev = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile-dev', stateFileName: 'mobile.state.json', envPath, json });
-    // Back-compat: older experimental paths used kind=mobile + expo.state.json.
     const killedLegacy = await stopExpoStateDir({ stackName, baseDir, kind: 'mobile', stateFileName: 'expo.state.json', envPath, json });
     actions.mobile = [...killedDev, ...killedLegacy];
   } catch (e) {

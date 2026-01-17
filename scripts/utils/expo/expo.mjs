@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { isPidAlive } from '../proc/pids.mjs';
+import { isTcpPortFree } from '../net/ports.mjs';
 
 export { isPidAlive };
 
@@ -63,7 +64,25 @@ export async function isStateProcessRunning(statePath) {
   const state = await readPidState(statePath);
   if (!state) return { running: false, state: null };
   const pid = Number(state.pid);
-  return { running: isPidAlive(pid), state };
+  if (isPidAlive(pid)) {
+    return { running: true, state, reason: 'pid' };
+  }
+
+  // Expo/Metro can sometimes be “up” even if the original wrapper pid exited (pm/yarn layers).
+  // If we have a port and something is listening on it, treat it as running.
+  const port = Number(state?.port);
+  if (Number.isFinite(port) && port > 0) {
+    try {
+      const free = await isTcpPortFree(port, { host: '127.0.0.1' });
+      if (!free) {
+        return { running: true, state, reason: 'port' };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return { running: false, state };
 }
 
 export async function writePidState(statePath, state) {

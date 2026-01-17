@@ -150,6 +150,7 @@ More details + automation: `[docs/remote-access.md](docs/remote-access.md)`.
 - **Scripts**: `scripts/*.mjs` (bootstrap/dev/start/build/stacks/worktrees/service/tailscale/mobile)
 - **Components**: `components/*` (each is its own Git repo)
 - **Worktrees**: `components/.worktrees/<component>/<owner>/<branch...>`
+- **CWD-scoped commands**: if you run `happys test/typecheck/lint` from inside a component checkout/worktree and omit components, it runs just that component; `happys build/dev/start` also prefer the checkout you’re currently inside.
 
 Components:
 
@@ -198,7 +199,7 @@ happys stack pr pr123 \
   --dev
 ```
 
-Optional: also start Expo dev-client Metro for mobile reviewers:
+Optional: enable Expo dev-client for mobile reviewers (reuses the same Expo dev server; no second Metro process):
 
 ```bash
 happys stack pr pr123 --happy=123 --happy-cli=456 --dev --mobile
@@ -232,7 +233,7 @@ npx happy-stacks setup-pr \
   --happy-cli=https://github.com/slopus/happy-cli/pull/456
 ```
 
-Optional: include Expo dev-client Metro for mobile reviewers (works with both default `--dev` and `--start`):
+Optional: enable Expo dev-client for mobile reviewers (works with both default `--dev` and `--start`):
 
 ```bash
 npx happy-stacks setup-pr --happy=123 --happy-cli=456 --mobile
@@ -326,11 +327,19 @@ Details: `[docs/menubar.md](docs/menubar.md)`.
 #### Mobile iOS dev (optional)
 
 ```bash
-happys mobile --help
-happys mobile --json
+# Install the shared "Happy Stacks Dev" dev-client app on your iPhone:
+happys mobile-dev-client --install
+
+# Install an isolated per-stack app (Release config, unique bundle id + scheme):
+happys stack mobile:install <stack> --name="Happy (<stack>)"
 ```
 
 Details: `[docs/mobile-ios.md](docs/mobile-ios.md)`.
+
+#### Reviewing PRs in an isolated sandbox
+
+- **Unique hostname per run (default)**: `happys review-pr` generates a unique stack name by default, which results in a unique `happy-<stack>.localhost` hostname. This prevents browser storage collisions when the sandbox is deleted between runs.
+- **Reuse an existing sandbox**: if a previous run preserved a sandbox (e.g. `--keep-sandbox` or a failure in verbose mode), re-running `happys review-pr` offers an interactive choice to reuse it (keeping the same hostname + on-disk auth), or create a fresh sandbox.
 
 #### Tauri desktop app (optional)
 
@@ -348,7 +357,7 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
   - (advanced) `happys bootstrap --interactive` (component installer wizard)
 - **Run**:
   - `happys start` (production-like; serves built UI via server-light)
-  - `happys dev` (dev; Expo web dev server for UI)
+  - `happys dev` (dev; Expo dev server for UI, optional dev-client via `--mobile`)
 - **Server flavor**:
   - `happys srv status`
   - `happys srv use --interactive`
@@ -362,7 +371,10 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
   - `happys stack dev <name>` / `happys stack start <name>`
   - `happys stack edit <name> --interactive`
   - `happys stack wt <name> -- use --interactive`
+  - `happys stack review <name> [component...] [--reviewers=coderabbit,codex] [--base-ref=<ref>]`
   - `happys stack migrate`
+- **Reviews (local diff review)**:
+  - `happys review [component...] [--reviewers=coderabbit,codex] [--base-remote=<remote>] [--base-branch=<branch>] [--base-ref=<ref>]`
 - **Menu bar (SwiftBar)**:
   - `happys menubar install`
 

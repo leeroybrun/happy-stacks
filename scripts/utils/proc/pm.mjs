@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 import { pathExists } from '../fs/fs.mjs';
@@ -113,14 +113,37 @@ export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
       }
     };
 
+    const patchesMtimeMs = async () => {
+      // Happy's mobile app (and some other repos) use patch-package and keep patches under `patches/`.
+      // If a patch file changes but yarn.lock/package.json do not, Yarn won't reinstall and
+      // patch-package won't re-apply the patch, leading to confusing "why isn't my patch wired?"
+      // failures later (e.g. during iOS pod install).
+      const patchesDir = join(dir, 'patches');
+      if (!(await pathExists(patchesDir))) return 0;
+      try {
+        const entries = await readdir(patchesDir, { withFileTypes: true });
+        let max = 0;
+        for (const e of entries) {
+          if (!e.isFile()) continue;
+          if (!e.name.endsWith('.patch')) continue;
+          const m = await mtimeMs(join(patchesDir, e.name));
+          if (m > max) max = m;
+        }
+        return max;
+      } catch {
+        return 0;
+      }
+    };
+
     if (pm.name === 'yarn' && (await pathExists(yarnLock))) {
       const lockM = await mtimeMs(yarnLock);
       const pkgM = await mtimeMs(pkgJson);
       const intM = await mtimeMs(yarnIntegrity);
-      if (!intM || lockM > intM || pkgM > intM) {
+      const patchM = await patchesMtimeMs();
+      if (!intM || lockM > intM || pkgM > intM || patchM > intM) {
         if (!quiet) {
           // eslint-disable-next-line no-console
-          console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json changed)...`);
+          console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json/patches changed)...`);
         }
         await run(pm.cmd, ['install'], { cwd: dir, stdio });
       }
@@ -185,6 +208,18 @@ export async function ensureCliBuilt(cliDir, { buildCli }) {
   console.log('[local] building happy-cli...');
   const pm = await getComponentPm(cliDir);
   await run(pm.cmd, ['build'], { cwd: cliDir });
+
+  // Sanity check: happy-cli daemon entrypoint must exist after a successful build.
+  // Without this, watch-based rebuilds can restart the daemon into a MODULE_NOT_FOUND crash,
+  // which looks like the UI "dies out of nowhere" even though the root cause is missing build output.
+  if (!(await pathExists(distEntrypoint))) {
+    throw new Error(
+      `[local] happy-cli build finished but did not produce expected entrypoint.\n` +
+        `Expected: ${distEntrypoint}\n` +
+        `Fix: run the component build directly and inspect its output:\n` +
+        `  cd "${cliDir}" && ${pm.cmd} build`
+    );
+  }
 
   // Persist new build state (best-effort).
   const nowSig = gitSig ?? (await computeGitWorktreeSignature(cliDir));

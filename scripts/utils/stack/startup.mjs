@@ -1,5 +1,6 @@
 import { runCapture } from '../proc/proc.mjs';
 import { ensureDepsInstalled, pmExecBin } from '../proc/pm.mjs';
+import { isSandboxed, sandboxAllowsGlobalSideEffects } from '../env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -47,6 +48,12 @@ async function probeAccountCount({ serverDir, env }) {
 }
 
 export function resolveAutoCopyFromMainEnabled({ env, stackName, isInteractive }) {
+  // Sandboxes should be isolated by default.
+  // Auto auth seeding can copy credentials/account rows from another stack (global state),
+  // which breaks isolation and can confuse guided auth flows (setup-pr/review-pr).
+  if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+    return false;
+  }
   const raw = (env.HAPPY_STACKS_AUTO_AUTH_SEED ?? env.HAPPY_LOCAL_AUTO_AUTH_SEED ?? '').toString().trim();
   if (raw) return raw !== '0';
 

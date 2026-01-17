@@ -13,7 +13,7 @@ import { getCliHomeDirFromEnvOrDefault } from './dirs.mjs';
 function resolveWorkspaceDirFromStackEnv({ rootDir, stackEnv }) {
   const raw = getEnvValueAny(stackEnv, ['HAPPY_STACKS_WORKSPACE_DIR', 'HAPPY_LOCAL_WORKSPACE_DIR']);
   if (!raw) {
-    return getWorkspaceDir(rootDir);
+    return getWorkspaceDir(rootDir, stackEnv);
   }
   const expanded = expandHome(raw);
   return expanded.startsWith('/') ? expanded : resolve(rootDir, expanded);
@@ -21,7 +21,7 @@ function resolveWorkspaceDirFromStackEnv({ rootDir, stackEnv }) {
 
 function resolveComponentDirFromStackEnv({ rootDir, stackEnv, keys, component }) {
   const raw = getEnvValueAny(stackEnv, keys);
-  if (!raw) return getComponentDir(rootDir, component);
+  if (!raw) return getComponentDir(rootDir, component, stackEnv);
   const expanded = expandHome(raw);
   if (expanded.startsWith('/')) return expanded;
   const workspaceDir = resolveWorkspaceDirFromStackEnv({ rootDir, stackEnv });

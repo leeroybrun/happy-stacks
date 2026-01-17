@@ -11,4 +11,5 @@ env.local
 # Allowlist env templates (default-allow)
 !.env.example
 !.env.*.example
-
+!.project
+!.edison

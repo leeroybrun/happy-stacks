@@ -55,22 +55,8 @@ export async function pickUiDevMetroPort({
   reservedPorts = new Set(),
   host = '127.0.0.1',
 } = {}) {
-  const forcedPort =
-    (env.HAPPY_STACKS_UI_DEV_PORT ?? env.HAPPY_LOCAL_UI_DEV_PORT ?? '').toString().trim() || '';
-
-  const stable = stackMode && wantsStablePortStrategy({ env, strategyKey: 'HAPPY_STACKS_UI_DEV_PORT_STRATEGY', legacyStrategyKey: 'HAPPY_LOCAL_UI_DEV_PORT_STRATEGY' });
-  const startPort = stable
-    ? resolveStablePortStart({
-        env,
-        stackName,
-        baseKey: 'HAPPY_STACKS_UI_DEV_PORT_BASE',
-        rangeKey: 'HAPPY_STACKS_UI_DEV_PORT_RANGE',
-        defaultBase: 8081,
-        defaultRange: 1000,
-      })
-    : 8081;
-
-  return await pickMetroPort({ startPort, forcedPort, reservedPorts, host });
+  // Legacy alias: UI dev Metro is now the unified Expo dev server port.
+  return await pickExpoDevMetroPort({ env, stackMode, stackName, reservedPorts, host });
 }
 
 export async function pickMobileDevMetroPort({
@@ -80,10 +66,24 @@ export async function pickMobileDevMetroPort({
   reservedPorts = new Set(),
   host = '127.0.0.1',
 } = {}) {
-  // Back-compat: MOBILE_PORT has historically been the "start scanning from here" knob.
-  // If MOBILE_DEV_PORT is set, treat it as the forced port.
+  // Legacy alias: mobile dev Metro is now the unified Expo dev server port.
+  return await pickExpoDevMetroPort({ env, stackMode, stackName, reservedPorts, host });
+}
+
+export async function pickExpoDevMetroPort({
+  env = process.env,
+  stackMode,
+  stackName,
+  reservedPorts = new Set(),
+  host = '127.0.0.1',
+} = {}) {
   const forcedPort =
-    (env.HAPPY_STACKS_MOBILE_DEV_PORT ??
+    (env.HAPPY_STACKS_EXPO_DEV_PORT ??
+      env.HAPPY_LOCAL_EXPO_DEV_PORT ??
+      // Back-compat: older knobs.
+      env.HAPPY_STACKS_UI_DEV_PORT ??
+      env.HAPPY_LOCAL_UI_DEV_PORT ??
+      env.HAPPY_STACKS_MOBILE_DEV_PORT ??
       env.HAPPY_LOCAL_MOBILE_DEV_PORT ??
       env.HAPPY_STACKS_MOBILE_PORT ??
       env.HAPPY_LOCAL_MOBILE_PORT ??
@@ -91,15 +91,20 @@ export async function pickMobileDevMetroPort({
       .toString()
       .trim() || '';
 
-  const stable = stackMode && wantsStablePortStrategy({ env, strategyKey: 'HAPPY_STACKS_MOBILE_DEV_PORT_STRATEGY', legacyStrategyKey: 'HAPPY_LOCAL_MOBILE_DEV_PORT_STRATEGY' });
+  const stable =
+    stackMode &&
+    wantsStablePortStrategy({
+      env,
+      strategyKey: 'HAPPY_STACKS_EXPO_DEV_PORT_STRATEGY',
+      legacyStrategyKey: 'HAPPY_LOCAL_EXPO_DEV_PORT_STRATEGY',
+    });
   const startPort = stable
     ? resolveStablePortStart({
         env,
         stackName,
-        baseKey: 'HAPPY_STACKS_MOBILE_DEV_PORT_BASE',
-        rangeKey: 'HAPPY_STACKS_MOBILE_DEV_PORT_RANGE',
-        // Avoid colliding with UI dev default range by default, but keep it fully configurable.
-        defaultBase: 9081,
+        baseKey: 'HAPPY_STACKS_EXPO_DEV_PORT_BASE',
+        rangeKey: 'HAPPY_STACKS_EXPO_DEV_PORT_RANGE',
+        defaultBase: 8081,
         defaultRange: 1000,
       })
     : 8081;

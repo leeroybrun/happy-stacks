@@ -1,6 +1,6 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
+import { componentDirEnvKey, getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled, pmExecBin, requireDir } from './utils/proc/pm.mjs';
 import { resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { dirname, join } from 'node:path';
@@ -9,6 +9,7 @@ import { tailscaleServeHttpsUrl } from './tailscale.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureExpoIsolationEnv, getExpoStatePaths, wantsExpoClearCache } from './utils/expo/expo.mjs';
 import { expoExec } from './utils/expo/command.mjs';
+import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 
 /**
  * Build a lightweight static web UI bundle (no Expo dev server).
@@ -31,11 +32,24 @@ async function main() {
         '  happys build [--tauri] [--json]',
         '  (legacy in a cloned repo): pnpm build [-- --tauri] [--json]',
         '  node scripts/build.mjs [--tauri|--no-tauri] [--no-ui] [--json]',
+        '',
+        'note:',
+        '  If run from inside the Happy UI checkout/worktree, the build uses that checkout.',
       ].join('\n'),
     });
     return;
   }
   const rootDir = getRootDir(import.meta.url);
+
+  // If invoked from inside the Happy UI checkout/worktree, prefer that directory without requiring `happys wt use ...`.
+  const inferred = inferComponentFromCwd({
+    rootDir,
+    invokedCwd: getInvokedCwd(process.env),
+    components: ['happy'],
+  });
+  if (inferred?.component === 'happy') {
+    process.env[componentDirEnvKey('happy')] = inferred.repoDir;
+  }
 
   // Optional: skip building the web UI bundle.
   //

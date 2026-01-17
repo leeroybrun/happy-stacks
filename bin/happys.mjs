@@ -153,6 +153,8 @@ function applySandboxDirIfRequested(argv) {
   if (!raw) return { argv: nextArgv, enabled: false };
 
   const sandboxDir = expandHome(raw);
+  const allowGlobalRaw = (process.env.HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL ?? '').trim().toLowerCase();
+  const allowGlobal = allowGlobalRaw === '1' || allowGlobalRaw === 'true' || allowGlobalRaw === 'yes' || allowGlobalRaw === 'y';
   // Keep all state under one folder that can be deleted to reset completely.
   const canonicalHomeDir = join(sandboxDir, 'canonical');
   const homeDir = join(sandboxDir, 'home');
@@ -160,23 +162,76 @@ function applySandboxDirIfRequested(argv) {
   const runtimeDir = join(sandboxDir, 'runtime');
   const storageDir = join(sandboxDir, 'storage');
 
+  // Sandbox isolation MUST win over any pre-exported Happy Stacks env vars.
+  // Otherwise sandbox runs can accidentally read/write "real" machine state.
+  //
+  // Keep only a tiny set of sandbox-safe globals; everything else should be driven by flags
+  // and stack env files inside the sandbox.
+  const preserved = new Map();
+  const keepKeys = [
+    'HAPPY_STACKS_VERBOSE',
+    'HAPPY_STACKS_INVOKED_CWD',
+    'HAPPY_STACKS_SANDBOX_DIR',
+    'HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL',
+    'HAPPY_STACKS_UPDATE_CHECK',
+    'HAPPY_STACKS_UPDATE_CHECK_INTERVAL_MS',
+    'HAPPY_STACKS_UPDATE_NOTIFY_INTERVAL_MS',
+  ];
+  for (const k of keepKeys) {
+    if (process.env[k] != null && String(process.env[k]).trim() !== '') {
+      preserved.set(k, process.env[k]);
+    }
+  }
+  for (const k of Object.keys(process.env)) {
+    if (k.startsWith('HAPPY_STACKS_') || k.startsWith('HAPPY_LOCAL_')) {
+      delete process.env[k];
+      continue;
+    }
+    // Also clear unprefixed Happy vars; sandbox commands should compute these from stack state.
+    if (k === 'HAPPY_HOME_DIR' || k === 'HAPPY_SERVER_URL' || k === 'HAPPY_WEBAPP_URL') {
+      delete process.env[k];
+    }
+  }
+  for (const [k, v] of preserved.entries()) {
+    process.env[k] = v;
+  }
+
   process.env.HAPPY_STACKS_SANDBOX_DIR = sandboxDir;
   process.env.HAPPY_STACKS_CLI_ROOT_DISABLE = '1'; // never re-exec into a user's "real" install when sandboxing
 
-  process.env.HAPPY_STACKS_CANONICAL_HOME_DIR = process.env.HAPPY_STACKS_CANONICAL_HOME_DIR ?? canonicalHomeDir;
-  process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR = process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR ?? process.env.HAPPY_STACKS_CANONICAL_HOME_DIR;
+  // In sandbox mode, we MUST force all state directories into the sandbox, even if the user
+  // exported HAPPY_STACKS_* in their shell. Otherwise sandbox runs can accidentally read/write
+  // "real" machine state (breaking isolation).
+  process.env.HAPPY_STACKS_CANONICAL_HOME_DIR = canonicalHomeDir;
+  process.env.HAPPY_LOCAL_CANONICAL_HOME_DIR = canonicalHomeDir;
 
-  process.env.HAPPY_STACKS_HOME_DIR = process.env.HAPPY_STACKS_HOME_DIR ?? homeDir;
-  process.env.HAPPY_LOCAL_HOME_DIR = process.env.HAPPY_LOCAL_HOME_DIR ?? process.env.HAPPY_STACKS_HOME_DIR;
+  process.env.HAPPY_STACKS_HOME_DIR = homeDir;
+  process.env.HAPPY_LOCAL_HOME_DIR = homeDir;
 
-  process.env.HAPPY_STACKS_WORKSPACE_DIR = process.env.HAPPY_STACKS_WORKSPACE_DIR ?? workspaceDir;
-  process.env.HAPPY_LOCAL_WORKSPACE_DIR = process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? process.env.HAPPY_STACKS_WORKSPACE_DIR;
+  process.env.HAPPY_STACKS_WORKSPACE_DIR = workspaceDir;
+  process.env.HAPPY_LOCAL_WORKSPACE_DIR = workspaceDir;
 
-  process.env.HAPPY_STACKS_RUNTIME_DIR = process.env.HAPPY_STACKS_RUNTIME_DIR ?? runtimeDir;
-  process.env.HAPPY_LOCAL_RUNTIME_DIR = process.env.HAPPY_LOCAL_RUNTIME_DIR ?? process.env.HAPPY_STACKS_RUNTIME_DIR;
+  process.env.HAPPY_STACKS_RUNTIME_DIR = runtimeDir;
+  process.env.HAPPY_LOCAL_RUNTIME_DIR = runtimeDir;
 
-  process.env.HAPPY_STACKS_STORAGE_DIR = process.env.HAPPY_STACKS_STORAGE_DIR ?? storageDir;
-  process.env.HAPPY_LOCAL_STORAGE_DIR = process.env.HAPPY_LOCAL_STORAGE_DIR ?? process.env.HAPPY_STACKS_STORAGE_DIR;
+  process.env.HAPPY_STACKS_STORAGE_DIR = storageDir;
+  process.env.HAPPY_LOCAL_STORAGE_DIR = storageDir;
+
+  // Sandbox default: disallow global side effects unless explicitly opted in.
+  // This keeps sandbox runs fast, deterministic, and isolated.
+  if (!allowGlobal) {
+    // Network-y UX (background update checks) are not useful in a temporary sandbox.
+    process.env.HAPPY_STACKS_UPDATE_CHECK = '0';
+    process.env.HAPPY_STACKS_UPDATE_CHECK_INTERVAL_MS = '0';
+    process.env.HAPPY_STACKS_UPDATE_NOTIFY_INTERVAL_MS = '0';
+
+    // Never auto-enable or reset Tailscale Serve in sandbox.
+    // (Tailscale is global machine state; sandbox runs must not touch it.)
+    process.env.HAPPY_LOCAL_TAILSCALE_SERVE = '0';
+    process.env.HAPPY_STACKS_TAILSCALE_SERVE = '0';
+    process.env.HAPPY_LOCAL_TAILSCALE_RESET_ON_EXIT = '0';
+    process.env.HAPPY_STACKS_TAILSCALE_RESET_ON_EXIT = '0';
+  }
 
   return { argv: nextArgv, enabled: true };
 }
@@ -287,6 +342,13 @@ function main() {
   const argv0 = applyVerbosityIfRequested(initialArgv);
   const { argv, enabled: sandboxed } = applySandboxDirIfRequested(argv0);
   void sandboxed;
+
+  // Preserve the original working directory across re-exec to the CLI root so commands can infer
+  // component/worktree context even when the actual scripts run with cwd=cliRootDir.
+  if (!(process.env.HAPPY_STACKS_INVOKED_CWD ?? '').trim()) {
+    process.env.HAPPY_STACKS_INVOKED_CWD = process.cwd();
+  }
+
   maybeReexecToCliRoot(cliRootDir);
 
   // If the user passed only flags (common via `npx happy-stacks --help`),

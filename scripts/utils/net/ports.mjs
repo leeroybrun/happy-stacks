@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import net from 'node:net';
 import { runCaptureIfCommandExists } from '../proc/commands.mjs';
 
-async function listListenPids(port) {
+export async function listListenPids(port) {
   if (!Number.isFinite(port) || port <= 0) return [];
   if (process.platform === 'win32') return [];
 
@@ -10,6 +10,14 @@ async function listListenPids(port) {
   try {
     // `lsof` exits non-zero if no matches; normalize to empty output.
     raw = await runCaptureIfCommandExists('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
+    if (!raw && process.platform === 'darwin') {
+      // Some non-interactive shells (launchd/GUI apps) have a PATH that omits /usr/sbin,
+      // which makes `command -v lsof` fail even though lsof exists. Fall back to absolute paths.
+      raw =
+        (await runCaptureIfCommandExists('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])) ||
+        (await runCaptureIfCommandExists('/usr/bin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])) ||
+        '';
+    }
   } catch {
     raw = '';
   }

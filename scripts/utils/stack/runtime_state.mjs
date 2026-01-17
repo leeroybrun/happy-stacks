@@ -51,7 +51,7 @@ export async function updateStackRuntimeStateFile(statePath, patch) {
   return next;
 }
 
-export async function recordStackRuntimeStart(statePath, { stackName, script, ephemeral, ownerPid, ports } = {}) {
+export async function recordStackRuntimeStart(statePath, { stackName, script, ephemeral, ownerPid, ports, ...rest } = {}) {
   const now = new Date().toISOString();
   const existing = (await readStackRuntimeStateFile(statePath)) ?? {};
   const startedAt = typeof existing.startedAt === 'string' && existing.startedAt.trim() ? existing.startedAt : now;
@@ -64,6 +64,7 @@ export async function recordStackRuntimeStart(statePath, { stackName, script, ep
     ports: ports ?? {},
     startedAt,
     updatedAt: now,
+    ...(rest ?? {}),
   });
   await writeStackRuntimeStateFile(statePath, next);
   return next;

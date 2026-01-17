@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 
 import { ensureCliBuilt, ensureDepsInstalled } from '../proc/pm.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
@@ -7,7 +8,26 @@ import { startLocalDaemonWithAuth } from '../../daemon.mjs';
 
 export async function ensureDevCliReady({ cliDir, buildCli }) {
   await ensureDepsInstalled(cliDir, 'happy-cli');
-  return await ensureCliBuilt(cliDir, { buildCli });
+  const res = await ensureCliBuilt(cliDir, { buildCli });
+
+  // Fail closed: dev mode must never start the daemon without a usable happy-cli build output.
+  // Even if the user disabled CLI builds globally (or build mode is "never"), missing dist will
+  // cause an immediate MODULE_NOT_FOUND crash when spawning the daemon.
+  const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
+  if (!existsSync(distEntrypoint)) {
+    // Last-chance recovery: force a build once.
+    await ensureCliBuilt(cliDir, { buildCli: true });
+    if (!existsSync(distEntrypoint)) {
+      throw new Error(
+        `[local] happy-cli build output is missing.\n` +
+          `Expected: ${distEntrypoint}\n` +
+          `Fix: run the component build directly and inspect its output:\n` +
+          `  cd "${cliDir}" && yarn build`
+      );
+    }
+  }
+
+  return res;
 }
 
 export async function prepareDaemonAuthSeed({
@@ -77,8 +97,25 @@ export function watchHappyCliAndRestartDaemon({
   if (!enabled || !startDaemon) return null;
 
   let inFlight = false;
+
+  // IMPORTANT:
+  // Watch only source/config paths, not build outputs. Watching the whole repo can
+  // trigger rebuild loops because `yarn build` writes to `dist/` (and may touch other
+  // generated files), which then retriggers the watcher.
+  const watchPaths = [
+    join(cliDir, 'src'),
+    join(cliDir, 'bin'),
+    join(cliDir, 'codex'),
+    join(cliDir, 'package.json'),
+    join(cliDir, 'tsconfig.json'),
+    join(cliDir, 'tsconfig.build.json'),
+    join(cliDir, 'pkgroll.config.mjs'),
+    join(cliDir, 'yarn.lock'),
+    join(cliDir, 'pnpm-lock.yaml'),
+  ].filter((p) => existsSync(p));
+
   return watchDebounced({
-    paths: [resolve(cliDir)],
+    paths: (watchPaths.length ? watchPaths : [cliDir]).map((p) => resolve(p)),
     debounceMs: 500,
     onChange: async () => {
       if (isShuttingDown?.()) return;
@@ -88,6 +125,13 @@ export function watchHappyCliAndRestartDaemon({
         // eslint-disable-next-line no-console
         console.log('[local] watch: happy-cli changed → rebuilding + restarting daemon...');
         await ensureCliBuilt(cliDir, { buildCli });
+        const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
+        if (!existsSync(distEntrypoint)) {
+          console.warn(
+            `[local] watch: happy-cli build did not produce ${distEntrypoint}; refusing to restart daemon to avoid downtime.`
+          );
+          return;
+        }
         await startLocalDaemonWithAuth({
           cliBin,
           cliHomeDir,

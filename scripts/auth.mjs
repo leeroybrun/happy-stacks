@@ -32,7 +32,7 @@ import {
   getServerLightDataDirFromEnvOrDefault,
   resolveCliHomeDir,
 } from './utils/stack/dirs.mjs';
-import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
+import { resolveLocalhostHost, preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 
 function getInternalServerUrlCompat() {
   const { port, internalServerUrl } = getInternalServerUrl({ env: process.env, defaultPort: 3005 });
@@ -45,9 +45,9 @@ async function resolveWebappUrlFromRunningExpo({ rootDir, stackName }) {
     const uiDir = getComponentDir(rootDir, 'happy');
     const uiPaths = getExpoStatePaths({
       baseDir,
-      kind: 'ui-dev',
+      kind: 'expo-dev',
       projectDir: uiDir,
-      stateFileName: 'ui.state.json',
+      stateFileName: 'expo.state.json',
     });
     const uiRunning = await isStateProcessRunning(uiPaths.statePath);
     if (!uiRunning.running) return null;
@@ -580,7 +580,7 @@ async function cmdCopyFrom({ argv, json }) {
       const managed = (targetEnv.HAPPY_STACKS_MANAGED_INFRA ?? targetEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1').toString().trim() !== '0';
       if (targetServerComponent === 'happy-server' && withInfra && managed) {
         const { port } = getInternalServerUrlCompat();
-        const publicServerUrl = `http://localhost:${port}`;
+        const publicServerUrl = await preferStackLocalhostUrl(`http://localhost:${port}`, { stackName });
         const envPath = resolveStackEnvPath(stackName).envPath;
         const infra = await ensureHappyServerManagedInfra({
           stackName,
@@ -689,6 +689,7 @@ async function cmdStatus({ json }) {
     defaultPublicUrl,
     envPublicUrl,
     allowEnable: false,
+    stackName,
   });
 
   const cliHomeDir = resolveCliHomeDir();
@@ -770,7 +771,7 @@ async function cmdStatus({ json }) {
 async function cmdLogin({ argv, json }) {
   const rootDir = getRootDir(import.meta.url);
   const stackName = getStackName();
-  const { kv } = parseArgs(argv);
+  const { flags, kv } = parseArgs(argv);
 
   const { port, url: internalServerUrl } = getInternalServerUrlCompat();
   const { defaultPublicUrl, envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port, stackName });
@@ -779,10 +780,12 @@ async function cmdLogin({ argv, json }) {
     defaultPublicUrl,
     envPublicUrl,
     allowEnable: false,
+    stackName,
   });
   const { envWebappUrl } = getWebappUrlEnvOverride({ env: process.env, stackName });
   const expoWebappUrl = await resolveWebappUrlFromRunningExpo({ rootDir, stackName });
-  const webappUrl = envWebappUrl || expoWebappUrl || publicServerUrl;
+  const webappUrlRaw = envWebappUrl || expoWebappUrl || publicServerUrl;
+  const webappUrl = await preferStackLocalhostUrl(webappUrlRaw, { stackName });
   const webappUrlSource = expoWebappUrl ? 'expo' : envWebappUrl ? 'stack env override' : 'server';
 
   const cliHomeDir = resolveCliHomeDir();
@@ -818,7 +821,8 @@ async function cmdLogin({ argv, json }) {
     return;
   }
 
-  if (!json) {
+  const quietUx = flags.has('--quiet') || flags.has('--no-ux');
+  if (!json && !quietUx) {
     printAuthLoginInstructions({
       stackName,
       context,

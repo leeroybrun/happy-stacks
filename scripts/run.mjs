@@ -2,7 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { killProcessTree, runCapture, spawnProc } from './utils/proc/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
+import { componentDirEnvKey, getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/net/ports.mjs';
 import { getServerComponentName, isHappyServerRunning, waitForServerReady } from './utils/server/server.mjs';
 import { ensureCliBuilt, ensureDepsInstalled, pmExecBin, pmSpawnScript, requireDir } from './utils/proc/pm.mjs';
@@ -14,13 +14,15 @@ import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './da
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/server/validate.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
-import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from './utils/stack/startup.mjs';
+import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
 import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
-import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
+import { preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
-import { startDevExpoMobile } from './utils/dev/expo_mobile.mjs';
+import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
+import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
+import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -28,7 +30,7 @@ import { startDevExpoMobile } from './utils/dev/expo_mobile.mjs';
  * - happy-cli daemon
  * - serve prebuilt UI via happy-server-light (/)
  *
- * No Expo dev server.
+ * Optional: Expo dev-client Metro for mobile reviewers (`--mobile`).
  */
 
 async function main() {
@@ -44,12 +46,24 @@ async function main() {
         '  happys start [--server=happy-server|happy-server-light] [--restart] [--json]',
         '  (legacy in a cloned repo): pnpm start [-- --server=happy-server|happy-server-light] [--json]',
         '  note: --json prints the resolved config (dry-run) and exits.',
+        '',
+        'note:',
+        '  If run from inside a component checkout/worktree, that checkout is used for this run (without requiring `happys wt use`).',
       ].join('\n'),
     });
     return;
   }
 
   const rootDir = getRootDir(import.meta.url);
+
+  const inferred = inferComponentFromCwd({
+    rootDir,
+    invokedCwd: getInvokedCwd(process.env),
+    components: ['happy', 'happy-cli', 'happy-server-light', 'happy-server'],
+  });
+  if (inferred) {
+    process.env[componentDirEnvKey(inferred.component)] = inferred.repoDir;
+  }
 
   const serverPort = resolveServerPortFromEnv({ defaultPort: 3005 });
 
@@ -149,7 +163,10 @@ async function main() {
   // - Only the main stack should ever auto-enable Tailscale Serve by default.
   // - Non-main stacks default to localhost unless the user explicitly configured a public URL
   //   OR Tailscale Serve is already configured for this stack's internal URL (status matches).
-  const allowEnableTailscale = !stackMode || stackName === 'main';
+  const allowEnableTailscale =
+    !stackMode ||
+    stackName === 'main' ||
+    (baseEnv.HAPPY_STACKS_TAILSCALE_SERVE ?? baseEnv.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0').toString().trim() === '1';
   const resolvedUrls = await resolveServerUrls({ env: baseEnv, serverPort, allowEnable: allowEnableTailscale });
   if (stackMode && stackName !== 'main' && !resolvedUrls.envPublicUrl) {
     const src = String(resolvedUrls.publicServerUrlSource ?? '');
@@ -342,9 +359,8 @@ async function main() {
     // Auto-open UI (interactive only) using the stack-scoped hostname when applicable.
     const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (isInteractive && !noBrowser) {
-      const host = resolveLocalhostHost({ stackMode, stackName: autostart.stackName });
       const prefix = uiPrefix.startsWith('/') ? uiPrefix : `/${uiPrefix}`;
-      const openUrl = `http://${host}:${serverPort}${prefix}`;
+      const openUrl = await preferStackLocalhostUrl(`http://localhost:${serverPort}${prefix}`, { stackName: autostart.stackName });
       const res = await openUrlInBrowser(openUrl);
       if (!res.ok) {
         console.warn(`[local] ui: failed to open browser automatically (${res.error}).`);
@@ -366,6 +382,16 @@ async function main() {
     }
     const accountCount =
       serverComponentName === 'happy-server-light' ? serverLightAccountCount : happyServerAccountCount;
+    const autoSeedEnabled = resolveAutoCopyFromMainEnabled({ env: baseEnv, stackName: autostart.stackName, isInteractive });
+    await maybeRunInteractiveStackAuthSetup({
+      rootDir,
+      env: baseEnv,
+      stackName: autostart.stackName,
+      cliHomeDir,
+      accountCount,
+      isInteractive,
+      autoSeedEnabled,
+    });
     await prepareDaemonAuthSeedIfNeeded({
       rootDir,
       env: baseEnv,
@@ -388,8 +414,9 @@ async function main() {
 
   // Optional: start Expo dev-client Metro for mobile reviewers.
   if (startMobile) {
-    await startDevExpoMobile({
-      startMobile,
+    await ensureDevExpoServer({
+      startUi: false,
+      startMobile: true,
       uiDir,
       autostart,
       baseEnv,

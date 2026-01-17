@@ -97,6 +97,14 @@ export function getHappysRegistry() {
       description: 'Build UI bundle',
     },
     {
+      name: 'review',
+      kind: 'node',
+      scriptRelPath: 'scripts/review.mjs',
+      rootUsage:
+        'happys review [component...] [--reviewers=coderabbit,codex] [--base-remote=<remote>] [--base-branch=<branch>] [--base-ref=<ref>] [--json]',
+      description: 'Run CodeRabbit/Codex reviews for component worktrees',
+    },
+    {
       name: 'lint',
       kind: 'node',
       scriptRelPath: 'scripts/lint.mjs',
@@ -138,6 +146,14 @@ export function getHappysRegistry() {
       scriptRelPath: 'scripts/mobile.mjs',
       rootUsage: 'happys mobile [-- ...]',
       description: 'Mobile helper (iOS)',
+    },
+    {
+      name: 'mobile-dev-client',
+      aliases: ['dev-client', 'devclient'],
+      kind: 'node',
+      scriptRelPath: 'scripts/mobile_dev_client.mjs',
+      rootUsage: 'happys mobile-dev-client --install [--device=...] [--clean] [--configuration=Debug|Release] [--json]',
+      description: 'Install the shared Happy Stacks dev-client app (iOS)',
     },
     {
       name: 'doctor',

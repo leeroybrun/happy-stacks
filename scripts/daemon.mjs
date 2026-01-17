@@ -1,14 +1,16 @@
 import { spawnProc, run, runCapture } from './utils/proc/proc.mjs';
-import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
+import { resolveAuthSeedFromEnv, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
 import { getStacksStorageRoot } from './utils/paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { runCaptureIfCommandExists } from './utils/proc/commands.mjs';
 import { readLastLines } from './utils/fs/tail.mjs';
+import { ensureCliBuilt } from './utils/proc/pm.mjs';
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
+import { getRootDir } from './utils/paths/paths.mjs';
 
 /**
  * Daemon lifecycle helpers for happy-stacks.
@@ -175,12 +177,70 @@ function getLatestDaemonLogPath(homeDir) {
   }
 }
 
+function resolveHappyCliDistEntrypoint(cliBin) {
+  const bin = String(cliBin ?? '').trim();
+  if (!bin) return null;
+  // In component checkouts/worktrees we launch via <cliDir>/bin/happy.mjs, which expects dist output.
+  // Use this to protect restarts from bricking the running daemon if dist disappears mid-build.
+  try {
+    const binDir = dirname(bin);
+    return join(binDir, '..', 'dist', 'index.mjs');
+  } catch {
+    return null;
+  }
+}
+
+async function ensureHappyCliDistExists({ cliBin }) {
+  const distEntrypoint = resolveHappyCliDistEntrypoint(cliBin);
+  if (!distEntrypoint) return { ok: false, distEntrypoint: null, built: false, reason: 'unknown_cli_bin' };
+  if (existsSync(distEntrypoint)) return { ok: true, distEntrypoint, built: false, reason: 'exists' };
+
+  // Try to recover automatically: missing dist is a common first-run worktree issue.
+  // We build in-place using the cliDir that owns this cliBin (../ from bin/).
+  const cliDir = join(dirname(cliBin), '..');
+  const buildCli =
+    (process.env.HAPPY_STACKS_CLI_BUILD ?? process.env.HAPPY_LOCAL_CLI_BUILD ?? '1').toString().trim() !== '0';
+  if (!buildCli) {
+    return { ok: false, distEntrypoint, built: false, reason: 'build_disabled' };
+  }
+
+  try {
+    // eslint-disable-next-line no-console
+    console.warn(`[local] happy-cli build output missing; rebuilding (${cliDir})...`);
+    await ensureCliBuilt(cliDir, { buildCli: true });
+  } catch (e) {
+    return { ok: false, distEntrypoint, built: false, reason: String(e?.message ?? e) };
+  }
+
+  return existsSync(distEntrypoint)
+    ? { ok: true, distEntrypoint, built: true, reason: 'rebuilt' }
+    : { ok: false, distEntrypoint, built: true, reason: 'rebuilt_but_missing' };
+}
+
 function excerptIndicatesMissingAuth(excerpt) {
   if (!excerpt) return false;
   return (
     excerpt.includes('[AUTH] No credentials found') ||
     excerpt.includes('No credentials found, starting authentication flow')
   );
+}
+
+function excerptIndicatesInvalidAuth(excerpt) {
+  if (!excerpt) return false;
+  return (
+    excerpt.includes('Auth failed - invalid token') ||
+    excerpt.includes('Request failed with status code 401') ||
+    excerpt.includes('"status":401') ||
+    excerpt.includes('[DAEMON RUN][FATAL]') && excerpt.includes('status code 401')
+  );
+}
+
+function allowDaemonWaitForAuthWithoutTty() {
+  const raw = (process.env.HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH ?? process.env.HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH ?? '')
+    .toString()
+    .trim()
+    .toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'y';
 }
 
 function authLoginHint() {
@@ -193,6 +253,27 @@ function authCopyFromSeedHint() {
   if (stackName === 'main') return null;
   const seed = resolveAuthSeedFromEnv(process.env);
   return `happys stack auth ${stackName} copy-from ${seed}`;
+}
+
+async function maybeAutoReseedInvalidAuth({ stackName, quiet = false }) {
+  if (stackName === 'main') return { ok: false, skipped: true, reason: 'main' };
+  const env = process.env;
+  const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const enabled = resolveAutoCopyFromMainEnabled({ env, stackName, isInteractive });
+  if (!enabled) return { ok: false, skipped: true, reason: 'disabled' };
+
+  const seed = resolveAuthSeedFromEnv(env);
+  if (!quiet) {
+    console.log(`[local] auth: invalid token detected; re-seeding ${stackName} from ${seed}...`);
+  }
+  const rootDir = getRootDir(import.meta.url);
+
+  // Use stack-scoped auth copy so env/database resolution is correct for the target stack.
+  await run(process.execPath, [join(rootDir, 'scripts', 'stack.mjs'), 'auth', stackName, '--', 'copy-from', seed], {
+    cwd: rootDir,
+    env,
+  });
+  return { ok: true, skipped: false, seed };
 }
 
 async function seedCredentialsIfMissing({ cliHomeDir }) {
@@ -378,6 +459,17 @@ export async function startLocalDaemonWithAuth({
   const baseEnv = { ...process.env };
   const daemonEnv = getDaemonEnv({ baseEnv, cliHomeDir, internalServerUrl, publicServerUrl });
 
+  const distEntrypoint = resolveHappyCliDistEntrypoint(cliBin);
+  const distCheck = await ensureHappyCliDistExists({ cliBin });
+  if (!distCheck.ok) {
+    throw new Error(
+      `[local] happy-cli dist entrypoint is missing (${distEntrypoint}).\n` +
+        `[local] Refusing to start/restart daemon because it would crash with MODULE_NOT_FOUND.\n` +
+        `[local] Fix: rebuild happy-cli in the active checkout/worktree.\n` +
+        (distCheck.reason ? `[local] Detail: ${distCheck.reason}\n` : '')
+    );
+  }
+
   // If this is a migrated/new stack home dir, seed credentials from the user's existing login (best-effort)
   // to avoid requiring an interactive auth flow under launchd.
   const migrateCreds = (baseEnv.HAPPY_STACKS_MIGRATE_CREDENTIALS ?? baseEnv.HAPPY_LOCAL_MIGRATE_CREDENTIALS ?? '1').trim() !== '0';
@@ -386,6 +478,20 @@ export async function startLocalDaemonWithAuth({
   }
 
   const existing = checkDaemonState(cliHomeDir);
+  // If the daemon is already running and we're restarting it, refuse to stop it unless the
+  // happy-cli dist entrypoint exists. Otherwise a rebuild (rm -rf dist) can brick the stack.
+  if (
+    distEntrypoint &&
+    !existsSync(distEntrypoint) &&
+    (existing.status === 'running' || existing.status === 'starting')
+  ) {
+    console.warn(
+      `[local] happy-cli dist entrypoint is missing (${distEntrypoint}).\n` +
+        `[local] Refusing to restart daemon to avoid downtime. Rebuild happy-cli first.`
+    );
+    return;
+  }
+
   if (!forceRestart && (existing.status === 'running' || existing.status === 'starting')) {
     const pid = existing.pid;
     const matches = await daemonEnvMatches({ pid, cliHomeDir, internalServerUrl, publicServerUrl });
@@ -468,15 +574,18 @@ export async function startLocalDaemonWithAuth({
     }
 
     if (excerptIndicatesMissingAuth(first.excerpt)) {
+      const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY) || allowDaemonWaitForAuthWithoutTty();
       const copyHint = authCopyFromSeedHint();
-      console.error(
+      const hint =
         `[local] daemon is not authenticated yet (expected on first run).\n` +
-        `[local] Keeping the server running so you can login.\n` +
         `[local] In another terminal, run:\n` +
         `${authLoginHint()}\n` +
-        (copyHint ? `[local] Or (recommended if main is already logged in):\n${copyHint}\n` : '') +
-        `[local] Waiting for credentials at ${credentialsPath}...`
-      );
+        (copyHint ? `[local] Or (recommended if main is already logged in):\n${copyHint}\n` : '');
+      if (!isInteractive) {
+        throw new Error(`${hint}[local] Non-interactive mode: refusing to wait for credentials.`);
+      }
+
+      console.error(`${hint}[local] Keeping the server running so you can login.\n[local] Waiting for credentials at ${credentialsPath}...`);
 
       const ok = await waitForCredentialsFile({ path: credentialsPath, timeoutMs: 10 * 60_000, isShuttingDown });
       if (!ok) {
@@ -490,6 +599,30 @@ export async function startLocalDaemonWithAuth({
           console.error(`[local] daemon still failed to start; last daemon log (${second.logPath}):\n${second.excerpt}`);
         }
         throw new Error('Failed to start daemon (after credentials were created)');
+      }
+    } else if (excerptIndicatesInvalidAuth(first.excerpt)) {
+      // Credentials exist but are rejected by this server (common when a stack's env/DB was reset,
+      // or credentials were copied from a different stack identity).
+      try {
+        await maybeAutoReseedInvalidAuth({ stackName });
+      } catch (e) {
+        const copyHint = authCopyFromSeedHint();
+        console.error(
+          `[local] daemon credentials were rejected by the server (401).\n` +
+            `[local] Fix:\n` +
+            (copyHint ? `- ${copyHint}\n` : '') +
+            `- ${authLoginHint()}`
+        );
+        throw e;
+      }
+
+      console.log('[local] auth re-seeded, retrying daemon start...');
+      const second = await startOnce();
+      if (!second.ok) {
+        if (second.excerpt) {
+          console.error(`[local] daemon still failed to start; last daemon log (${second.logPath}):\n${second.excerpt}`);
+        }
+        throw new Error('Failed to start daemon (after auth re-seed)');
       }
     } else {
       const copyHint = authCopyFromSeedHint();

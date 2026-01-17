@@ -8,6 +8,21 @@ export function normalizeAuthLoginContext(raw) {
   return 'generic';
 }
 
+function supportsAnsi() {
+  if (!process.stdout.isTTY) return false;
+  if (process.env.NO_COLOR) return false;
+  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
+  return true;
+}
+
+function bold(s) {
+  return supportsAnsi() ? `\x1b[1m${s}\x1b[0m` : String(s);
+}
+
+function dim(s) {
+  return supportsAnsi() ? `\x1b[2m${s}\x1b[0m` : String(s);
+}
+
 export function printAuthLoginInstructions({
   stackName,
   context = 'generic',
@@ -18,23 +33,27 @@ export function printAuthLoginInstructions({
   rerunCmd,
 }) {
   const ctx = normalizeAuthLoginContext(context);
-  const title =
+  const subtitle =
     ctx === 'selfhost'
-      ? '[auth] login (self-host)'
+      ? 'Self-host'
       : ctx === 'dev'
-        ? '[auth] login (dev)'
+        ? 'Dev'
         : ctx === 'stack'
-          ? `[auth] login (stack=${stackName || 'unknown'})`
-          : '[auth] login';
+          ? `Stack: ${stackName || 'unknown'}`
+          : '';
 
   // eslint-disable-next-line no-console
   console.log('');
   // eslint-disable-next-line no-console
-  console.log(title);
+  console.log(bold('Happy login'));
+  if (subtitle) {
+    // eslint-disable-next-line no-console
+    console.log(dim(subtitle));
+  }
   // eslint-disable-next-line no-console
-  console.log('[auth] steps:');
+  console.log('Steps:');
   // eslint-disable-next-line no-console
-  console.log('  1) A browser window will open for authentication');
+  console.log('  1) A browser window will open');
   // eslint-disable-next-line no-console
   console.log('  2) Sign in (or create an account if this is your first time)');
   // eslint-disable-next-line no-console
@@ -46,28 +65,28 @@ export function printAuthLoginInstructions({
     // eslint-disable-next-line no-console
     console.log('');
     // eslint-disable-next-line no-console
-    console.log(`[auth] webapp:   ${webappUrl}${webappUrlSource ? ` (${webappUrlSource})` : ''}`);
+    console.log(`Web app:   ${webappUrl}${webappUrlSource ? ` (${webappUrlSource})` : ''}`);
   }
   if (internalServerUrl) {
     // eslint-disable-next-line no-console
-    console.log(`[auth] internal: ${internalServerUrl}`);
+    console.log(`Internal:  ${internalServerUrl}`);
   }
   if (publicServerUrl) {
     // eslint-disable-next-line no-console
-    console.log(`[auth] public:   ${publicServerUrl}`);
+    console.log(`Public:    ${publicServerUrl}`);
   }
 
   if (ctx === 'selfhost') {
     // eslint-disable-next-line no-console
     console.log('');
     // eslint-disable-next-line no-console
-    console.log('[auth] note: this is required so the daemon can register this machine and sync sessions across devices.');
+    console.log(dim('Note: this is required so the daemon can register this machine and sync sessions across devices.'));
   }
 
   // eslint-disable-next-line no-console
   console.log('');
   // eslint-disable-next-line no-console
-  console.log('[auth] tips:');
+  console.log('Tips:');
   // eslint-disable-next-line no-console
   console.log('- If the browser page does not load, make sure Happy is running and reachable.');
   // eslint-disable-next-line no-console

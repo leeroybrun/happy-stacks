@@ -14,6 +14,7 @@ import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
+import { isSandboxed } from './utils/env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
@@ -164,41 +165,100 @@ async function installDependencies({ dir }) {
     return { installed: false, reason: 'no package manager detected (no package.json)' };
   }
 
+  // IMPORTANT:
+  // When a caller requests --json, stdout must be reserved for JSON output only.
+  // Package managers (especially Yarn) write progress to stdout, which would corrupt JSON parsing
+  // in wrappers like `stack pr`.
+  const jsonMode = Boolean((process.argv ?? []).includes('--json'));
+  const runForJson = async (cmd, args) => {
+    try {
+      const out = await runCapture(cmd, args, { cwd: dir });
+      if (out) process.stderr.write(out);
+    } catch (e) {
+      const out = String(e?.out ?? '');
+      const err = String(e?.err ?? '');
+      if (out) process.stderr.write(out);
+      if (err) process.stderr.write(err);
+      throw e;
+    }
+  };
+
   if (pm.kind === 'pnpm') {
-    await run('pnpm', ['install', '--frozen-lockfile'], { cwd: dir });
+    if (jsonMode) {
+      await runForJson('pnpm', ['install', '--frozen-lockfile']);
+    } else {
+      await run('pnpm', ['install', '--frozen-lockfile'], { cwd: dir });
+    }
     return { installed: true, reason: null };
   }
   if (pm.kind === 'yarn') {
     // Works for yarn classic; yarn berry will ignore/translate flags as needed.
-    await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir });
+    if (jsonMode) {
+      await runForJson('yarn', ['install', '--frozen-lockfile']);
+    } else {
+      await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir });
+    }
     return { installed: true, reason: null };
   }
   // npm
   if (pm.lockfile && pm.lockfile !== 'package.json') {
-    await run('npm', ['ci'], { cwd: dir });
+    if (jsonMode) {
+      await runForJson('npm', ['ci']);
+    } else {
+      await run('npm', ['ci'], { cwd: dir });
+    }
   } else {
-    await run('npm', ['install'], { cwd: dir });
+    if (jsonMode) {
+      await runForJson('npm', ['install']);
+    } else {
+      await run('npm', ['install'], { cwd: dir });
+    }
   }
   return { installed: true, reason: null };
 }
 
-async function maybeSetupDeps({ repoRoot, baseDir, worktreeDir, depsMode }) {
+function allowNodeModulesSymlinkForComponent(component) {
+  const c = String(component ?? '').trim();
+  if (!c) return true;
+  // Expo/Metro commonly breaks with symlinked node_modules. Avoid symlinks for the Happy UI worktree by default.
+  // Override if you *really* want to experiment:
+  //   HAPPY_STACKS_WT_ALLOW_HAPPY_NODE_MODULES_SYMLINK=1
+  const allowHappySymlink =
+    (process.env.HAPPY_STACKS_WT_ALLOW_HAPPY_NODE_MODULES_SYMLINK ?? process.env.HAPPY_LOCAL_WT_ALLOW_HAPPY_NODE_MODULES_SYMLINK ?? '')
+      .toString()
+      .trim() === '1';
+  if (c === 'happy' && !allowHappySymlink) return false;
+  return true;
+}
+
+async function maybeSetupDeps({ repoRoot, baseDir, worktreeDir, depsMode, component }) {
   if (!depsMode || depsMode === 'none') {
     return { mode: 'none', linked: false, installed: false, message: null };
   }
 
   // Prefer explicit baseDir if provided, otherwise link from the primary checkout (repoRoot).
   const linkFrom = baseDir || repoRoot;
+  const allowSymlink = allowNodeModulesSymlinkForComponent(component);
 
   if (depsMode === 'link' || depsMode === 'link-or-install') {
-    const res = await linkNodeModules({ fromDir: linkFrom, toDir: worktreeDir });
-    if (res.linked) {
-      return { mode: depsMode, linked: true, installed: false, message: null };
+    if (!allowSymlink) {
+      const msg =
+        `[wt] refusing to symlink node_modules for ${component} (Expo/Metro is often broken by symlinks).\n` +
+        `[wt] Fix: use --deps=install (recommended). To override: set HAPPY_STACKS_WT_ALLOW_HAPPY_NODE_MODULES_SYMLINK=1`;
+      if (depsMode === 'link') {
+        return { mode: depsMode, linked: false, installed: false, message: msg };
+      }
+      // link-or-install: fall through to install.
+    } else {
+      const res = await linkNodeModules({ fromDir: linkFrom, toDir: worktreeDir });
+      if (res.linked) {
+        return { mode: depsMode, linked: true, installed: false, message: null };
+      }
+      if (depsMode === 'link') {
+        return { mode: depsMode, linked: false, installed: false, message: res.reason };
+      }
+      // fall through to install
     }
-    if (depsMode === 'link') {
-      return { mode: depsMode, linked: false, installed: false, message: res.reason };
-    }
-    // fall through to install
   }
 
   const inst = await installDependencies({ dir: worktreeDir });
@@ -679,7 +739,7 @@ async function cmdNew({ rootDir, argv }) {
   }
 
   const depsMode = parseDepsMode(kv.get('--deps'));
-  const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: destPath, depsMode });
+  const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: destPath, depsMode, component });
 
   const shouldUse = flags.has('--use');
   const force = flags.has('--force');
@@ -765,8 +825,14 @@ async function cmdPr({ rootDir, argv }) {
     throw new Error(`[wt] unable to parse PR: ${prInput}`);
   }
 
-  const remoteName = (kv.get('--remote') ?? '').trim() || 'upstream';
-  const { owner } = await resolveRemoteOwner(repoRoot, remoteName);
+  const remoteFromArg = (kv.get('--remote') ?? '').trim();
+  const canFetchByUrl = !remoteFromArg && pr.owner && pr.repo;
+  const fetchTarget = canFetchByUrl ? `https://github.com/${pr.owner}/${pr.repo}.git` : null;
+
+  // If we can fetch directly from the PR URL's repo, do it. This avoids any assumptions about local
+  // remote names like "origin" vs "upstream" and works even when the repo doesn't have that remote set up.
+  const remoteName = canFetchByUrl ? '' : await normalizeRemoteName(repoRoot, remoteFromArg || 'upstream');
+  const { owner } = canFetchByUrl ? { owner: pr.owner } : await resolveRemoteOwner(repoRoot, remoteName);
 
   const slugExtra = sanitizeSlugPart(kv.get('--slug') ?? '');
   const slug = slugExtra ? `pr/${pr.number}-${slugExtra}` : `pr/${pr.number}`;
@@ -783,7 +849,9 @@ async function cmdPr({ rootDir, argv }) {
   }
 
   // Fetch PR head ref (GitHub convention). Use + to allow force-updated PR branches when --force is set.
-  const force = flags.has('--force');
+  // In sandbox mode, be more aggressive: the entire workspace is disposable, so it's safe to
+  // reset an existing local PR branch to the fetched PR head if needed.
+  const force = flags.has('--force') || isSandboxed();
   let oldHead = null;
   const prRef = `refs/pull/${pr.number}/head`;
   if (exists) {
@@ -799,14 +867,17 @@ async function cmdPr({ rootDir, argv }) {
     }
 
     oldHead = (await git(destPath, ['rev-parse', 'HEAD'])).trim();
-    await git(repoRoot, ['fetch', '--quiet', remoteName, prRef]);
+    await git(repoRoot, ['fetch', '--quiet', fetchTarget ?? remoteName, prRef]);
     const newTip = (await git(repoRoot, ['rev-parse', 'FETCH_HEAD'])).trim();
 
     const isAncestor = await gitOk(repoRoot, ['merge-base', '--is-ancestor', oldHead, newTip]);
     if (!isAncestor && !force) {
+      const hint = fetchTarget
+        ? `[wt] re-run with: happys wt pr ${component} ${pr.number} --update --force`
+        : `[wt] re-run with: happys wt pr ${component} ${pr.number} --remote=${remoteName} --update --force`;
       throw new Error(
         `[wt] PR update is not a fast-forward (likely force-push) for ${branchName}\n` +
-          `[wt] re-run with: happys wt pr ${component} ${pr.number} --remote=${remoteName} --update --force`
+          hint
       );
     }
 
@@ -837,16 +908,22 @@ async function cmdPr({ rootDir, argv }) {
       );
     }
   } else {
-    await git(repoRoot, ['fetch', '--quiet', remoteName, prRef]);
+    await git(repoRoot, ['fetch', '--quiet', fetchTarget ?? remoteName, prRef]);
     const newTip = (await git(repoRoot, ['rev-parse', 'FETCH_HEAD'])).trim();
 
     const branchExists = await gitOk(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`]);
     if (branchExists) {
       if (!force) {
-        throw new Error(`[wt] branch already exists: ${branchName}\n[wt] re-run with --force to reset it to the PR head`);
+        // If the branch already points at the fetched PR tip, we can safely just attach a worktree.
+        const branchHead = (await git(repoRoot, ['rev-parse', branchName])).trim();
+        if (branchHead !== newTip) {
+          throw new Error(`[wt] branch already exists: ${branchName}\n[wt] re-run with --force to reset it to the PR head`);
+        }
+        await git(repoRoot, ['worktree', 'add', destPath, branchName]);
+      } else {
+        await git(repoRoot, ['branch', '-f', branchName, newTip]);
+        await git(repoRoot, ['worktree', 'add', destPath, branchName]);
       }
-      await git(repoRoot, ['branch', '-f', branchName, newTip]);
-      await git(repoRoot, ['worktree', 'add', destPath, branchName]);
     } else {
       // Create worktree at PR head (new local branch).
       await git(repoRoot, ['worktree', 'add', '-b', branchName, destPath, newTip]);
@@ -855,7 +932,7 @@ async function cmdPr({ rootDir, argv }) {
 
   // Optional deps handling (useful when PR branches add/change dependencies).
   const depsMode = parseDepsMode(kv.get('--deps'));
-  const deps = await maybeSetupDeps({ repoRoot, baseDir: repoRoot, worktreeDir: destPath, depsMode });
+  const deps = await maybeSetupDeps({ repoRoot, baseDir: repoRoot, worktreeDir: destPath, depsMode, component });
 
   const shouldUse = flags.has('--use');
   if (shouldUse) {

@@ -4,14 +4,28 @@ import { join, resolve, sep } from 'node:path';
 
 import { printResult } from './utils/cli/cli.mjs';
 import { readEnvObjectFromFile } from './utils/env/read.mjs';
-import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { getComponentsDir, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { getStackRuntimeStatePath, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 import { getEnvValueAny } from './utils/env/values.mjs';
 import { padRight, parsePrefixedLabel, stripAnsi } from './utils/ui/text.mjs';
+import { commandExists } from './utils/proc/commands.mjs';
+import { renderQrAscii } from './utils/ui/qr.mjs';
+import { resolveMobileQrPayload } from './utils/mobile/dev_client_links.mjs';
 
 function nowTs() {
   const d = new Date();
   return d.toISOString().slice(11, 19);
+}
+
+function supportsAnsi() {
+  if (!process.stdout.isTTY) return false;
+  if (process.env.NO_COLOR) return false;
+  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
+  return true;
+}
+
+function cyan(s) {
+  return supportsAnsi() ? `\x1b[36m${s}\x1b[0m` : String(s);
 }
 
 function clamp(n, lo, hi) {
@@ -29,7 +43,13 @@ function pushLine(pane, line, { maxLines = 4000 } = {}) {
   }
 }
 
-function drawBox({ x, y, w, h, title, lines, scroll }) {
+function getPaneHeightForLines(lines, { min = 3, max = 16 } = {}) {
+  const n = Array.isArray(lines) ? lines.length : 0;
+  // +2 for box borders
+  return clamp(n + 2, min, max);
+}
+
+function drawBox({ x, y, w, h, title, lines, scroll, active = false }) {
   const top = y;
   const bottom = y + h - 1;
   const left = x;
@@ -53,12 +73,14 @@ function drawBox({ x, y, w, h, title, lines, scroll }) {
   const midLine = '│' + ' '.repeat(Math.max(0, w - 2)) + '│';
   const botLine = '└' + horiz + '┘';
 
+  const style = (s) => (active ? cyan(s) : s);
+
   const out = [];
-  out.push({ row: top, col: left, text: topLine });
+  out.push({ row: top, col: left, text: style(topLine) });
   for (let r = top + 1; r < bottom; r++) {
-    out.push({ row: r, col: left, text: midLine });
+    out.push({ row: r, col: left, text: style(midLine) });
   }
-  out.push({ row: bottom, col: left, text: botLine });
+  out.push({ row: bottom, col: left, text: style(botLine) });
 
   const innerW = Math.max(0, w - 2);
   const innerH = Math.max(0, h - 2);
@@ -93,13 +115,34 @@ function inferStackNameFromForwardedArgs(args) {
 
 const readEnvObject = readEnvObjectFromFile;
 
+function getEnvVal(env, key, legacyKey) {
+  return getEnvValueAny(env, [key, legacyKey]) || '';
+}
+
+function nextLineBreakIndex(s) {
+  const n = s.indexOf('\n');
+  const r = s.indexOf('\r');
+  if (n < 0) return r;
+  if (r < 0) return n;
+  return Math.min(n, r);
+}
+
+function consumeLineBreak(buf) {
+  if (buf.startsWith('\r\n')) return buf.slice(2);
+  if (buf.startsWith('\n') || buf.startsWith('\r')) return buf.slice(1);
+  return buf;
+}
+
 function formatComponentRef({ rootDir, component, dir }) {
   const raw = String(dir ?? '').trim();
   if (!raw) return '(unset)';
 
   const abs = resolve(raw);
-  const defaultDir = resolve(join(rootDir, 'components', component));
-  const worktreesPrefix = resolve(join(rootDir, 'components', '.worktrees', component)) + sep;
+  // Respect sandbox workspace layout:
+  // - default: <workspace>/components/<component>
+  // - worktrees: <workspace>/components/.worktrees/<component>/<owner>/<branch...>
+  const defaultDir = resolve(join(getComponentsDir(rootDir), component));
+  const worktreesPrefix = resolve(join(getComponentsDir(rootDir), '.worktrees', component)) + sep;
 
   if (abs === defaultDir) return 'default';
   if (abs.startsWith(worktreesPrefix)) {
@@ -118,7 +161,9 @@ async function buildStackSummaryLines({ rootDir, stackName }) {
     getEnvValueAny(env, ['HAPPY_STACKS_SERVER_COMPONENT', 'HAPPY_LOCAL_SERVER_COMPONENT']) || 'happy-server-light';
 
   const ports = runtime?.ports && typeof runtime.ports === 'object' ? runtime.ports : {};
-  const expoWebPort = runtime?.expo && typeof runtime.expo === 'object' ? runtime.expo.webPort : null;
+  const expo = runtime?.expo && typeof runtime.expo === 'object' ? runtime.expo : {};
+  const expoPort = expo?.port ?? expo?.webPort ?? expo?.mobilePort ?? null;
+  const expoDevClientEnabled = Boolean(expo?.devClientEnabled);
   const processes = runtime?.processes && typeof runtime.processes === 'object' ? runtime.processes : {};
 
   const components = [
@@ -150,13 +195,21 @@ async function buildStackSummaryLines({ rootDir, stackName }) {
   lines.push('');
   lines.push('ports:');
   lines.push(`  server: ${ports?.server ?? '(unknown)'}`);
-  if (expoWebPort) lines.push(`  ui: ${expoWebPort}`);
+  if (expoPort) lines.push(`  expo: ${expoPort}`);
   if (ports?.backend) lines.push(`  backend: ${ports.backend}`);
+
+  if (expoPort && expoDevClientEnabled) {
+    const payload = resolveMobileQrPayload({ env: process.env, port: Number(expoPort) });
+    lines.push('');
+    lines.push('expo dev-client links:');
+    if (payload.metroUrl) lines.push(`  metro: ${payload.metroUrl}`);
+    if (payload.scheme && payload.deepLink) lines.push(`  link:  ${payload.deepLink}`);
+  }
 
   lines.push('');
   lines.push('pids:');
   if (processes?.serverPid) lines.push(`  serverPid: ${processes.serverPid}`);
-  if (processes?.expoWebPid) lines.push(`  expoWebPid: ${processes.expoWebPid}`);
+  if (processes?.expoPid) lines.push(`  expoPid: ${processes.expoPid}`);
   if (processes?.daemonPid) lines.push(`  daemonPid: ${processes.daemonPid}`);
   if (processes?.uiGatewayPid) lines.push(`  uiGatewayPid: ${processes.uiGatewayPid}`);
 
@@ -168,6 +221,29 @@ async function buildStackSummaryLines({ rootDir, stackName }) {
   }
 
   return lines;
+}
+
+async function buildExpoQrPaneLines({ stackName }) {
+  const runtimePath = getStackRuntimeStatePath(stackName);
+  const runtime = await readStackRuntimeStateFile(runtimePath);
+  const expo = runtime?.expo && typeof runtime.expo === 'object' ? runtime.expo : {};
+  const port = Number(expo?.port ?? expo?.mobilePort ?? expo?.webPort);
+  const enabled = Boolean(expo?.devClientEnabled);
+  if (!enabled || !Number.isFinite(port) || port <= 0) {
+    return { visible: false, lines: [] };
+  }
+
+  const payload = resolveMobileQrPayload({ env: process.env, port });
+  // Try to keep the QR compact:
+  // - qrcode-terminal uses a terminal-friendly pattern with adequate quiet-zone.
+  const qr = await renderQrAscii(payload.payload, { small: true });
+  const lines = [];
+  if (qr.ok) {
+    lines.push(...qr.lines);
+  } else {
+    lines.push(`(QR unavailable) ${qr.error || ''}`.trim());
+  }
+  return { visible: true, lines };
 }
 
 async function main() {
@@ -203,7 +279,7 @@ async function main() {
         '  q / Ctrl+C      : quit (sends SIGINT to child)',
         '',
         'panes (default):',
-        '  orchestration | summary | local | server | ui | daemon | stack logs',
+        '  orchestration | summary | local | server | expo | daemon | stack logs',
       ].join('\n'),
     });
     return;
@@ -222,11 +298,13 @@ async function main() {
   const panes = [
     mkPane('orch', 'orchestration', { visible: true, kind: 'log' }),
     mkPane('summary', `stack summary (${stackName})`, { visible: true, kind: 'summary' }),
+    // Data-only pane: we render QR inside the Expo pane (no separate box).
+    mkPane('qr', 'expo QR', { visible: false, kind: 'qr' }),
     mkPane('local', 'local', { visible: true, kind: 'log' }),
-    mkPane('server', 'server', { visible: true, kind: 'log' }),
-    mkPane('ui', 'ui', { visible: true, kind: 'log' }),
-    mkPane('daemon', 'daemon', { visible: true, kind: 'log' }),
-    mkPane('stacklog', 'stack logs', { visible: true, kind: 'log' }),
+    mkPane('server', 'server', { visible: false, kind: 'log' }),
+    mkPane('expo', 'expo', { visible: false, kind: 'log' }),
+    mkPane('daemon', 'daemon', { visible: false, kind: 'log' }),
+    mkPane('stacklog', 'stack logs', { visible: false, kind: 'log' }),
   ];
 
   const paneIndexById = new Map(panes.map((p, i) => [p.id, i]));
@@ -237,12 +315,18 @@ async function main() {
 
     let paneId = 'local';
     if (normalized.includes('server')) paneId = 'server';
-    else if (normalized === 'ui') paneId = 'ui';
+    else if (normalized === 'ui') paneId = 'expo';
+    else if (normalized === 'mobile') paneId = 'expo';
+    else if (normalized === 'expo') paneId = 'expo';
     else if (normalized.includes('daemon')) paneId = 'daemon';
     else if (normalized === 'stack') paneId = 'stacklog';
     else if (normalized === 'local') paneId = 'local';
 
     const idx = paneIndexById.get(paneId) ?? paneIndexById.get('local');
+    if (panes[idx] && !panes[idx].visible && panes[idx].kind === 'log') {
+      panes[idx].visible = true;
+      // If the focused pane was hidden before, keep focus stable but ensure render updates layout.
+    }
     pushLine(panes[idx], line);
   };
 
@@ -251,28 +335,40 @@ async function main() {
   };
 
   let layout = 'columns'; // single | split | columns
-  let focused = 2; // local
+  let focused = paneIndexById.get('local'); // default focus
   let paused = false;
   let renderScheduled = false;
 
-  const child = spawn(process.execPath, [happysBin, ...forwarded], {
-    cwd: rootDir,
-    env: { ...process.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: process.platform !== 'win32',
-  });
+  const wantsPty = process.platform !== 'win32' && (await commandExists('script', { cwd: rootDir }));
+  const child = wantsPty
+    ? // Use a pseudo-terminal so tools like Expo print QR/status output that they hide in non-TTY mode.
+      // `script` is available by default on macOS (and common on Linux).
+      spawn('script', ['-q', '/dev/null', process.execPath, happysBin, ...forwarded], {
+        cwd: rootDir,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      })
+    : spawn(process.execPath, [happysBin, ...forwarded], {
+        cwd: rootDir,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      });
 
-  logOrch(`spawned: node ${happysBin} ${forwarded.join(' ')} (pid=${child.pid})`);
+  logOrch(
+    `spawned: ${wantsPty ? 'script -q /dev/null ' : ''}node ${happysBin} ${forwarded.join(' ')} (pid=${child.pid})`
+  );
 
   const buf = { out: '', err: '' };
   const flush = (kind) => {
     const key = kind === 'stderr' ? 'err' : 'out';
     let b = buf[key];
     while (true) {
-      const idx = b.indexOf('\n');
+      const idx = nextLineBreakIndex(b);
       if (idx < 0) break;
       const line = b.slice(0, idx);
-      b = b.slice(idx + 1);
+      b = consumeLineBreak(b.slice(idx));
       routeLine(line);
     }
     buf[key] = b;
@@ -300,6 +396,19 @@ async function main() {
       panes[idx].lines = lines;
     } catch (e) {
       panes[idx].lines = [`summary error: ${e instanceof Error ? e.message : String(e)}`];
+    }
+
+    // QR pane: driven by runtime state (expo port) and rendered independently of logs.
+    try {
+      const qrIdx = paneIndexById.get('qr');
+      const qr = await buildExpoQrPaneLines({ stackName });
+      // Data-only pane (kept hidden): rendered inside the expo pane.
+      panes[qrIdx].visible = false;
+      panes[qrIdx].lines = qr.lines;
+    } catch {
+      const qrIdx = paneIndexById.get('qr');
+      panes[qrIdx].visible = false;
+      panes[qrIdx].lines = [];
     }
     scheduleRender();
   }
@@ -374,7 +483,9 @@ async function main() {
     process.stdout.write('\x1b[?25l');
     process.stdout.write('\x1b[2J\x1b[H');
 
-    const header = `happys tui | ${forwarded.join(' ')} | layout=${layout} | focus=${panes[focused]?.title ?? focused}`;
+    const focusPane = panes[focused];
+    const focusLabel = focusPane ? `${focusPane.id} (${focusPane.title})` : String(focused);
+    const header = `happys tui | ${forwarded.join(' ')} | layout=${layout} | focus=${focusLabel}`;
     process.stdout.write(padRight(header, cols) + '\n');
 
     const bodyY = 1;
@@ -382,9 +493,22 @@ async function main() {
     const footerY = rows - 1;
 
     const drawWrites = [];
+
+    const contentY = bodyY;
+    let contentH = bodyH;
+
     if (layout === 'single') {
       const pane = panes[focused];
-      const box = drawBox({ x: 0, y: bodyY, w: cols, h: bodyH, title: pane.title, lines: pane.lines, scroll: pane.scroll });
+      const box = drawBox({
+        x: 0,
+        y: contentY,
+        w: cols,
+        h: contentH,
+        title: pane.title,
+        lines: pane.lines,
+        scroll: pane.scroll,
+        active: true,
+      });
       pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
       drawWrites.push(...box.out);
     } else if (layout === 'split') {
@@ -394,38 +518,184 @@ async function main() {
       const leftPane = panes[paneIndexById.get('orch')];
       const rightPane = panes[focused === paneIndexById.get('orch') ? paneIndexById.get('local') : focused];
 
-      const leftBox = drawBox({ x: 0, y: bodyY, w: leftW, h: bodyH, title: leftPane.title, lines: leftPane.lines, scroll: leftPane.scroll });
+      const leftBox = drawBox({
+        x: 0,
+        y: contentY,
+        w: leftW,
+        h: contentH,
+        title: leftPane.title,
+        lines: leftPane.lines,
+        scroll: leftPane.scroll,
+        active: focused === paneIndexById.get('orch'),
+      });
       leftPane.scroll = clamp(leftPane.scroll, 0, leftBox.maxScroll);
       drawWrites.push(...leftBox.out);
 
-      const rightBox = drawBox({ x: leftW, y: bodyY, w: rightW, h: bodyH, title: rightPane.title, lines: rightPane.lines, scroll: rightPane.scroll });
+      const rightBox = drawBox({
+        x: leftW,
+        y: contentY,
+        w: rightW,
+        h: contentH,
+        title: rightPane.title,
+        lines: rightPane.lines,
+        scroll: rightPane.scroll,
+        active: focused === (paneIndexById.get(rightPane.id) ?? focused),
+      });
       rightPane.scroll = clamp(rightPane.scroll, 0, rightBox.maxScroll);
       drawWrites.push(...rightBox.out);
     } else {
-      // columns: render all visible panes in two columns, stacked.
-      const visible = visiblePaneIndexes().map((idx) => panes[idx]);
+      // columns: render a compact top row (orch + summary), then render QR alongside Expo logs.
+      const orchIdx = paneIndexById.get('orch');
+      const summaryIdx = paneIndexById.get('summary');
+      const qrIdx = paneIndexById.get('qr');
+      const qrPane = panes[qrIdx];
+      const qrVisible = Boolean(qrPane?.visible && qrPane.lines?.length);
+
+      const topPanes = [panes[orchIdx], panes[summaryIdx]];
+      const topCount = topPanes.length;
+      const topH = getPaneHeightForLines(panes[summaryIdx].lines, { min: 6, max: 14 });
+
+      const topY = contentY;
+      const belowY = contentY + topH;
+      const belowH = Math.max(0, contentH - topH);
+
+      const colW = Math.floor(cols / topCount);
+      for (let i = 0; i < topCount; i++) {
+        const pane = topPanes[i];
+        const x = i === topCount - 1 ? colW * i : colW * i;
+        const w = i === topCount - 1 ? cols - colW * i : colW;
+        const box = drawBox({
+          x,
+          y: topY,
+          w,
+          h: topH,
+          title: pane.title,
+          lines: pane.lines,
+          scroll: pane.scroll,
+          active: paneIndexById.get(pane.id) === focused,
+        });
+        pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
+        drawWrites.push(...box.out);
+      }
+
+      // Remaining panes: exclude the top-row panes. QR is rendered inside the expo pane.
+      const visibleAll = visiblePaneIndexes()
+        .filter((idx) => idx !== orchIdx && idx !== summaryIdx && idx !== qrIdx)
+        .map((idx) => panes[idx]);
       const leftW = Math.floor(cols / 2);
       const rightW = cols - leftW;
 
       const leftPanes = [];
       const rightPanes = [];
+      const expoPane = panes[paneIndexById.get('expo')];
+      const visible = visibleAll.filter((p) => p !== expoPane);
       for (let i = 0; i < visible.length; i++) {
         (i % 2 === 0 ? leftPanes : rightPanes).push(visible[i]);
+      }
+      if (expoPane?.visible) {
+        rightPanes.unshift(expoPane);
       }
 
       const layoutColumn = (colX, colW, colPanes) => {
         if (!colPanes.length) return;
         const n = colPanes.length;
-        const base = Math.max(3, Math.floor(bodyH / n));
-        let y = bodyY;
+        const base = Math.max(3, Math.floor(belowH / n));
+        let y = belowY;
         for (let i = 0; i < n; i++) {
           const pane = colPanes[i];
-          const remaining = bodyY + bodyH - y;
-          const h = i === n - 1 ? remaining : Math.min(base, remaining);
+          const remaining = belowY + belowH - y;
+          let h = i === n - 1 ? remaining : Math.min(base, remaining);
           if (h < 3) break;
-          const box = drawBox({ x: colX, y, w: colW, h, title: pane.title, lines: pane.lines, scroll: pane.scroll });
-          pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
-          drawWrites.push(...box.out);
+          if (pane.id === 'expo') {
+            const qrLines = Array.isArray(qrPane?.lines) ? qrPane.lines : [];
+            const qrHas = Boolean(qrLines.length);
+            const qrMinH = qrHas ? Math.max(6, qrLines.length + 2) : 0; // +2 borders
+            if (qrMinH && h < qrMinH) {
+              h = Math.min(remaining, qrMinH);
+              if (h < 3) break;
+            }
+
+            if (qrHas) {
+              // Split the expo pane horizontally:
+              // left = expo logs, right = QR. This uses width instead of extra height.
+              const maxLineLen = qrLines.reduce((m, l) => Math.max(m, stripAnsi(l).length), 0);
+              const minLogW = 24;
+              const minQrW = 22;
+              const maxQrW = Math.max(0, Math.min(80, colW - minLogW));
+              const fixedQrWRaw = (process.env.HAPPY_STACKS_TUI_QR_WIDTH ?? process.env.HAPPY_LOCAL_TUI_QR_WIDTH ?? '').toString().trim();
+              const fixedQrW = fixedQrWRaw ? Number(fixedQrWRaw) : 44;
+              const qrW = clamp(Number.isFinite(fixedQrW) && fixedQrW > 0 ? fixedQrW : maxLineLen + 2, minQrW, maxQrW);
+              const canSplit = qrW >= minQrW && colW - qrW >= minLogW;
+
+              if (canSplit) {
+                const logW = colW - qrW;
+                const logBox = drawBox({
+                  x: colX,
+                  y,
+                  w: logW,
+                  h,
+                  title: pane.title,
+                  lines: pane.lines,
+                  scroll: pane.scroll,
+                  active: paneIndexById.get(pane.id) === focused,
+                });
+                pane.scroll = clamp(pane.scroll, 0, logBox.maxScroll);
+                drawWrites.push(...logBox.out);
+
+                const qrBox = drawBox({
+                  x: colX + logW,
+                  y,
+                  w: qrW,
+                  h,
+                  title: qrPane.title,
+                  lines: qrLines,
+                  scroll: 0,
+                  active: paneIndexById.get(pane.id) === focused,
+                });
+                drawWrites.push(...qrBox.out);
+              } else {
+                // Too narrow to split cleanly: fallback to single expo log box.
+                const box = drawBox({
+                  x: colX,
+                  y,
+                  w: colW,
+                  h,
+                  title: pane.title,
+                  lines: pane.lines,
+                  scroll: pane.scroll,
+                  active: paneIndexById.get(pane.id) === focused,
+                });
+                pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
+                drawWrites.push(...box.out);
+              }
+            } else {
+              const box = drawBox({
+                x: colX,
+                y,
+                w: colW,
+                h,
+                title: pane.title,
+                lines: pane.lines,
+                scroll: pane.scroll,
+                active: paneIndexById.get(pane.id) === focused,
+              });
+              pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
+              drawWrites.push(...box.out);
+            }
+          } else {
+            const box = drawBox({
+              x: colX,
+              y,
+              w: colW,
+              h,
+              title: pane.title,
+              lines: pane.lines,
+              scroll: pane.scroll,
+              active: paneIndexById.get(pane.id) === focused,
+            });
+            pane.scroll = clamp(pane.scroll, 0, box.maxScroll);
+            drawWrites.push(...box.out);
+          }
           y += h;
         }
       };

@@ -1,7 +1,7 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree } from './utils/proc/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
+import { componentDirEnvKey, getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/net/ports.mjs';
 import { getServerComponentName, isHappyServerRunning } from './utils/server/server.mjs';
 import { requireDir } from './utils/proc/pm.mjs';
@@ -17,12 +17,14 @@ import { resolveStackContext } from './utils/stack/context.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { ensureDevCliReady, prepareDaemonAuthSeed, startDevDaemon, watchHappyCliAndRestartDaemon } from './utils/dev/daemon.mjs';
 import { startDevServer, watchDevServerAndRestart } from './utils/dev/server.mjs';
-import { startDevExpoWebUi } from './utils/dev/expo_web.mjs';
-import { startDevExpoMobile } from './utils/dev/expo_mobile.mjs';
-import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
+import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
+import { preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
 import { sanitizeDnsLabel } from './utils/net/dns.mjs';
+import { getAccountCountForServerComponent, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
+import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
+import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 
 /**
  * Dev mode stack:
@@ -47,11 +49,23 @@ async function main() {
         '  happys dev --no-browser # do not open the UI in your browser automatically',
         '  happys dev --mobile     # also start Expo dev-client Metro for mobile',
         '  note: --json prints the resolved config (dry-run) and exits.',
+        '',
+        'note:',
+        '  If run from inside a component checkout/worktree, that checkout is used for this run (without requiring `happys wt use`).',
       ].join('\n'),
     });
     return;
   }
   const rootDir = getRootDir(import.meta.url);
+
+  const inferred = inferComponentFromCwd({
+    rootDir,
+    invokedCwd: getInvokedCwd(process.env),
+    components: ['happy', 'happy-cli', 'happy-server-light', 'happy-server'],
+  });
+  if (inferred) {
+    process.env[componentDirEnvKey(inferred.component)] = inferred.repoDir;
+  }
 
   const serverComponentName = getServerComponentName({ kv });
   if (serverComponentName === 'both') {
@@ -85,7 +99,10 @@ async function main() {
   // - Only the main stack should ever auto-enable (or prefer) Tailscale Serve by default.
   // - Non-main stacks should default to localhost URLs unless the user explicitly configured a public URL
   //   OR Tailscale Serve is already configured for this stack's internal URL (status matches).
-  const allowEnableTailscale = !stackMode || stackName === 'main';
+  const allowEnableTailscale =
+    !stackMode ||
+    stackName === 'main' ||
+    (baseEnv.HAPPY_STACKS_TAILSCALE_SERVE ?? baseEnv.HAPPY_LOCAL_TAILSCALE_SERVE ?? '0').toString().trim() === '1';
   const resolvedUrls = await resolveServerUrls({ env: baseEnv, serverPort, allowEnable: allowEnableTailscale });
   const internalServerUrl = resolvedUrls.internalServerUrl;
   let publicServerUrl = resolvedUrls.publicServerUrl;
@@ -96,6 +113,8 @@ async function main() {
       publicServerUrl = resolvedUrls.defaultPublicUrl;
     }
   }
+  // Expo app config: this is what both web + native app use to reach the Happy server.
+  // LAN rewrite (for dev-client) is centralized in ensureDevExpoServer.
   const uiApiUrl = resolvedUrls.defaultPublicUrl;
   const restart = flags.has('--restart');
   const cliHomeDir = process.env.HAPPY_LOCAL_CLI_HOME_DIR?.trim()
@@ -139,13 +158,25 @@ async function main() {
   const serverAlreadyRunning = await isHappyServerRunning(internalServerUrl);
   const daemonAlreadyRunning = startDaemon ? isDaemonRunning(cliHomeDir) : false;
 
-  // UI dev server state (worktree-scoped)
-  const uiPaths = getExpoStatePaths({ baseDir: autostart.baseDir, kind: 'ui-dev', projectDir: uiDir, stateFileName: 'ui.state.json' });
-  const uiRunning = startUi ? await isStateProcessRunning(uiPaths.statePath) : { running: false, state: null };
-  let uiAlreadyRunning = Boolean(uiRunning.running);
+  // Expo dev server state (worktree-scoped): single Expo process per stack/worktree.
+  const startExpo = startUi || startMobile;
+  const expoPaths = getExpoStatePaths({
+    baseDir: autostart.baseDir,
+    kind: 'expo-dev',
+    projectDir: uiDir,
+    stateFileName: 'expo.state.json',
+  });
+  const expoRunning = startExpo ? await isStateProcessRunning(expoPaths.statePath) : { running: false, state: null };
+  let expoAlreadyRunning = Boolean(expoRunning.running);
 
-  if (!restart && serverAlreadyRunning && (!startDaemon || daemonAlreadyRunning) && (!startUi || uiAlreadyRunning)) {
-    console.log(`[local] dev: stack already running (server=${internalServerUrl}${startDaemon ? ` daemon=${daemonAlreadyRunning ? 'running' : 'stopped'}` : ''}${startUi ? ` ui=${uiAlreadyRunning ? 'running' : 'stopped'}` : ''})`);
+  if (!restart && serverAlreadyRunning && (!startDaemon || daemonAlreadyRunning) && (!startExpo || expoAlreadyRunning)) {
+    console.log(
+      `[local] dev: stack already running (server=${internalServerUrl}` +
+        `${startDaemon ? ` daemon=${daemonAlreadyRunning ? 'running' : 'stopped'}` : ''}` +
+        `${startUi ? ` ui=${expoAlreadyRunning ? 'running' : 'stopped'}` : ''}` +
+        `${startMobile ? ` mobile=${expoAlreadyRunning ? 'running' : 'stopped'}` : ''}` +
+        `)`
+    );
     return;
   }
 
@@ -197,6 +228,75 @@ async function main() {
   // - Ensure schema exists (server-light: db push; happy-server: migrate deploy if tables missing)
   // - Auto-seed from main only when needed (non-main + non-interactive default, and only if missing creds or 0 accounts)
   const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const accountProbe = await getAccountCountForServerComponent({
+    serverComponentName,
+    serverDir,
+    env: serverEnv,
+    bestEffort: true,
+  });
+  const accountCount = typeof accountProbe.accountCount === 'number' ? accountProbe.accountCount : null;
+  const autoSeedEnabled = resolveAutoCopyFromMainEnabled({ env: baseEnv, stackName, isInteractive });
+
+  let expoResEarly = null;
+  const wantsAuthFlow =
+    (baseEnv.HAPPY_STACKS_AUTH_FLOW ?? baseEnv.HAPPY_LOCAL_AUTH_FLOW ?? '').toString().trim() === '1' ||
+    (baseEnv.HAPPY_STACKS_DAEMON_WAIT_FOR_AUTH ?? baseEnv.HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH ?? '').toString().trim() === '1';
+
+  // CRITICAL (review-pr / setup-pr guided login):
+  // In background/non-interactive runs, the daemon may block on auth. If we wait to start Expo web
+  // until after the daemon is authenticated, guided login will have no UI origin and will fall back
+  // to the server port (wrong). Start Expo web UI early when running an auth flow.
+  if (wantsAuthFlow && startUi && !expoResEarly) {
+    expoResEarly = await ensureDevExpoServer({
+      startUi,
+      startMobile,
+      uiDir,
+      autostart,
+      baseEnv,
+      apiServerUrl: uiApiUrl,
+      restart,
+      stackMode,
+      runtimeStatePath,
+      stackName,
+      envPath,
+      children,
+      spawnOptions: { stdio: ['ignore', 'ignore', 'ignore'] },
+    });
+  }
+  await maybeRunInteractiveStackAuthSetup({
+    rootDir,
+    // In dev mode, guided login must target the Expo web UI origin (not the server port).
+    // Mark this as an auth-flow so URL resolution fails closed if Expo isn't ready.
+    env: startUi ? { ...baseEnv, HAPPY_STACKS_AUTH_FLOW: '1', HAPPY_LOCAL_AUTH_FLOW: '1' } : baseEnv,
+    stackName,
+    cliHomeDir,
+    accountCount,
+    isInteractive,
+    autoSeedEnabled,
+    beforeLogin: async () => {
+      if (!startUi) {
+        throw new Error(
+          `[local] auth: interactive login requires the web UI.\n` +
+            `Re-run without --no-ui, or set HAPPY_WEBAPP_URL to a reachable Happy UI for this stack.`
+        );
+      }
+      if (expoResEarly) return;
+      expoResEarly = await ensureDevExpoServer({
+        startUi,
+        startMobile,
+        uiDir,
+        autostart,
+        baseEnv,
+        apiServerUrl: uiApiUrl,
+        restart,
+        stackMode,
+        runtimeStatePath,
+        stackName,
+        envPath,
+        children,
+      });
+    },
+  });
   await prepareDaemonAuthSeed({
     rootDir,
     env: baseEnv,
@@ -267,64 +367,50 @@ async function main() {
     );
   }
 
-  const uiRes = await startDevExpoWebUi({
-    startUi,
-    uiDir,
-    autostart,
-    baseEnv,
-    apiServerUrl: uiApiUrl,
-    restart,
-    stackMode,
-    runtimeStatePath,
-    stackName,
-    envPath,
-    children,
-  });
+  const expoRes =
+    expoResEarly ??
+    (await ensureDevExpoServer({
+      startUi,
+      startMobile,
+      uiDir,
+      autostart,
+      baseEnv,
+      apiServerUrl: uiApiUrl,
+      restart,
+      stackMode,
+      runtimeStatePath,
+      stackName,
+      envPath,
+      children,
+    }));
   if (startUi) {
-    const host = resolveLocalhostHost({ stackMode, stackName });
-    if (uiRes?.reason === 'already_running' && uiRes.port) {
-      console.log(`[local] ui already running (pid=${uiRes.pid}, port=${uiRes.port})`);
-      console.log(`[local] ui: open http://${host}:${uiRes.port}`);
-    } else if (uiRes?.skipped === false && uiRes.port) {
-      console.log(`[local] ui: open http://${host}:${uiRes.port}`);
-    } else if (uiRes?.skipped && uiRes?.reason === 'already_running') {
+    const uiPort = expoRes?.port;
+    const uiUrlRaw = uiPort ? `http://localhost:${uiPort}` : '';
+    const uiUrl = uiUrlRaw ? await preferStackLocalhostUrl(uiUrlRaw, { stackName }) : '';
+    if (expoRes?.reason === 'already_running' && expoRes.port) {
+      console.log(`[local] ui already running (pid=${expoRes.pid}, port=${expoRes.port})`);
+      if (uiUrl) console.log(`[local] ui: open ${uiUrl}`);
+    } else if (expoRes?.skipped === false && expoRes.port) {
+      if (uiUrl) console.log(`[local] ui: open ${uiUrl}`);
+    } else if (expoRes?.skipped && expoRes?.reason === 'already_running') {
       console.log('[local] ui already running (skipping Expo start)');
     }
 
     const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-    const shouldOpen = isInteractive && !noBrowser && Boolean(uiRes?.port);
+    const shouldOpen = isInteractive && !noBrowser && Boolean(expoRes?.port);
     if (shouldOpen) {
-      const url = `http://${host}:${uiRes.port}`;
       // Prefer localhost for readiness checks (faster/more reliable), but open the stack-scoped hostname.
-      await waitForHttpOk(`http://localhost:${uiRes.port}`, { timeoutMs: 30_000 }).catch(() => {});
-      const res = await openUrlInBrowser(url);
+      await waitForHttpOk(`http://localhost:${expoRes.port}`, { timeoutMs: 30_000 }).catch(() => {});
+      const res = await openUrlInBrowser(uiUrl);
       if (!res.ok) {
         console.warn(`[local] ui: failed to open browser automatically (${res.error}).`);
       }
     }
   }
 
-  const reservedPorts = new Set();
-  if (uiRes?.port && Number.isFinite(uiRes.port) && uiRes.port > 0) {
-    reservedPorts.add(Number(uiRes.port));
-  }
-
-  const mobileRes = await startDevExpoMobile({
-    startMobile,
-    uiDir,
-    autostart,
-    baseEnv,
-    apiServerUrl: uiApiUrl,
-    restart,
-    stackMode,
-    runtimeStatePath,
-    stackName,
-    envPath,
-    children,
-    reservedPorts,
-  });
-  if (startMobile && mobileRes?.port) {
-    console.log(`[local] mobile: metro http://localhost:${mobileRes.port}`);
+  if (startMobile && expoRes?.port) {
+    const metroUrl = await preferStackLocalhostUrl(`http://localhost:${expoRes.port}`, { stackName });
+    console.log(`[local] mobile: metro ${metroUrl}`);
   }
 
   const shutdown = async () => {

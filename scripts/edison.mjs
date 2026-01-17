@@ -8,7 +8,7 @@ import { readTextOrEmpty } from './utils/fs/ops.mjs';
 import { readJsonIfExists } from './utils/fs/json.mjs';
 import { isPidAlive } from './utils/proc/pids.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
+import { preferStackLocalhostHost, resolveLocalhostHost } from './utils/paths/localhost_host.mjs';
 import { sanitizeStackName } from './utils/stack/names.mjs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -1781,7 +1781,9 @@ async function main() {
   env.HAPPY_STACKS_EDISON_WRAPPER = '1';
   // Provide a stack-scoped localhost hostname for validators and browser flows.
   // This ensures origin isolation even if ports are reused later (common with ephemeral ports).
-  const localhostHost = resolveLocalhostHost({ stackMode: Boolean(stackName), stackName: stackName || 'main' });
+  const localhostHost = Boolean(stackName)
+    ? await preferStackLocalhostHost({ stackName })
+    : resolveLocalhostHost({ stackMode: false, stackName: 'main' });
   env.HAPPY_STACKS_LOCALHOST_HOST = localhostHost;
   env.HAPPY_LOCAL_LOCALHOST_HOST = localhostHost;
 

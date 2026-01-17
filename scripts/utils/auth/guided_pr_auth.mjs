@@ -1,25 +1,5 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { isTty, promptSelect, withRl } from '../cli/wizard.mjs';
-import { resolveStackEnvPath } from '../paths/paths.mjs';
-
-function stackHasAccessKey(stackName) {
-  try {
-    const { baseDir, envPath } = resolveStackEnvPath(stackName);
-    if (!existsSync(envPath)) return false;
-    return existsSync(join(baseDir, 'cli', 'access.key'));
-  } catch {
-    return false;
-  }
-}
-
-export function detectSeedableAuthSources() {
-  const out = [];
-  if (stackHasAccessKey('dev-auth')) out.push('dev-auth');
-  if (stackHasAccessKey('main')) out.push('main');
-  return out;
-}
+import { detectSeedableAuthSources } from './sources.mjs';
 
 /**
  * Decide how a PR review stack should authenticate.
@@ -49,6 +29,11 @@ export async function decidePrAuthPlan({
     // Non-interactive default: prefer seeding only if explicitly configured elsewhere.
     // setup-pr will handle its own defaults.
     return { mode: 'auto', sources };
+  }
+
+  // If there's nothing to reuse, don't ask a pointless question.
+  if (!sources.length) {
+    return { mode: 'login', loginNow: defaultLoginNow, reason: 'no_seed_sources' };
   }
 
   // Interactive prompt: keep it simple for reviewers.

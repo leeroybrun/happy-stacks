@@ -1,6 +1,6 @@
 import './utils/env/env.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { getInternalServerUrl, getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
 import { ensureMacAutostartDisabled, ensureMacAutostartEnabled } from './utils/service/autostart_darwin.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
@@ -278,7 +278,7 @@ async function postStartDiagnostics() {
   }
   const { publicServerUrl: publicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port });
 
-  const cliDir = join(rootDir, 'components', 'happy-cli');
+  const cliDir = getComponentDir(rootDir, 'happy-cli');
   const cliBin = join(cliDir, 'bin', 'happy.mjs');
 
   const accessKey = join(cliHomeDir, 'access.key');

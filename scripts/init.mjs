@@ -199,7 +199,9 @@ async function main() {
   const storageDirRaw = parseArgValue(argv, 'storage-dir');
   const storageDirOverride = expandHome((storageDirRaw ?? '').trim());
   if (storageDirOverride) {
-    process.env.HAPPY_STACKS_STORAGE_DIR = process.env.HAPPY_STACKS_STORAGE_DIR ?? storageDirOverride;
+    // In sandbox mode, storage dir MUST be isolated and must override any pre-existing env.
+    process.env.HAPPY_STACKS_STORAGE_DIR = isSandboxed() ? storageDirOverride : (process.env.HAPPY_STACKS_STORAGE_DIR ?? storageDirOverride);
+    process.env.HAPPY_LOCAL_STORAGE_DIR = process.env.HAPPY_LOCAL_STORAGE_DIR ?? process.env.HAPPY_STACKS_STORAGE_DIR;
   }
 
   const cliRootDirRaw = parseArgValue(argv, 'cli-root-dir');

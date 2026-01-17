@@ -1,13 +1,27 @@
 import { spawn } from 'node:child_process';
 
+function nextLineBreakIndex(s) {
+  const n = s.indexOf('\n');
+  const r = s.indexOf('\r');
+  if (n < 0) return r;
+  if (r < 0) return n;
+  return Math.min(n, r);
+}
+
+function consumeLineBreak(buf) {
+  if (buf.startsWith('\r\n')) return buf.slice(2);
+  if (buf.startsWith('\n') || buf.startsWith('\r')) return buf.slice(1);
+  return buf;
+}
+
 function writeWithPrefix(stream, prefix, bufState, chunk) {
   const s = chunk.toString();
   bufState.buf += s;
   while (true) {
-    const idx = bufState.buf.indexOf('\n');
+    const idx = nextLineBreakIndex(bufState.buf);
     if (idx < 0) break;
     const line = bufState.buf.slice(0, idx);
-    bufState.buf = bufState.buf.slice(idx + 1);
+    bufState.buf = consumeLineBreak(bufState.buf.slice(idx));
     stream.write(`${prefix}${line}\n`);
   }
 }
@@ -129,6 +143,67 @@ export async function runCapture(cmd, args, options = {}) {
         e.err = err;
         rejectPromise(e);
       }
+    });
+  });
+}
+
+export async function runCaptureResult(cmd, args, options = {}) {
+  const { timeoutMs, ...spawnOptions } = options ?? {};
+  const startedAt = Date.now();
+  return await new Promise((resolvePromise) => {
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, ...spawnOptions });
+    let out = '';
+    let err = '';
+    const t =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            try {
+              proc.kill('SIGKILL');
+            } catch {
+              // ignore
+            }
+            resolvePromise({
+              ok: false,
+              exitCode: null,
+              signal: null,
+              out,
+              err,
+              timedOut: true,
+              startedAt,
+              finishedAt: Date.now(),
+              durationMs: Date.now() - startedAt,
+            });
+          }, timeoutMs)
+        : null;
+    proc.stdout?.on('data', (d) => (out += d.toString()));
+    proc.stderr?.on('data', (d) => (err += d.toString()));
+    proc.on('error', (e) => {
+      if (t) clearTimeout(t);
+      resolvePromise({
+        ok: false,
+        exitCode: null,
+        signal: null,
+        out,
+        err: err + (err.endsWith('\n') || !err ? '' : '\n') + String(e) + '\n',
+        timedOut: false,
+        startedAt,
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+    });
+    proc.on('close', (code, signal) => {
+      if (t) clearTimeout(t);
+      resolvePromise({
+        ok: code === 0,
+        exitCode: code,
+        signal: signal ?? null,
+        out,
+        err,
+        timedOut: false,
+        startedAt,
+        finishedAt: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
     });
   });
 }

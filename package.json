@@ -55,5 +55,9 @@
     "menubar:install": "node ./scripts/menubar.mjs install",
     "menubar:uninstall": "node ./scripts/menubar.mjs uninstall",
     "menubar:open": "bash -lc 'DIR=\"$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)\"; if [[ -z \"$DIR\" ]]; then DIR=\"$HOME/Library/Application Support/SwiftBar/Plugins\"; fi; open \"$DIR\"'"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
   }
 }

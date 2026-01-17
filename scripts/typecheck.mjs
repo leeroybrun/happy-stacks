@@ -1,11 +1,12 @@
 import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { componentDirEnvKey, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled } from './utils/proc/pm.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { detectPackageManagerCmd, pickFirstScript, readPackageJsonScripts } from './utils/proc/package_scripts.mjs';
+import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 
@@ -40,17 +41,32 @@ async function main() {
         'examples:',
         '  happys typecheck',
         '  happys typecheck happy happy-cli',
+        '',
+        'note:',
+        '  If run from inside a component checkout/worktree and no components are provided, defaults to that component.',
       ].join('\n'),
     });
     return;
   }
 
+  const rootDir = getRootDir(import.meta.url);
+
   const positionals = argv.filter((a) => !a.startsWith('--'));
-  const requested = positionals.length ? positionals : ['all'];
+  const inferred =
+    positionals.length === 0
+      ? inferComponentFromCwd({
+          rootDir,
+          invokedCwd: getInvokedCwd(process.env),
+          components: DEFAULT_COMPONENTS,
+        })
+      : null;
+  if (inferred) {
+    process.env[componentDirEnvKey(inferred.component)] = inferred.repoDir;
+  }
+
+  const requested = positionals.length ? positionals : inferred ? [inferred.component] : ['all'];
   const wantAll = requested.includes('all');
   const components = wantAll ? DEFAULT_COMPONENTS : requested;
-
-  const rootDir = getRootDir(import.meta.url);
 
   const results = [];
   for (const component of components) {
