@@ -26,8 +26,8 @@ async function main() {
   if (wantsHelp(argv, { flags }) || argv.includes('help')) {
     printResult({
       json,
-      data: { flags: ['--json'], commands: ['where', 'env'] },
-      text: ['[where] usage:', '  happys where [--json]', '  happys env [--json]'].join('\n'),
+      data: { flags: ['--json'], commands: ['where'] },
+      text: ['[where] usage:', '  happys where [--json]'].join('\n'),
     });
     return;
   }

@@ -2470,14 +2470,15 @@ async function cmdPrStack({ rootDir, argv }) {
       json,
       data: {
         usage:
-          'happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--background] [--mobile] [--json] [-- <stack dev/start args...>]',
+          'happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--background] [--mobile] [--expo-tailscale] [--json] [-- <stack dev/start args...>]',
       },
       text: [
         '[stack] usage:',
         '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start]',
         '    [--seed-auth] [--copy-auth-from=<stack>] [--link-auth] [--with-infra] [--auth-force]',
         '    [--remote=upstream] [--deps=none|link|install|link-or-install] [--update] [--force] [--background]',
-        '    [--mobile]   # also start Expo dev-client Metro for mobile',
+        '    [--mobile]         # also start Expo dev-client Metro for mobile',
+        '    [--expo-tailscale] # forward Expo to Tailscale interface for remote access',
         '    [--json] [-- <stack dev/start args...>]',
         '',
         'examples:',
@@ -2551,6 +2552,7 @@ async function cmdPrStack({ rootDir, argv }) {
   }
 
   const wantsMobile = flags.has('--mobile') || flags.has('--with-mobile');
+  const wantsExpoTailscale = flags.has('--expo-tailscale');
   const background = flags.has('--background') || flags.has('--bg') || (kv.get('--background') ?? '').trim() === '1';
 
   const seedAuthFlag = flags.has('--seed-auth') ? true : flags.has('--no-seed-auth') ? false : null;
@@ -2815,6 +2817,7 @@ async function cmdPrStack({ rootDir, argv }) {
     progress(`[stack] pr: ${stackName}: starting dev...`);
     const args = [
       ...(wantsMobile ? ['--mobile'] : []),
+      ...(wantsExpoTailscale ? ['--expo-tailscale'] : []),
       ...(passthrough.length ? ['--', ...passthrough] : []),
     ];
     await cmdRunScript({ rootDir, stackName, scriptPath: 'dev.mjs', args, background });
@@ -2822,6 +2825,7 @@ async function cmdPrStack({ rootDir, argv }) {
     progress(`[stack] pr: ${stackName}: starting...`);
     const args = [
       ...(wantsMobile ? ['--mobile'] : []),
+      ...(wantsExpoTailscale ? ['--expo-tailscale'] : []),
       ...(passthrough.length ? ['--', ...passthrough] : []),
     ];
     await cmdRunScript({ rootDir, stackName, scriptPath: 'run.mjs', args, background });
@@ -2997,6 +3001,7 @@ async function main() {
           'info',
           'pr',
           'create-dev-auth-seed',
+          'env',
           'auth',
           'dev',
           'start',
@@ -3031,6 +3036,7 @@ async function main() {
         '  happys stack info <name> [--json]',
         '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
         '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--non-interactive] [--json]',
+        '  happys stack env <name> set KEY=VALUE [KEY2=VALUE2...] | unset KEY [KEY2...] | get KEY | list | path [--json]',
         '  happys stack auth <name> status|login|copy-from [--json]',
         '  happys stack dev <name> [-- ...]',
         '  happys stack start <name> [-- ...]',
@@ -3155,6 +3161,15 @@ async function main() {
                 'example:',
                 '  happys stack srv exp1 -- status',
               ]
+          : cmd === 'env'
+            ? [
+                '[stack] usage:',
+                '  happys stack env <name> set KEY=VALUE [KEY2=VALUE2...]',
+                '  happys stack env <name> unset KEY [KEY2...]',
+                '  happys stack env <name> get KEY',
+                '  happys stack env <name> list',
+                '  happys stack env <name> path',
+              ]
             : cmd.startsWith('tailscale:')
               ? [
                   '[stack] usage:',
@@ -3175,6 +3190,17 @@ async function main() {
   // Remaining args after "<cmd> <name>"
   const passthrough = argv.slice(2);
 
+  if (cmd === 'env') {
+    // Forward to scripts/env.mjs under the stack env.
+    // This keeps stack env editing behavior unified with `happys env ...`.
+    await withStackEnv({
+      stackName,
+      fn: async ({ env }) => {
+        await run(process.execPath, [join(rootDir, 'scripts', 'env.mjs'), ...passthrough], { cwd: rootDir, env });
+      },
+    });
+    return;
+  }
   if (cmd === 'dev') {
     const background = passthrough.includes('--background') || passthrough.includes('--bg');
     const args = background ? passthrough.filter((a) => a !== '--background' && a !== '--bg') : passthrough;

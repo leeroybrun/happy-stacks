@@ -17,7 +17,7 @@ import { resolveStackContext } from './utils/stack/context.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { ensureDevCliReady, prepareDaemonAuthSeed, startDevDaemon, watchHappyCliAndRestartDaemon } from './utils/dev/daemon.mjs';
 import { startDevServer, watchDevServerAndRestart } from './utils/dev/server.mjs';
-import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
+import { ensureDevExpoServer, resolveExpoTailscaleEnabled } from './utils/dev/expo_dev.mjs';
 import { preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
@@ -41,18 +41,22 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--watch', '--no-watch', '--no-browser', '--mobile'], json: true },
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--watch', '--no-watch', '--no-browser', '--mobile', '--expo-tailscale'], json: true },
       text: [
         '[dev] usage:',
         '  happys dev [--server=happy-server|happy-server-light] [--restart] [--json]',
-        '  happys dev --watch      # rebuild/restart happy-cli daemon on file changes (TTY default)',
-        '  happys dev --no-watch   # disable watch mode (always disabled in non-interactive mode)',
-        '  happys dev --no-browser # do not open the UI in your browser automatically',
-        '  happys dev --mobile     # also start Expo dev-client Metro for mobile',
+        '  happys dev --watch         # rebuild/restart happy-cli daemon on file changes (TTY default)',
+        '  happys dev --no-watch      # disable watch mode (always disabled in non-interactive mode)',
+        '  happys dev --no-browser    # do not open the UI in your browser automatically',
+        '  happys dev --mobile        # also start Expo dev-client Metro for mobile',
+        '  happys dev --expo-tailscale # forward Expo to Tailscale interface for remote access',
         '  note: --json prints the resolved config (dry-run) and exits.',
         '',
         'note:',
         '  If run from inside a component checkout/worktree, that checkout is used for this run (without requiring `happys wt use`).',
+        '',
+        'env:',
+        '  HAPPY_STACKS_EXPO_TAILSCALE=1   # enable Expo Tailscale forwarding via env var',
       ].join('\n'),
     });
     return;
@@ -82,6 +86,7 @@ async function main() {
   const startDaemon = !flags.has('--no-daemon') && (process.env.HAPPY_LOCAL_DAEMON ?? '1') !== '0';
   const startMobile = flags.has('--mobile') || flags.has('--with-mobile');
   const noBrowser = flags.has('--no-browser') || (process.env.HAPPY_STACKS_NO_BROWSER ?? process.env.HAPPY_LOCAL_NO_BROWSER ?? '').toString().trim() === '1';
+  const expoTailscale = flags.has('--expo-tailscale') || resolveExpoTailscaleEnabled({ env: process.env });
 
   const serverDir = getComponentDir(rootDir, serverComponentName);
   const uiDir = getComponentDir(rootDir, 'happy');
@@ -267,6 +272,7 @@ async function main() {
       envPath,
       children,
       spawnOptions: { stdio: ['ignore', 'ignore', 'ignore'] },
+      expoTailscale,
     });
   }
   await maybeRunInteractiveStackAuthSetup({
@@ -300,6 +306,7 @@ async function main() {
         stackName,
         envPath,
         children,
+        expoTailscale,
       });
     },
   });
@@ -404,6 +411,7 @@ async function main() {
       stackName,
       envPath,
       children,
+      expoTailscale,
     }));
   if (startUi) {
     const uiPort = expoRes?.port;
@@ -433,6 +441,11 @@ async function main() {
   if (startMobile && expoRes?.port) {
     const metroUrl = await preferStackLocalhostUrl(`http://localhost:${expoRes.port}`, { stackName });
     console.log(`[local] mobile: metro ${metroUrl}`);
+  }
+
+  // Show Tailscale URL if forwarder is running
+  if (expoRes?.tailscale?.ok && expoRes.tailscale.tailscaleIp && expoRes.port) {
+    console.log(`[local] expo tailscale: http://${expoRes.tailscale.tailscaleIp}:${expoRes.port}`);
   }
 
   const shutdown = async () => {

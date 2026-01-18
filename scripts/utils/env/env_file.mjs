@@ -7,7 +7,9 @@ export async function ensureEnvFileUpdated({ envPath, updates }) {
     return;
   }
   await mkdir(dirname(envPath), { recursive: true });
-  await writeFileIfChanged(envPath, applyEnvUpdates(await readText(envPath), updates), envPath);
+  const existing = await readText(envPath);
+  const next = applyEnvUpdates(existing, updates);
+  await writeFileIfChanged(existing, next, envPath);
 }
 
 export async function ensureEnvFilePruned({ envPath, removeKeys }) {
@@ -30,7 +32,7 @@ async function readText(path) {
 }
 
 function applyEnvUpdates(existing, updates) {
-  const lines = existing.split('\n');
+  const lines = existing ? existing.split('\n') : [];
   const next = [...lines];
 
   const upsert = (key, value) => {

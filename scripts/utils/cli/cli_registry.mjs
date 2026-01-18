@@ -54,11 +54,17 @@ export function getHappysRegistry() {
     },
     {
       name: 'where',
-      aliases: ['env'],
       kind: 'node',
       scriptRelPath: 'scripts/where.mjs',
-      rootUsage: 'happys where [--json]   (alias: env)',
+      rootUsage: 'happys where [--json]',
       description: 'Show resolved paths and env sources',
+    },
+    {
+      name: 'env',
+      kind: 'node',
+      scriptRelPath: 'scripts/env.mjs',
+      rootUsage: 'happys env set KEY=VALUE [KEY2=VALUE2...]   (defaults to main stack)',
+      description: 'Set per-stack env vars (defaults to main)',
     },
     {
       name: 'bootstrap',

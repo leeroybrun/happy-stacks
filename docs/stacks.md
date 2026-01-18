@@ -238,6 +238,41 @@ Cloned-repo fallback (before you run `happys init`):
 2. `<repo>/env.local` (optional overrides)
 3. `HAPPY_STACKS_ENV_FILE` (stack env)
 
+## Manage per-stack environment variables (including API keys)
+
+To add/update environment variables in a stack env file from the CLI:
+
+```bash
+happys stack env <stack> set KEY=VALUE [KEY2=VALUE2...]
+```
+
+To remove keys:
+
+```bash
+happys stack env <stack> unset KEY [KEY2...]
+```
+
+To inspect:
+
+```bash
+happys stack env <stack> get KEY
+happys stack env <stack> list
+happys stack env <stack> path
+```
+
+Notes:
+
+- This is the recommended place for **provider API keys** the daemon needs (example: `OPENAI_API_KEY`).
+- Changes apply on the **next start** of the stack/daemon. Restart to pick them up:
+  - `main`: `happys start --restart`
+  - named stack: `happys stack start <stack> -- --restart` (or `happys stack dev <stack> -- --restart`)
+
+Self-host shortcut (defaults to `main` when not running under a stack wrapper):
+
+```bash
+happys env set OPENAI_API_KEY=sk-...
+```
+
 ## Daemon auth + “no machine” on first run
 
 On a **fresh machine** (or any new stack), the daemon may need to authenticate before it can register a “machine”.

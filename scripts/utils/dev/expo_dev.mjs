@@ -1,3 +1,6 @@
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   ensureExpoIsolationEnv,
   getExpoStatePaths,
@@ -11,11 +14,97 @@ import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
 import { expoSpawn } from '../expo/command.mjs';
 import { resolveMobileExpoConfig } from '../mobile/config.mjs';
 import { resolveMobileReachableServerUrl } from '../server/mobile_api_url.mjs';
+import { getTailscaleIpv4 } from '../tailscale/ip.mjs';
+import { pickLanIpv4 } from '../net/lan_ip.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 function normalizeExpoHost(raw) {
   const v = String(raw ?? '').trim().toLowerCase();
   if (v === 'localhost' || v === 'lan' || v === 'tunnel') return v;
   return 'lan';
+}
+
+/**
+ * Resolve whether Tailscale forwarding for Expo is enabled.
+ *
+ * Can be enabled via:
+ * - --expo-tailscale flag (passed as expoTailscale option)
+ * - HAPPY_STACKS_EXPO_TAILSCALE=1 env var
+ * - HAPPY_LOCAL_EXPO_TAILSCALE=1 env var (legacy)
+ */
+export function resolveExpoTailscaleEnabled({ env = process.env, expoTailscale = false } = {}) {
+  if (expoTailscale) return true;
+  const envVal = (env.HAPPY_STACKS_EXPO_TAILSCALE ?? env.HAPPY_LOCAL_EXPO_TAILSCALE ?? '').toString().trim();
+  return envVal === '1' || envVal.toLowerCase() === 'true';
+}
+
+/**
+ * Start a TCP forwarder process for Expo Tailscale access.
+ *
+ * Forwards from Tailscale IP:port to the LAN IP:port where Expo actually binds.
+ *
+ * @param {Object} options
+ * @param {number} options.metroPort - The Metro bundler port
+ * @param {Object} options.baseEnv - Base environment variables
+ * @param {string} options.stackName - Stack name for logging
+ * @param {Array} options.children - Array to track child processes
+ * @returns {Promise<{ ok: boolean, pid?: number, tailscaleIp?: string, lanIp?: string, error?: string }>}
+ */
+export async function startExpoTailscaleForwarder({ metroPort, baseEnv, stackName, children }) {
+  const tailscaleIp = await getTailscaleIpv4();
+  if (!tailscaleIp) {
+    return { ok: false, error: 'Tailscale not available or no IPv4 address' };
+  }
+
+  // Determine where Expo binds (LAN IP when host=lan, localhost otherwise)
+  const host = resolveExpoDevHost({ env: baseEnv });
+  let targetHost = '127.0.0.1';
+  if (host === 'lan') {
+    const lanIp = pickLanIpv4();
+    if (lanIp) targetHost = lanIp;
+  }
+
+  const label = `expo-ts-fwd${stackName ? `-${stackName}` : ''}`;
+  const forwarderScript = join(__dirname, '..', 'net', 'tcp_forward.mjs');
+
+  // Fork the forwarder as a child process
+  // Note: fork() requires 'ipc' in stdio array
+  const forwarderProc = fork(forwarderScript, [
+    `--listen-host=${tailscaleIp}`,
+    `--listen-port=${metroPort}`,
+    `--target-host=${targetHost}`,
+    `--target-port=${metroPort}`,
+    `--label=${label}`,
+  ], {
+    env: { ...baseEnv },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    detached: process.platform !== 'win32',
+  });
+
+  // Prefix forwarder output
+  const outPrefix = `[${label}] `;
+  forwarderProc.stdout?.on('data', (d) => process.stdout.write(outPrefix + d.toString()));
+  forwarderProc.stderr?.on('data', (d) => process.stderr.write(outPrefix + d.toString()));
+  forwarderProc.on('exit', (code, sig) => {
+    if (code !== 0 && code !== null) {
+      process.stderr.write(`[${label}] exited (code=${code}, sig=${sig})\n`);
+    }
+  });
+
+  children.push(forwarderProc);
+
+  // eslint-disable-next-line no-console
+  console.log(`[local] expo: Tailscale forwarder started (${tailscaleIp}:${metroPort} -> ${targetHost}:${metroPort})`);
+
+  return {
+    ok: true,
+    pid: forwarderProc.pid,
+    tailscaleIp,
+    lanIp: targetHost,
+    proc: forwarderProc,
+  };
 }
 
 export function resolveExpoDevHost({ env = process.env } = {}) {
@@ -76,6 +165,7 @@ export async function ensureDevExpoServer({
   envPath,
   children,
   spawnOptions = {},
+  expoTailscale = false,
 } = {}) {
   const wantWeb = Boolean(startUi);
   const wantDevClient = Boolean(startMobile);
@@ -144,13 +234,20 @@ export async function ensureDevExpoServer({
   const running = await isStateProcessRunning(paths.statePath);
   const alreadyRunning = Boolean(running.running);
 
+  // Resolve Tailscale forwarding preference
+  const wantTailscale = resolveExpoTailscaleEnabled({ env: baseEnv, expoTailscale });
+
   // Always publish runtime metadata when we can.
-  const publishRuntime = async ({ pid, port }) => {
+  const publishRuntime = async ({ pid, port, tailscaleForwarderPid = null, tailscaleIp = null }) => {
     if (!stackMode || !runtimeStatePath) return;
     const nPid = Number(pid);
     const nPort = Number(port);
+    const nTsPid = Number(tailscaleForwarderPid);
     await recordStackRuntimeUpdate(runtimeStatePath, {
-      processes: { expoPid: Number.isFinite(nPid) && nPid > 1 ? nPid : null },
+      processes: {
+        expoPid: Number.isFinite(nPid) && nPid > 1 ? nPid : null,
+        expoTailscaleForwarderPid: Number.isFinite(nTsPid) && nTsPid > 1 ? nTsPid : null,
+      },
       expo: {
         port: Number.isFinite(nPort) && nPort > 0 ? nPort : null,
         // For now keep these populated for callers that still expect webPort/mobilePort.
@@ -160,6 +257,8 @@ export async function ensureDevExpoServer({
         devClientEnabled: wantDevClient,
         host: resolveExpoDevHost({ env }),
         scheme: wantDevClient ? scheme : null,
+        tailscaleEnabled: wantTailscale,
+        tailscaleIp: tailscaleIp ?? null,
       },
     }).catch(() => {});
   };
@@ -224,7 +323,27 @@ export async function ensureDevExpoServer({
   const proc = await expoSpawn({ label: 'expo', dir: uiDir, args, env, options: spawnOptions });
   children.push(proc);
 
-  await publishRuntime({ pid: proc.pid, port: metroPort });
+  // Start Tailscale forwarder if enabled
+  let tailscaleResult = null;
+  if (wantTailscale) {
+    tailscaleResult = await startExpoTailscaleForwarder({
+      metroPort,
+      baseEnv,
+      stackName,
+      children,
+    });
+    if (!tailscaleResult.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`[local] expo: Tailscale forwarder not started: ${tailscaleResult.error}`);
+    }
+  }
+
+  await publishRuntime({
+    pid: proc.pid,
+    port: metroPort,
+    tailscaleForwarderPid: tailscaleResult?.pid ?? null,
+    tailscaleIp: tailscaleResult?.tailscaleIp ?? null,
+  });
 
   try {
     await writePidState(paths.statePath, {
@@ -236,11 +355,22 @@ export async function ensureDevExpoServer({
       devClientEnabled: wantDevClient,
       host,
       scheme: wantDevClient ? scheme : null,
+      tailscaleEnabled: wantTailscale,
+      tailscaleForwarderPid: tailscaleResult?.pid ?? null,
+      tailscaleIp: tailscaleResult?.tailscaleIp ?? null,
     });
   } catch {
     // ignore
   }
 
-  return { ok: true, skipped: false, pid: proc.pid, port: metroPort, proc, mode: expoModeLabel({ wantWeb, wantDevClient }) };
+  return {
+    ok: true,
+    skipped: false,
+    pid: proc.pid,
+    port: metroPort,
+    proc,
+    mode: expoModeLabel({ wantWeb, wantDevClient }),
+    tailscale: tailscaleResult ?? null,
+  };
 }
 

@@ -4,28 +4,42 @@ Run [**Happy**](https://happy.engineering/) locally and access it remotely and s
 
 ## What is Happy?
 
-Happy is an UI/CLI stack (server + web UI + CLI + daemon) who let you monitor and interact with Claude Code, Codex and Gemini sessions from your mobile, a web UI and/or a desktop app.
+Happy is an UI/CLI stack (server + web UI + CLI + daemon) who let you monitor and interact with Claude Code, Codex and Gemini sessions from your mobile, from a web UI and/or from a desktop app.
 
 ## What is Happy Stacks?
 
 happy-stacks is a guided installer + local orchestration CLI for Happy.
 
-If you only want to **self-host Happy**, start with the **Self-host** section below.
+If you only want to **use Happy** and self-host it on your computer, start with the **Self-host** section below.
 If you want to **develop Happy** (worktrees, multiple stacks, upstream PR workflows), see the **Development** section further down.
 
 ## Self-host Happy (install + run)
 
-### Step 1: Setup
-
-Recommended:
+### Quickstart
 
 ```bash
 npx happy-stacks setup --profile=selfhost
 ```
 
-`setup` can optionally start Happy and guide you through authentication.
+Follow the guided instructions to install Happy and launch it.
 
-### Step 2: Start Happy
+### Daily use
+
+#### Configure provider API keys for the daemon
+
+If you want the daemon to have access to provider API keys (for example OpenAI), you can set them so they are automatically loaded when the daemon starts:
+
+```bash
+happys env set OPENAI_API_KEY=sk-...
+```
+
+Then restart so the daemon picks up the new environment:
+
+```bash
+happys start --restart
+```
+
+### Start Happy
 
 Starts the local server, CLI daemon, and serves the pre-built UI.
 
@@ -33,9 +47,9 @@ Starts the local server, CLI daemon, and serves the pre-built UI.
 happys start
 ```
 
-### Step 3 (first run only): authenticate
+### Authentication
 
-On a **fresh machine** (or any new stack), the daemon needs to authenticate once before it can register a “machine”.
+On a **fresh machine**, the daemon needs to authenticate once before it can register a “machine”.
 
 ```bash
 happys auth login
@@ -47,17 +61,16 @@ If you want a quick diagnosis:
 happys auth status
 ```
 
-### Step 4: Enable Tailscale Serve (recommended for mobile/remote)
+### Enable Tailscale Serve (recommended for mobile/remote)
 
 ```bash
 happys tailscale enable
 happys tailscale url
 ```
 
-### Step 5: Mobile access
+### Mobile access
 
-Make sure Tailscale is [installed and running]
-([https://tailscale.com/kb/1347/installation](https://tailscale.com/kb/1347/installation)) on your 
+Make sure Tailscale is [installed and running](https://tailscale.com/kb/1347/installation) on your 
 phone, then either:
 
 - Open the URL from `happys tailscale url` on your phone and “Add to Home Screen”, or
@@ -69,35 +82,13 @@ Details (secure context, phone instructions, automation knobs): `[docs/remote-ac
 
 ## Development (worktrees, stacks, contributor workflows)
 
+If you want to **develop Happy** (worktrees, multiple stacks, upstream PR workflows), you can install Happy Stacks for development with:
+
 ### Setup (guided)
 
 ```bash
 npx happy-stacks setup --profile=dev
 ```
-
-### Developing from a cloned repo
-
-```bash
-git clone https://github.com/leeroybrun/happy-stacks.git
-cd happy-stacks
-
-node ./bin/happys.mjs setup --profile=dev
-```
-
-Notes:
-
-- In a cloned repo, `pnpm <script>` still works, but `happys <command>` is the recommended UX (same underlying scripts).
-- To make the installed `~/.happy-stacks/bin/happys` shim (LaunchAgents / SwiftBar) run your local checkout without publishing to npm, set:
-
-  ```bash
-  echo 'HAPPY_STACKS_CLI_ROOT_DIR=/path/to/your/happy-stacks-checkout' >> ~/.happy-stacks/.env
-  ```
-
-  Or (recommended) persist it via init:
-
-  ```bash
-  happys init --cli-root-dir=/path/to/your/happy-stacks-checkout
-  ```
 
 ### Why this exists
 
@@ -401,6 +392,15 @@ Notes:
 
 - Canonical env prefix is `HAPPY_STACKS_*` (legacy `HAPPY_LOCAL_*` still works).
 - Canonical stack storage is `~/.happy/stacks` (legacy `~/.happy/local` is still supported).
+- To edit per-stack environment variables (including provider keys like `OPENAI_API_KEY`), use:
+
+  ```bash
+  happys stack env <stack> set KEY=VALUE
+  happys stack env <stack> unset KEY
+  happys stack env <stack> get KEY
+  happys stack env <stack> list
+  ```
+
 - **Repo env templates**:
   - **Use `.env.example` as the canonical template** (copy it to `.env` if you’re running this repo directly).
   - If an LLM tool refuses to read/edit `.env.example` due to safety restrictions, **do not create an `env.example` workaround**—instead, ask the user to apply the change manually.
@@ -427,3 +427,27 @@ Notes:
 - To explicitly allow those for testing, set `HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1` (still recommended to clean up after).
 
 For contributor/LLM workflow expectations: `[AGENTS.md](AGENTS.md)`.
+
+### Developing Happy Stacks itself
+
+```bash
+git clone https://github.com/leeroybrun/happy-stacks.git
+cd happy-stacks
+
+node ./bin/happys.mjs setup --profile=dev
+```
+
+Notes:
+
+- In a cloned repo, `pnpm <script>` still works, but `happys <command>` is the recommended UX (same underlying scripts).
+- To make the installed `~/.happy-stacks/bin/happys` shim (LaunchAgents / SwiftBar) run your local checkout without publishing to npm, set:
+
+```bash
+echo 'HAPPY_STACKS_CLI_ROOT_DIR=/path/to/your/happy-stacks-checkout' >> ~/.happy-stacks/.env
+```
+
+Or (recommended) persist it via init:
+
+```bash
+happys init --cli-root-dir=/path/to/your/happy-stacks-checkout
+```

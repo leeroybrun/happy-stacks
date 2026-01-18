@@ -20,7 +20,7 @@ import { resolveStackContext } from './utils/stack/context.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
-import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
+import { ensureDevExpoServer, resolveExpoTailscaleEnabled } from './utils/dev/expo_dev.mjs';
 import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
@@ -41,10 +41,12 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--no-browser', '--mobile'], json: true },
+      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--no-browser', '--mobile', '--expo-tailscale'], json: true },
       text: [
         '[start] usage:',
         '  happys start [--server=happy-server|happy-server-light] [--restart] [--json]',
+        '  happys start --mobile        # also start Expo dev-client Metro for mobile',
+        '  happys start --expo-tailscale # forward Expo to Tailscale interface for remote access',
         '  (legacy in a cloned repo): pnpm start [-- --server=happy-server|happy-server-light] [--json]',
         '  note: --json prints the resolved config (dry-run) and exits.',
         '',
@@ -89,6 +91,7 @@ async function main() {
   const serveUiWanted = !flags.has('--no-ui') && (process.env.HAPPY_LOCAL_SERVE_UI ?? '1') !== '0';
   const serveUi = serveUiWanted;
   const startMobile = flags.has('--mobile') || flags.has('--with-mobile');
+  const expoTailscale = flags.has('--expo-tailscale') || resolveExpoTailscaleEnabled({ env: process.env });
   const noBrowser = flags.has('--no-browser') || (process.env.HAPPY_STACKS_NO_BROWSER ?? process.env.HAPPY_LOCAL_NO_BROWSER ?? '').toString().trim() === '1';
   const uiPrefix = process.env.HAPPY_LOCAL_UI_PREFIX?.trim() ? process.env.HAPPY_LOCAL_UI_PREFIX.trim() : '/';
   const autostart = getDefaultAutostartPaths();
@@ -433,7 +436,7 @@ async function main() {
 
   // Optional: start Expo dev-client Metro for mobile reviewers.
   if (startMobile) {
-    await ensureDevExpoServer({
+    const expoRes = await ensureDevExpoServer({
       startUi: false,
       startMobile: true,
       uiDir,
@@ -446,7 +449,11 @@ async function main() {
       stackName,
       envPath,
       children,
+      expoTailscale,
     });
+    if (expoRes?.tailscale?.ok && expoRes.tailscale.tailscaleIp && expoRes.port) {
+      console.log(`[local] expo tailscale: http://${expoRes.tailscale.tailscaleIp}:${expoRes.port}`);
+    }
   }
 
   const shutdown = async () => {
