@@ -90,6 +90,13 @@ If you want to **develop Happy** (worktrees, multiple stacks, upstream PR workfl
 npx happy-stacks setup --profile=dev
 ```
 
+During setup, you’ll be asked where to store your **workspace** (the folder that will contain `components/` and `components/.worktrees/`).
+You can also set it non-interactively:
+
+```bash
+npx happy-stacks setup --profile=dev --workspace-dir=~/Development/happy
+```
+
 ### Why this exists
 
 - **Automated setup**: `happys setup` + `happys start` gets the whole stack up and running.

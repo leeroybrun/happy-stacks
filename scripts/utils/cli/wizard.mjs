@@ -24,6 +24,8 @@ export async function promptSelect(rl, { title, options, defaultIndex = 0 }) {
     throw new Error('[wizard] no options to select from');
   }
   // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
   console.log(title);
   for (let i = 0; i < options.length; i++) {
     // eslint-disable-next-line no-console

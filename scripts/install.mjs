@@ -12,6 +12,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { bold, cyan, dim } from './utils/ui/ansi.mjs';
 
 /**
  * Install/setup the local stack:
@@ -168,31 +169,33 @@ async function ensureUpstreamRemote({ repoDir, upstreamUrl }) {
 async function interactiveWizard({ rootDir, defaults }) {
   return await withRl(async (rl) => {
     const repoSource = await promptSelect(rl, {
-      title: 'Select repo source:',
+      title: `${bold('Repo source')}\n${dim('Where should Happy Stacks clone the component repos from?')}`,
       options: [
-        { label: `forks (default, recommended)`, value: 'forks' },
-        { label: `upstream (slopus/*)`, value: 'upstream' },
+        { label: `${cyan('forks')} (default, recommended)`, value: 'forks' },
+        { label: `${cyan('upstream')} (slopus/*)`, value: 'upstream' },
       ],
       defaultIndex: defaults.repoSource === 'upstream' ? 1 : 0,
     });
 
+    // eslint-disable-next-line no-console
+    console.log(dim('Tip: keep the defaults unless you maintain your own forks.'));
     const forkOwner = await prompt(rl, `GitHub fork owner (default: ${defaults.forkOwner}): `, { defaultValue: defaults.forkOwner });
     const upstreamOwner = await prompt(rl, `GitHub upstream owner (default: ${defaults.upstreamOwner}): `, {
       defaultValue: defaults.upstreamOwner,
     });
 
     const serverMode = await promptSelect(rl, {
-      title: 'Which server components should be set up?',
+      title: `${bold('Server components')}\n${dim('Choose which server repo(s) to clone and install deps for.')}`,
       options: [
-        { label: 'happy-server-light only (default)', value: 'happy-server-light' },
-        { label: 'happy-server only (full server)', value: 'happy-server' },
-        { label: 'both (server-light + full server)', value: 'both' },
+        { label: `${cyan('happy-server-light')} only (default)`, value: 'happy-server-light' },
+        { label: `${cyan('happy-server')} only (full server)`, value: 'happy-server' },
+        { label: `both (${cyan('server-light')} + ${cyan('full server')})`, value: 'both' },
       ],
       defaultIndex: defaults.serverComponentName === 'both' ? 2 : defaults.serverComponentName === 'happy-server' ? 1 : 0,
     });
 
     const allowClone = await promptSelect(rl, {
-      title: 'Clone missing component repos?',
+      title: `${bold('Cloning')}\n${dim('If repos are missing under components/, should we clone them automatically?')}`,
       options: [
         { label: 'yes (default)', value: true },
         { label: 'no', value: false },
@@ -202,8 +205,8 @@ async function interactiveWizard({ rootDir, defaults }) {
 
     const enableAutostart = await promptSelect(rl, {
       title: isSandboxed()
-        ? 'Enable macOS autostart (LaunchAgent)? (NOTE: sandbox mode; this is global OS state)'
-        : 'Enable macOS autostart (LaunchAgent)?',
+        ? `${bold('Autostart (macOS)')}\n${dim('Sandbox mode: this is global OS state; normally disabled in sandbox.')}`
+        : `${bold('Autostart (macOS)')}\n${dim('Install a LaunchAgent so Happy starts at login?')}`,
       options: [
         { label: 'no (default)', value: false },
         { label: 'yes', value: true },
@@ -212,7 +215,7 @@ async function interactiveWizard({ rootDir, defaults }) {
     });
 
     const buildTauri = await promptSelect(rl, {
-      title: 'Build Tauri desktop app as part of setup?',
+      title: `${bold('Desktop app (optional)')}\n${dim('Build the Tauri desktop app as part of setup? (slow; requires extra toolchain)')}`,
       options: [
         { label: 'no (default)', value: false },
         { label: 'yes', value: true },
@@ -221,7 +224,7 @@ async function interactiveWizard({ rootDir, defaults }) {
     });
 
     const configureGit = await promptSelect(rl, {
-      title: 'Configure upstream Git remotes and create mirror branches (slopus/main)?',
+      title: `${bold('Git remotes')}\n${dim('Configure upstream remotes and create/update mirror branches (e.g. slopus/main)?')}`,
       options: [
         { label: 'yes (default)', value: true },
         { label: 'no', value: false },

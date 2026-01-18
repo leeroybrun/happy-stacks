@@ -4,8 +4,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
+import { getHappyStacksHomeDir, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
@@ -24,6 +24,24 @@ import { commandExists } from './utils/proc/commands.mjs';
 import { readEnvValueFromFile } from './utils/env/read.mjs';
 import { readServerPortFromEnvFile, resolveServerPortFromEnv } from './utils/server/port.mjs';
 import { guidedStackWebSignupThenLogin } from './utils/auth/guided_stack_web_login.mjs';
+import { getVerbosityLevel } from './utils/cli/verbosity.mjs';
+import { runCommandLogged } from './utils/cli/progress.mjs';
+import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
+import { expandHome } from './utils/paths/canonical_home.mjs';
+
+function resolveWorkspaceDirDefault() {
+  const explicit = (process.env.HAPPY_STACKS_WORKSPACE_DIR ?? process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? '').toString().trim();
+  if (explicit) return expandHome(explicit);
+  return join(getHappyStacksHomeDir(process.env), 'workspace');
+}
+
+function normalizeWorkspaceDirInput(raw, { homeDir }) {
+  const trimmed = String(raw ?? '').trim();
+  const expanded = expandHome(trimmed);
+  if (!expanded) return '';
+  // If relative, treat it as relative to the home dir (same rule as init.mjs).
+  return expanded.startsWith('/') ? expanded : join(homeDir, expanded);
+}
 
 async function resolveMainWebappUrlForAuth({ rootDir, port }) {
   try {
@@ -272,6 +290,7 @@ async function cmdSetup({ rootDir, argv }) {
         flags: [
           '--profile=selfhost|dev',
           '--server=happy-server-light|happy-server',
+          '--workspace-dir=/absolute/path   # dev profile only',
           '--install-path',
           '--start-now',
           '--auth|--no-auth',
@@ -286,6 +305,7 @@ async function cmdSetup({ rootDir, argv }) {
         '  happys setup',
         '  happys setup --profile=selfhost',
         '  happys setup --profile=dev',
+        '  happys setup --profile=dev --workspace-dir=~/Development/happy',
         '  happys setup pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>]',
         '  happys setup --auth',
         '  happys setup --no-auth',
@@ -304,10 +324,10 @@ async function cmdSetup({ rootDir, argv }) {
   if (!profile && interactive) {
     profile = await withRl(async (rl) => {
       return await promptSelect(rl, {
-        title: 'What is your goal?',
+        title: bold(`✨ ${cyan('Happy Stacks')} setup ✨\n\nWhat is your goal?`),
         options: [
-          { label: 'Use Happy on this machine (self-host)', value: 'selfhost' },
-          { label: 'Develop Happy (worktrees/stacks)', value: 'dev' },
+          { label: `${cyan('Self-host')}: use Happy on this machine`, value: 'selfhost' },
+          { label: `${cyan('Development')}: worktrees + stacks + contributor workflows`, value: 'dev' },
         ],
         defaultIndex: 0,
       });
@@ -315,6 +335,71 @@ async function cmdSetup({ rootDir, argv }) {
   }
   if (!profile) {
     profile = 'selfhost';
+  }
+
+  const verbosity = getVerbosityLevel(process.env);
+  const quietUi = interactive && verbosity === 0 && !json;
+
+  async function runNodeScriptMaybeQuiet({ label, rel, args = [], env = process.env }) {
+    if (!quietUi) {
+      await run(process.execPath, [join(rootDir, rel), ...args], { cwd: rootDir, env });
+      return;
+    }
+    const baseLogDir = join(getHappyStacksHomeDir(process.env), 'logs', 'setup');
+    const logPath = join(baseLogDir, `${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.${Date.now()}.log`);
+    try {
+      await runCommandLogged({
+        label,
+        cmd: process.execPath,
+        args: [join(rootDir, rel), ...args],
+        cwd: rootDir,
+        env,
+        logPath,
+        quiet: true,
+        showSteps: true,
+      });
+    } catch (e) {
+      const lp = e?.logPath ? String(e.logPath) : logPath;
+      // eslint-disable-next-line no-console
+      console.error(`[setup] failed: ${label}`);
+      // eslint-disable-next-line no-console
+      console.error(`${dim('log:')} ${lp}`);
+      throw e;
+    }
+  }
+
+  function printProfileIntro({ profile }) {
+    if (!process.stdout.isTTY || json) return;
+    const header = profile === 'selfhost' ? `${cyan('Self-host')} setup` : `${cyan('Development')} setup`;
+    const lines = [
+      '',
+      bold(header),
+      profile === 'selfhost'
+        ? dim('Run Happy locally (optionally with Tailscale + autostart).')
+        : dim('Prepare a contributor workspace (components + worktrees + stacks).'),
+      '',
+      bold('What will happen:'),
+      profile === 'selfhost'
+        ? [
+            `- ${cyan('init')}: set up Happy Stacks home + shims`,
+            `- ${cyan('bootstrap')}: clone/install components`,
+            `- ${cyan('start')}: (optional) start Happy now`,
+            `- ${cyan('login')}: (optional) authenticate`,
+          ]
+        : [
+            `- ${cyan('workspace')}: choose where components + worktrees live`,
+            `- ${cyan('init')}: set up Happy Stacks home + shims`,
+            `- ${cyan('bootstrap')}: clone/install components + dev tooling`,
+            `- ${cyan('stacks')}: (optional) create an isolated dev stack`,
+          ],
+      '',
+    ].flat();
+    // eslint-disable-next-line no-console
+    console.log(lines.join('\n'));
+  }
+
+  if (interactive) {
+    printProfileIntro({ profile });
   }
 
   const platform = process.platform;
@@ -326,7 +411,7 @@ async function cmdSetup({ rootDir, argv }) {
   if (profile === 'selfhost' && interactive && !serverFromArg) {
     serverComponent = await withRl(async (rl) => {
       const picked = await promptSelect(rl, {
-        title: 'Select server flavor:',
+        title: bold('Server flavor'),
         options: [
           { label: 'happy-server-light (recommended; simplest local install)', value: 'happy-server-light' },
           { label: 'happy-server (full server; managed infra via Docker)', value: 'happy-server' },
@@ -335,6 +420,34 @@ async function cmdSetup({ rootDir, argv }) {
       });
       return picked;
     });
+  }
+
+  // Dev profile: pick where to store components + worktrees.
+  const workspaceDirFlagRaw = (kv.get('--workspace-dir') ?? '').toString().trim();
+  const homeDirForWorkspace = getHappyStacksHomeDir(process.env);
+  let workspaceDirWanted = workspaceDirFlagRaw ? normalizeWorkspaceDirInput(workspaceDirFlagRaw, { homeDir: homeDirForWorkspace }) : '';
+  if (profile === 'dev' && interactive && !workspaceDirWanted) {
+    const defaultWorkspaceDir = resolveWorkspaceDirDefault();
+    const suggested = defaultWorkspaceDir;
+    const helpLines = [
+      bold('Workspace location'),
+      dim('This is where Happy Stacks will keep:'),
+      `- ${dim('components')}: ${cyan(join(suggested, 'components'))}`,
+      `- ${dim('worktrees')}:  ${cyan(join(suggested, 'components', '.worktrees'))}`,
+      '',
+      dim('Pick a stable folder that is easy to open in your editor (example: ~/Development/happy).'),
+      '',
+    ].join('\n');
+    // eslint-disable-next-line no-console
+    console.log(helpLines);
+    const raw = await withRl(async (rl) => {
+      return await prompt(rl, `Workspace dir (default: ${suggested}): `, { defaultValue: suggested });
+    });
+    workspaceDirWanted = normalizeWorkspaceDirInput(raw, { homeDir: homeDirForWorkspace });
+  }
+  if (profile === 'dev' && workspaceDirWanted) {
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Workspace:')} ${cyan(workspaceDirWanted)}`);
   }
 
   const defaultTailscale = false;
@@ -361,7 +474,7 @@ async function cmdSetup({ rootDir, argv }) {
     if (profile === 'selfhost') {
       tailscaleWanted = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: 'Enable remote access with Tailscale Serve (recommended for mobile)?',
+          title: bold('Remote access'),
           options: [
             { label: 'no (default)', value: false },
             { label: 'yes', value: true },
@@ -374,7 +487,7 @@ async function cmdSetup({ rootDir, argv }) {
       if (supportsAutostart) {
         autostartWanted = await withRl(async (rl) => {
           const v = await promptSelect(rl, {
-            title: 'Enable autostart at login?',
+            title: bold('Autostart'),
             options: [
               { label: 'no (default)', value: false },
               { label: 'yes', value: true },
@@ -390,7 +503,7 @@ async function cmdSetup({ rootDir, argv }) {
       if (supportsMenubar) {
         menubarWanted = await withRl(async (rl) => {
           const v = await promptSelect(rl, {
-            title: 'Install the macOS menubar (SwiftBar) control panel?',
+            title: bold('Menu bar (macOS)'),
             options: [
               { label: 'no (default)', value: false },
               { label: 'yes', value: true },
@@ -405,7 +518,7 @@ async function cmdSetup({ rootDir, argv }) {
 
       startNow = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: 'Start Happy now?',
+          title: bold('Start now'),
           options: [
             { label: 'yes (default)', value: true },
             { label: 'no', value: false },
@@ -417,7 +530,7 @@ async function cmdSetup({ rootDir, argv }) {
 
       authWanted = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: 'Authenticate now? (recommended)',
+          title: bold('Authentication'),
           options: [
             { label: 'yes (default) — enables Happy UI + mobile access', value: true },
             { label: 'no — I will authenticate later', value: false },
@@ -436,7 +549,7 @@ async function cmdSetup({ rootDir, argv }) {
       // If you choose to auth now, we’ll also start Happy in the background so login can complete.
       const authNow = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: 'Complete authentication now? (optional)',
+          title: bold('Authentication (optional)'),
           options: [
             { label: 'no (default) — I will do this later', value: false },
             { label: 'yes — start Happy in background and login', value: true },
@@ -453,10 +566,10 @@ async function cmdSetup({ rootDir, argv }) {
 
     installPath = await withRl(async (rl) => {
       const v = await promptSelect(rl, {
-        title: `Add ${join(getCanonicalHomeDir(), 'bin')} to your shell PATH?`,
+        title: bold('Shell PATH'),
         options: [
-          { label: 'no (default)', value: false },
-          { label: 'yes', value: true },
+          { label: `no (default) — you can run via npx / full path`, value: false },
+          { label: `yes — add ${join(getCanonicalHomeDir(), 'bin')} to your PATH`, value: true },
         ],
         defaultIndex: installPath ? 1 : 0,
       });
@@ -489,11 +602,12 @@ async function cmdSetup({ rootDir, argv }) {
   }
 
   // 1) Ensure plumbing exists (runtime + shims + pointer env). Avoid auto-bootstrap here; setup drives bootstrap explicitly.
-  await runNodeScript({
-    rootDir,
+  await runNodeScriptMaybeQuiet({
+    label: 'init happy-stacks home',
     rel: 'scripts/init.mjs',
     args: [
       '--no-bootstrap',
+      ...(profile === 'dev' && workspaceDirWanted ? [`--workspace-dir=${workspaceDirWanted}`] : []),
       ...(installPath ? ['--install-path'] : []),
     ],
     env: { ...process.env, HAPPY_STACKS_SETUP_CHILD: '1' },
@@ -511,13 +625,13 @@ async function cmdSetup({ rootDir, argv }) {
   // 3) Bootstrap components. Selfhost defaults to upstream; dev defaults to existing bootstrap wizard (forks by default).
   if (profile === 'dev') {
     // Developer setup: keep the existing bootstrap wizard.
-    await runNodeScript({ rootDir, rel: 'scripts/install.mjs', args: ['--interactive'] });
+    await runNodeScriptMaybeQuiet({ label: 'bootstrap components', rootDir, rel: 'scripts/install.mjs', args: ['--interactive'] });
 
     // Optional: offer to create a dedicated dev stack (keeps main stable).
     if (interactive) {
       const createStack = await withRl(async (rl) => {
         return await promptSelect(rl, {
-          title: 'Create an additional isolated stack for development?',
+          title: bold('Stacks'),
           options: [
             { label: 'no (default)', value: false },
             { label: 'yes', value: true },
@@ -526,7 +640,7 @@ async function cmdSetup({ rootDir, argv }) {
         });
       });
       if (createStack) {
-        await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['new', '--interactive'] });
+        await runNodeScriptMaybeQuiet({ label: 'create dev stack', rootDir, rel: 'scripts/stack.mjs', args: ['new', '--interactive'] });
       }
 
       // Guided maintainer-friendly auth defaults (dev key → main → legacy).
@@ -535,7 +649,8 @@ async function cmdSetup({ rootDir, argv }) {
   } else {
     // Selfhost setup: run non-interactively and keep it simple.
     const repoFlag = serverComponent === 'happy-server-light' ? '--forks' : '--upstream';
-    await runNodeScript({
+    await runNodeScriptMaybeQuiet({
+      label: 'bootstrap components',
       rootDir,
       rel: 'scripts/install.mjs',
       args: [`--server=${serverComponent}`, repoFlag],
@@ -661,7 +776,11 @@ async function cmdSetup({ rootDir, argv }) {
   // Final tips (keep short).
   if (profile === 'selfhost') {
     // eslint-disable-next-line no-console
-    console.log('[setup] done. Useful commands:');
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(green('✓ Setup complete'));
+    // eslint-disable-next-line no-console
+    console.log(dim('Useful commands:'));
     // eslint-disable-next-line no-console
     console.log('  happys start');
     // eslint-disable-next-line no-console
@@ -670,7 +789,11 @@ async function cmdSetup({ rootDir, argv }) {
     console.log('  happys service install   # macOS/Linux autostart');
   } else {
     // eslint-disable-next-line no-console
-    console.log('[setup] done. Useful commands:');
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(green('✓ Setup complete'));
+    // eslint-disable-next-line no-console
+    console.log(dim('Useful commands:'));
     // eslint-disable-next-line no-console
     console.log('  happys dev');
     // eslint-disable-next-line no-console

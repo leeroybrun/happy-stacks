@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { ensureCanonicalHomeEnvUpdated, ensureHomeEnvUpdated } from './utils/env/config.mjs';
@@ -177,12 +177,15 @@ async function main() {
   process.env.HAPPY_LOCAL_HOME_DIR = process.env.HAPPY_LOCAL_HOME_DIR ?? homeDir;
 
   const workspaceDirRaw = parseArgValue(argv, 'workspace-dir');
-  const workspaceDir = expandHome(firstNonEmpty(
+  const workspaceDirExpanded = expandHome(firstNonEmpty(
     workspaceDirRaw,
     process.env.HAPPY_STACKS_WORKSPACE_DIR,
     process.env.HAPPY_LOCAL_WORKSPACE_DIR,
     join(homeDir, 'workspace'),
   ));
+  // If the user passes a relative --workspace-dir, interpret it as relative to the home dir
+  // (not the current cwd). This keeps setup predictable, especially when invoked via `npx`.
+  const workspaceDir = workspaceDirExpanded.startsWith('/') ? workspaceDirExpanded : resolve(homeDir, workspaceDirExpanded);
   process.env.HAPPY_STACKS_WORKSPACE_DIR = workspaceDir;
   process.env.HAPPY_LOCAL_WORKSPACE_DIR = process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? workspaceDir;
 

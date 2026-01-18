@@ -15,26 +15,8 @@ import { randomToken } from './utils/crypto/tokens.mjs';
 import { inferPrStackBaseName } from './utils/stack/pr_stack_name.mjs';
 import { sanitizeStackName } from './utils/stack/names.mjs';
 import { listReviewPrSandboxes, reviewPrSandboxPrefixPath, writeReviewPrSandboxMeta } from './utils/sandbox/review_pr_sandbox.mjs';
+import { bold, cyan, dim } from './utils/ui/ansi.mjs';
  
-function supportsAnsi() {
-  if (!process.stdout.isTTY) return false;
-  if (process.env.NO_COLOR) return false;
-  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
-  return true;
-}
-
-function bold(s) {
-  return supportsAnsi() ? `\x1b[1m${s}\x1b[0m` : String(s);
-}
-
-function dim(s) {
-  return supportsAnsi() ? `\x1b[2m${s}\x1b[0m` : String(s);
-}
-
-function cyan(s) {
-  return supportsAnsi() ? `\x1b[36m${s}\x1b[0m` : String(s);
-}
-
 function usage() {
   return [
     '[review-pr] usage:',

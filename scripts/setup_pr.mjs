@@ -22,29 +22,7 @@ import { homedir } from 'node:os';
 import { resolveMobileQrPayload } from './utils/mobile/dev_client_links.mjs';
 import { renderQrAscii } from './utils/ui/qr.mjs';
 import { inferPrStackBaseName } from './utils/stack/pr_stack_name.mjs';
-
-function supportsAnsi() {
-  if (!process.stdout.isTTY) return false;
-  if (process.env.NO_COLOR) return false;
-  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
-  return true;
-}
-
-function bold(s) {
-  return supportsAnsi() ? `\x1b[1m${s}\x1b[0m` : String(s);
-}
-
-function dim(s) {
-  return supportsAnsi() ? `\x1b[2m${s}\x1b[0m` : String(s);
-}
-
-function cyan(s) {
-  return supportsAnsi() ? `\x1b[36m${s}\x1b[0m` : String(s);
-}
-
-function green(s) {
-  return supportsAnsi() ? `\x1b[32m${s}\x1b[0m` : String(s);
-}
+import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
 
 function pickReviewerMobileSchemeEnv(env) {
   // For review-pr flows, reviewers typically have the standard Happy dev build on their phone,

@@ -1631,11 +1631,15 @@ async function cmdNewInteractive({ rootDir, argv }) {
   });
 }
 
-async function cmdListOne({ rootDir, component }) {
+async function cmdListOne({ rootDir, component, activeOnly = false }) {
   const wtRoot = getWorktreesRoot(rootDir);
   const dir = join(wtRoot, component);
   const key = componentDirEnvKey(component);
   const active = (process.env[key] ?? '').trim() || join(getComponentsDir(rootDir), component);
+
+  if (activeOnly) {
+    return { component, activeDir: active, worktrees: [] };
+  }
 
   if (!(await pathExists(dir))) {
     return { component, activeDir: active, worktrees: [] };
@@ -1663,16 +1667,19 @@ async function cmdListOne({ rootDir, component }) {
   return { component, activeDir: active, worktrees };
 }
 
-async function cmdList({ rootDir, args }) {
+async function cmdList({ rootDir, args, flags }) {
+  const wantsAll = flags?.has('--all') || flags?.has('--all-worktrees');
+  const activeOnly = !wantsAll && (flags?.has('--active') || flags?.has('--active-only'));
+
   const component = args[0];
   if (!component) {
     const results = [];
     for (const c of DEFAULT_COMPONENTS) {
-      results.push(await cmdListOne({ rootDir, component: c }));
+      results.push(await cmdListOne({ rootDir, component: c, activeOnly }));
     }
     return { components: DEFAULT_COMPONENTS, results };
   }
-  return await cmdListOne({ rootDir, component });
+  return await cmdListOne({ rootDir, component, activeOnly });
 }
 
 async function main() {
@@ -1696,7 +1703,7 @@ async function main() {
         '  happys wt migrate [--json]',
         '  happys wt sync <component> [--remote=<name>] [--json]',
         '  happys wt sync-all [--remote=<name>] [--json]',
-        '  happys wt list [component] [--json]',
+        '  happys wt list [component] [--active|--all] [--json]',
         '  happys wt new <component> <slug> [--from=upstream|origin] [--remote=<name>] [--base=<ref>|--base-worktree=<spec>] [--deps=none|link|install|link-or-install] [--use] [--force] [--interactive|-i] [--json]',
         '  happys wt duplicate <component> <fromWorktreeSpec|path|active|default> <newSlug> [--remote=<name>] [--deps=none|link|install|link-or-install] [--use] [--json]',
         '  happys wt pr <component> <pr-url|number> [--remote=upstream] [--slug=<name>] [--deps=none|link|install|link-or-install] [--use] [--update] [--stash|--stash-keep] [--force] [--json]',
@@ -1872,7 +1879,7 @@ async function main() {
     return;
   }
   if (cmd === 'list') {
-    const res = await cmdList({ rootDir, args: positionals.slice(1) });
+    const res = await cmdList({ rootDir, args: positionals.slice(1), flags });
     if (json) {
       printResult({ json, data: res });
     } else {

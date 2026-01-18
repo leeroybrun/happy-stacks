@@ -1448,7 +1448,21 @@ async function cmdWt({ rootDir, stackName, args }) {
   // Forward to scripts/worktrees.mjs under the stack env.
   // This makes `happys stack wt <name> -- ...` behave exactly like `happys wt ...`,
   // but read/write the stack env file (HAPPY_STACKS_ENV_FILE / legacy: HAPPY_LOCAL_ENV_FILE) instead of repo env.local.
-  const forwarded = args[0] === '--' ? args.slice(1) : args;
+  let forwarded = args[0] === '--' ? args.slice(1) : args;
+
+  // Stack users usually want to see what *this stack* is using (active checkout),
+  // not an exhaustive enumeration of every worktree on disk.
+  //
+  // `happys wt list` defaults to showing all worktrees. In stack mode, default to
+  // an active-only view unless the caller opts into `--all`.
+  if (forwarded[0] === 'list') {
+    const wantsAll = forwarded.includes('--all') || forwarded.includes('--all-worktrees');
+    const wantsActive = forwarded.includes('--active') || forwarded.includes('--active-only');
+    if (!wantsAll && !wantsActive) {
+      forwarded = [...forwarded, '--active'];
+    }
+  }
+
   await withStackEnv({
     stackName,
     fn: async ({ env }) => {
