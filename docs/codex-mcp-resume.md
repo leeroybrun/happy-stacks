@@ -25,8 +25,8 @@ that can **resume sessions from rollout JSONL** after restarts/crashes.
 
 Ship the MCP server as an npm package that bundles native binaries:
 
-- **npm package**: `@leeroybrun/codex-mcp-server-resume`
-- **binary launcher**: `npx -y @leeroybrun/codex-mcp-server-resume@<pinned-version>`
+- **npm package**: `@leeroy/codex-mcp-resume`
+- **binary launcher**: `npx -y @leeroy/codex-mcp-resume@<pinned-version>`
 - **native payload**: `vendor/<targetTriple>/codex-mcp-server/codex-mcp-server[.exe]`
 
 This mirrors how upstream Codex ships platform binaries via npm.
@@ -37,7 +37,7 @@ This mirrors how upstream Codex ships platform binaries via npm.
 
 - Happy pins an exact semver (example): `0.84.0-resume.123.a1`
 - Happy invokes:
-  - `npx -y @leeroybrun/codex-mcp-server-resume@0.84.0-resume.123.a1`
+  - `npx -y @leeroy/codex-mcp-resume@0.84.0-resume.123.a1`
 
 **Update path**: users get new MCP builds when they update Happy (or when Happy updates the pin).
 
@@ -69,7 +69,7 @@ When feature enabled, Happy should register an MCP server entry equivalent to:
 ```toml
 [mcp_servers.codex_resume]
 command = "npx"
-args = ["-y", "@leeroybrun/codex-mcp-server-resume@0.84.0-resume.123.a1"]
+args = ["-y", "@leeroy/codex-mcp-resume@0.84.0-resume.123.a1"]
 ```
 
 Notes:
