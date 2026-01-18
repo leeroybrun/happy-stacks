@@ -28,10 +28,7 @@ limactl shell happy-pr
 Inside the VM:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leeroybrun/happy-local/main/scripts/provision/linux-ubuntu-review-pr.sh \
-  -o /tmp/linux-ubuntu-review-pr.sh
-chmod +x /tmp/linux-ubuntu-review-pr.sh
-/tmp/linux-ubuntu-review-pr.sh
+curl -fsSL https://raw.githubusercontent.com/leeroybrun/happy-local/main/scripts/provision/linux-ubuntu-review-pr.sh -o /tmp/linux-ubuntu-review-pr.sh && chmod +x /tmp/linux-ubuntu-review-pr.sh && /tmp/linux-ubuntu-review-pr.sh
 ```
 
 ### 4) Run `review-pr` via `npx` (published package)
