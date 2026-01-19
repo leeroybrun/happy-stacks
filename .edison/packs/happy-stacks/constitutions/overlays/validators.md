@@ -70,5 +70,46 @@ This ensures validators review the change set **as a PR diff on top of the targe
 
 - This project enforces **TDD behavior**, not “TDD-looking commit history”.
 - **Do not reject** a task because git commits/messages do not contain explicit “RED/GREEN/REFACTOR” markers.
+
+## Happy component translations (MANDATORY where applicable)
+
+Only enforce translation requirements for components that actually have an i18n system. Today:
+
+- **`happy`**: translated ✅ (must enforce)
+- **`happy-cli`**: not translated (no i18n system)
+- **`happy-server` / `happy-server-light`**: not translated (no i18n system)
+
+### Component: `happy` (translated UI — FAIL-CLOSED if missing)
+
+- **Reject any UI copy changes that are not translated**.
+  - If a diff adds/changes user-facing strings in `happy` UI code, you must see translation-key usage (`t('...')` via `@/text`) rather than hardcoded literals.
+
+- **Translation source-of-truth** (what to verify in diffs):
+  - `sources/text/_default.ts`: canonical keys + runtime English + types
+  - `sources/text/translations/<lang>.ts`: per-language files matching `TranslationStructure`
+  - `sources/text/translations/en.ts` must remain in sync with `_default.ts` (it exists and is used by tooling/scripts)
+
+- **What “complete” means (minimum bar)**:
+  - Any new/changed translation key added to `sources/text/_default.ts` is mirrored across **all supported languages** under `sources/text/translations/`:
+    - `ca`, `en`, `es`, `it`, `ja`, `pl`, `pt`, `ru`, `zh-Hans`
+  - Dynamic translations use a function with a single typed object parameter; **parameter names/types must match** across languages for the same key.
+
+- **Allowed unchanged tokens**:
+  - It is acceptable for common technical/proper tokens to remain in English where appropriate (examples aligned with repo conventions): `GitHub`, `URL`, `API`, `CLI`, `OAuth`, `QR`, `JSON`, `HTTP`, `HTTPS`, `ID`, `PID`.
+  - Otherwise, “left in English” in non-English language files should be treated as missing translation and rejected.
+
+- **Evidence expectations**:
+  - Ensure `command-type-check.txt` (or the equivalent typecheck evidence for the `happy` component) is present and passing for the stack pinned to the task.
+  - Translation-shape mismatches should fail typecheck due to `TranslationStructure`; if typecheck evidence is missing, fail-closed and request re-capture via Edison evidence.
+
+### Component: `happy-cli` (not translated)
+
+- Do not fail a task for “missing translations” in this repo (no i18n system).
+- Do not request ad-hoc/partial translation infrastructure changes unless the task explicitly proposes adopting i18n.
+
+### Component: `happy-server` / `happy-server-light` (not translated)
+
+- Do not fail a task for “missing translations” in these repos (no i18n system).
+  - Server logs/errors are not localized today; do not demand localized variants unless a server-side i18n system is introduced as an explicit feature.
 <!-- /EXTEND -->
 

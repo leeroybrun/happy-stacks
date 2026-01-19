@@ -450,6 +450,52 @@ Do not skip commands. Do not fabricate evidence. If you capture a failing run, f
   - `happys edison --stack=<stack> -- evidence capture <task-id>`
   - This runs stack-scoped `happys stack typecheck/lint/build/test` and fingerprints the *actual* component repos used by that stack.
 
+## Happy component translations (MANDATORY where applicable)
+
+These rules apply **only** when the task’s target component repo has an i18n system. Today:
+
+- **`happy`**: translated ✅ (mandatory)
+- **`happy-cli`**: not translated (no i18n system)
+- **`happy-server` / `happy-server-light`**: not translated (no i18n system)
+
+### Component: `happy` (translated UI — MUST translate)
+
+- **Do not ship new user-facing strings without translations**.
+  - Any new UI copy must use `t('...')` from `@/text` (not hardcoded string literals in JSX).
+  - If you touch screens/components and add new labels, headers, help text, errors, etc., you must add translation keys.
+
+- **Source-of-truth & file layout**:
+  - **Keys + runtime English + types** live in `sources/text/_default.ts` (`export const en = {...} as const`).
+  - **Language registry** lives in `sources/text/_all.ts` (`SupportedLanguage`, `SUPPORTED_LANGUAGES`, `DEFAULT_LANGUAGE`).
+  - **Per-language translations** live in `sources/text/translations/<lang>.ts` and must match `TranslationStructure` from `_default.ts`.
+  - **Keep `sources/text/translations/en.ts` in sync** with `_default.ts` (it exists and is used by tooling/scripts even if runtime English comes from `_default.ts`).
+
+- **How to add / change translatable strings (required workflow)**:
+  - **Add/modify the key in `sources/text/_default.ts`** under the most appropriate existing section.
+  - **Mirror the same key change in every supported language file** under `sources/text/translations/`:
+    - `ca`, `en`, `es`, `it`, `ja`, `pl`, `pt`, `ru`, `zh-Hans`
+  - **If the translation is dynamic**:
+    - Use a function value that takes a **single typed object param** (e.g. `({ count }: { count: number }) => ...`).
+    - Keep **parameter names and types identical across all languages** for the same key.
+    - Follow existing per-language pluralization helpers (some languages have custom plural rules).
+
+- **Allowed “same as English” cases** (do not translate blindly):
+  - Keep common technical/proper tokens in English where appropriate (examples seen in repo patterns): `GitHub`, `URL`, `API`, `CLI`, `OAuth`, `QR`, `JSON`, `HTTP`, `HTTPS`, `ID`, `PID`.
+
+- **Verification (must be stack-scoped via Happy Stacks)**:
+  - Run a stack-scoped typecheck for the `happy` component (or capture evidence). Missing keys/shape mismatches must fail the typecheck due to `TranslationStructure`.
+
+### Component: `happy-cli` (not translated — do NOT “half-translate”)
+
+- There is **no enforced i18n system** in this repo today.
+- Do **not** introduce partial translation patterns (no ad-hoc locale maps, no scattered i18n helpers) as part of unrelated work.
+- If you believe i18n should be introduced, treat it as an **explicit feature/architecture change** and update these constitution rules accordingly.
+
+### Component: `happy-server` / `happy-server-light` (not translated)
+
+- These repos do **not** use the `happy` UI translation system.
+- Do **not** translate server logs/errors piecemeal unless/until a dedicated server-side i18n system exists.
+
 ---
 
 ## Optional References

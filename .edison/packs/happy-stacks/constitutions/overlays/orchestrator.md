@@ -39,5 +39,32 @@
 - **Evidence is stack-scoped by default**:
   - Run: `happys edison --stack=<stack> -- evidence capture <task-id>`
   - This ensures evidence reflects the exact component repos/worktrees the stack uses.
+
+## Happy component translations (MANDATORY where applicable)
+
+When planning/scaffolding work across Happy components, you must explicitly account for whether the target repo is translated.
+
+### Component: `happy` (translated UI — MUST translate)
+
+- **Treat i18n as a required deliverable** for any user-facing UI copy changes.
+  - If the task touches UI strings, the “definition of done” includes updating translations.
+  - Do not accept “English-only now, translate later” for `happy`.
+
+- **Orchestration expectations**:
+  - Ensure the implementer knows to use `t('...')` from `@/text` (no hardcoded JSX strings for user-visible text).
+  - Ensure the implementer updates:
+    - `sources/text/_default.ts` (canonical keys + runtime English + types)
+    - `sources/text/translations/<lang>.ts` for **every supported language**
+    - and keeps `sources/text/translations/en.ts` in sync with `_default.ts`
+  - If the work is large, explicitly allocate time/work to i18n review (tone, length, line breaks, pluralization).
+
+### Component: `happy-cli` (not translated)
+
+- Do not demand translations for this repo unless/until it adopts an explicit i18n system.
+- If a task proposes adding i18n, treat that as an explicit architecture change and update the constitution overlays accordingly.
+
+### Component: `happy-server` / `happy-server-light` (not translated)
+
+- Do not demand translations for these repos unless/until they adopt an explicit i18n system.
 <!-- /EXTEND -->
 
