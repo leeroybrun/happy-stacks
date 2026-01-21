@@ -20,6 +20,22 @@ async function main() {
   const { flags } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
 
+  const helpText = [
+    '[env] usage:',
+    '  happys env set KEY=VALUE [KEY2=VALUE2...]',
+    '  happys env unset KEY [KEY2...]',
+    '  happys env get KEY',
+    '  happys env list',
+    '  happys env path',
+    '',
+    'defaults:',
+    '  - If running under a stack wrapper (HAPPY_STACKS_ENV_FILE is set), edits that stack env file.',
+    '  - Otherwise, edits the main stack env file (~/.happy/stacks/main/env).',
+    '',
+    'notes:',
+    '  - Changes take effect on next stack/daemon start (restart to apply).',
+  ].join('\n');
+
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
@@ -27,21 +43,7 @@ async function main() {
         usage:
           'happys env set KEY=VALUE [KEY2=VALUE2...] | unset KEY [KEY2...] | get KEY | list | path [--json]',
       },
-      text: [
-        '[env] usage:',
-        '  happys env set KEY=VALUE [KEY2=VALUE2...]',
-        '  happys env unset KEY [KEY2...]',
-        '  happys env get KEY',
-        '  happys env list',
-        '  happys env path',
-        '',
-        'defaults:',
-        '  - If running under a stack wrapper (HAPPY_STACKS_ENV_FILE is set), edits that stack env file.',
-        '  - Otherwise, edits the main stack env file (~/.happy/stacks/main/env).',
-        '',
-        'notes:',
-        '  - Changes take effect on next stack/daemon start (restart to apply).',
-      ].join('\n'),
+      text: helpText,
     });
     return;
   }
@@ -50,8 +52,23 @@ async function main() {
   const subcmd = (positionals[0] ?? '').trim() || 'help';
   const envPath = resolveTargetEnvPath();
 
+  if (subcmd === 'help') {
+    printResult({
+      json,
+      data: {
+        usage: 'happys env set|unset|get|list|path [--json]',
+      },
+      text: helpText,
+    });
+    return;
+  }
+
   if (subcmd === 'path') {
-    printResult({ json, data: { ok: true, envPath } });
+    printResult({
+      json,
+      data: { ok: true, envPath },
+      text: envPath,
+    });
     return;
   }
 
@@ -59,7 +76,12 @@ async function main() {
   const parsed = parseEnvToObject(raw);
 
   if (subcmd === 'list') {
-    printResult({ json, data: { ok: true, envPath, env: parsed } });
+    const keys = Object.keys(parsed ?? {}).sort((a, b) => a.localeCompare(b));
+    const text = [
+      `[env] path: ${envPath}`,
+      ...keys.map((k) => `${k}=${parsed[k] ?? ''}`),
+    ].join('\n');
+    printResult({ json, data: { ok: true, envPath, env: parsed }, text });
     return;
   }
 
@@ -69,7 +91,11 @@ async function main() {
       throw new Error('[env] usage: happys env get KEY');
     }
     const value = Object.prototype.hasOwnProperty.call(parsed, key) ? parsed[key] : null;
-    printResult({ json, data: { ok: true, envPath, key, value } });
+    printResult({
+      json,
+      data: { ok: true, envPath, key, value },
+      text: value == null ? '' : String(value),
+    });
     return;
   }
 
@@ -91,7 +117,12 @@ async function main() {
       return { key, value };
     });
     await ensureEnvFileUpdated({ envPath, updates });
-    printResult({ json, data: { ok: true, envPath, updatedKeys: updates.map((u) => u.key) } });
+    const updatedKeys = updates.map((u) => u.key);
+    printResult({
+      json,
+      data: { ok: true, envPath, updatedKeys },
+      text: `[env] ok: set ${updatedKeys.join(', ')}\n[env] path: ${envPath}`,
+    });
     return;
   }
 
@@ -101,7 +132,11 @@ async function main() {
       throw new Error('[env] usage: happys env unset KEY [KEY2...]');
     }
     await ensureEnvFilePruned({ envPath, removeKeys: keys });
-    printResult({ json, data: { ok: true, envPath, removedKeys: keys } });
+    printResult({
+      json,
+      data: { ok: true, envPath, removedKeys: keys },
+      text: `[env] ok: unset ${keys.join(', ')}\n[env] path: ${envPath}`,
+    });
     return;
   }
 

@@ -61,3 +61,27 @@ test('happys stack env set/unset writes to stack env file', async () => {
   assert.ok(!afterUnset.includes('FOO=bar'), `expected env file to remove FOO\n${afterUnset}`);
 });
 
+test('happys stack env <name> defaults to list', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-env-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp-test';
+
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await writeFile(envPath, 'FOO=bar\n', 'utf-8');
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+  };
+
+  const res = await runNode([join(rootDir, 'scripts', 'stack.mjs'), 'env', stackName], { cwd: rootDir, env: baseEnv });
+  assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+  assert.ok(res.stdout.includes('FOO=bar'), `expected stdout to include FOO=bar\nstdout:\n${res.stdout}`);
+});
+

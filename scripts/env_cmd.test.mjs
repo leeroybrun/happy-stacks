@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,5 +78,51 @@ test('happys env edits the explicit stack env file when HAPPY_STACKS_ENV_FILE is
 
   const raw = await readFile(envPath, 'utf-8');
   assert.ok(raw.includes('FOO=bar'), `expected FOO in explicit env file\n${raw}`);
+});
+
+test('happys env (no subcommand) prints usage and exits 0', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-env-cmd-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  await mkdir(storageDir, { recursive: true });
+  await mkdir(homeDir, { recursive: true });
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+  };
+
+  const res = await runNode([join(rootDir, 'scripts', 'env.mjs')], { cwd: rootDir, env: baseEnv });
+  assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+  assert.ok(res.stdout.includes('[env] usage:'), `expected usage output\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+});
+
+test('happys env list prints keys in text mode', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-env-cmd-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp1';
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await mkdir(homeDir, { recursive: true });
+  await writeFile(envPath, 'FOO=bar\n', 'utf-8');
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+    HAPPY_STACKS_ENV_FILE: envPath,
+  };
+
+  const res = await runNode([join(rootDir, 'scripts', 'env.mjs'), 'list'], { cwd: rootDir, env: baseEnv });
+  assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+  assert.ok(res.stdout.includes('FOO=bar'), `expected list output to include FOO=bar\nstdout:\n${res.stdout}`);
 });
 

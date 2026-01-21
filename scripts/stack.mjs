@@ -3205,12 +3205,14 @@ async function main() {
   const passthrough = argv.slice(2);
 
   if (cmd === 'env') {
+    const hasPositional = passthrough.some((a) => !a.startsWith('-'));
+    const envArgv = hasPositional ? passthrough : ['list', ...passthrough];
     // Forward to scripts/env.mjs under the stack env.
     // This keeps stack env editing behavior unified with `happys env ...`.
     await withStackEnv({
       stackName,
       fn: async ({ env }) => {
-        await run(process.execPath, [join(rootDir, 'scripts', 'env.mjs'), ...passthrough], { cwd: rootDir, env });
+        await run(process.execPath, [join(rootDir, 'scripts', 'env.mjs'), ...envArgv], { cwd: rootDir, env });
       },
     });
     return;
