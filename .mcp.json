@@ -1,12 +1,11 @@
 {
   "mcpServers": {
     "context7": {
+      "command": "/bin/bash",
       "args": [
-        "-y",
-        "@upstash/context7-mcp@latest"
-      ],
-      "command": "npx",
-      "env": {}
+        "-c",
+        "set -a; [ -f \"$HOME/.config/context7.env\" ] && source \"$HOME/.config/context7.env\"; set +a; if [ -n \"$CONTEXT7_API_KEY\" ]; then exec npx -y @upstash/context7-mcp@latest --api-key \"$CONTEXT7_API_KEY\"; else exec npx -y @upstash/context7-mcp@latest; fi"
+      ]
     },
     "edison-pal": {
       "args": [
