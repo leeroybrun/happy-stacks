@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commandHelpArgs, renderHappysRootHelp, resolveHappysCommand } from '../scripts/utils/cli/cli_registry.mjs';
 import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../scripts/utils/paths/canonical_home.mjs';
+import { resolveStackEnvPath } from '../scripts/utils/paths/paths.mjs';
 
 function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
@@ -377,8 +378,50 @@ function main() {
     return runNodeScript(cliRootDir, targetCmd.scriptRelPath, helpArgs);
   }
 
-  const resolved = resolveHappysCommand(cmd);
+  let resolved = resolveHappysCommand(cmd);
   if (!resolved) {
+    // Stack shorthand:
+    // If the first token is not a known command, but it *is* an existing stack name,
+    // treat `happys <stack> <command> ...` as `happys stack <command> <stack> ...`.
+    const stackName = cmd;
+    const { envPath } = resolveStackEnvPath(stackName, process.env);
+    const stackExists = existsSync(envPath);
+    if (stackExists) {
+      const cmdIdx = rest.findIndex((a) => !a.startsWith('-'));
+      if (cmdIdx < 0) {
+        if (rest.includes('--help') || rest.includes('-h')) {
+          const stackCmd = resolveHappysCommand('stack');
+          if (!stackCmd || stackCmd.kind !== 'node') {
+            console.error('[happys] internal error: missing stack command');
+            process.exit(1);
+          }
+          return runNodeScript(cliRootDir, stackCmd.scriptRelPath, ['--help']);
+        }
+        console.error(`[happys] missing command after stack name: ${stackName}`);
+        console.error('');
+        console.error('Try one of:');
+        console.error(`  happys ${stackName} env list`);
+        console.error(`  happys ${stackName} dev`);
+        console.error(`  happys ${stackName} start`);
+        console.error('');
+        console.error('Equivalent long form:');
+        console.error(`  happys stack <command> ${stackName} ...`);
+        process.exit(1);
+      }
+
+      const stackSubcmd = rest[cmdIdx];
+      const preFlags = rest.slice(0, cmdIdx);
+      const post = rest.slice(cmdIdx + 1);
+      const stackArgs = [stackSubcmd, stackName, ...preFlags, ...post];
+
+      resolved = resolveHappysCommand('stack');
+      if (!resolved || resolved.kind !== 'node') {
+        console.error('[happys] internal error: missing stack command');
+        process.exit(1);
+      }
+      return runNodeScript(cliRootDir, resolved.scriptRelPath, stackArgs);
+    }
+
     console.error(`[happys] unknown command: ${cmd}`);
     console.error('');
     console.error(usage());
