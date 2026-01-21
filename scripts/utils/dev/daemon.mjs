@@ -124,7 +124,20 @@ export function watchHappyCliAndRestartDaemon({
       try {
         // eslint-disable-next-line no-console
         console.log('[local] watch: happy-cli changed → rebuilding + restarting daemon...');
-        await ensureCliBuilt(cliDir, { buildCli });
+        try {
+          await ensureCliBuilt(cliDir, { buildCli });
+        } catch (e) {
+          // IMPORTANT:
+          // - A rebuild can legitimately fail while an agent is mid-edit (e.g. TS errors).
+          // - In that case we must NOT restart the daemon (we'd just restart into a broken build),
+          //   and we must NOT crash the parent dev process. Keep watching for the next change.
+          const msg = e instanceof Error ? e.stack || e.message : String(e);
+          // eslint-disable-next-line no-console
+          console.error('[local] watch: happy-cli rebuild failed; keeping daemon running (will retry on next change).');
+          // eslint-disable-next-line no-console
+          console.error(msg);
+          return;
+        }
         const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
         if (!existsSync(distEntrypoint)) {
           console.warn(

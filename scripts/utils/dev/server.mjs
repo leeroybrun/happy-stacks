@@ -155,19 +155,27 @@ export function watchDevServerAndRestart({
       const pid = Number(serverProcRef?.current?.pid);
       if (!Number.isFinite(pid) || pid <= 1) return;
 
-      // eslint-disable-next-line no-console
-      console.log('[local] watch: server changed → restarting...');
-      await killProcessGroupOwnedByStack(pid, { stackName, envPath, label: 'server', json: false });
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[local] watch: server changed → restarting...');
+        await killProcessGroupOwnedByStack(pid, { stackName, envPath, label: 'server', json: false });
 
-      const next = await pmSpawnScript({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
-      children.push(next);
-      serverProcRef.current = next;
-      if (stackMode && runtimeStatePath) {
-        await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: next.pid } }).catch(() => {});
+        const next = await pmSpawnScript({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
+        children.push(next);
+        serverProcRef.current = next;
+        if (stackMode && runtimeStatePath) {
+          await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: next.pid } }).catch(() => {});
+        }
+        await waitForServerReady(internalServerUrl);
+        // eslint-disable-next-line no-console
+        console.log(`[local] watch: server restarted (pid=${next.pid}, port=${serverPort})`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.stack || e.message : String(e);
+        // eslint-disable-next-line no-console
+        console.error('[local] watch: server restart failed; keeping existing process as-is (will retry on next change).');
+        // eslint-disable-next-line no-console
+        console.error(msg);
       }
-      await waitForServerReady(internalServerUrl);
-      // eslint-disable-next-line no-console
-      console.log(`[local] watch: server restarted (pid=${next.pid}, port=${serverPort})`);
     },
   });
 }
