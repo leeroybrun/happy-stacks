@@ -20,12 +20,15 @@ import { bold, cyan, dim } from './utils/ui/ansi.mjs';
 function usage() {
   return [
     '[review-pr] usage:',
-    '  happys review-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile|--no-mobile] [--forks|--upstream] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--keep-sandbox] [--json] [-- <stack dev/start args...>]',
+    '  happys review-pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile|--no-mobile] [--forks|--upstream] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--keep-sandbox] [--json] [-- <stack dev/start args...>]',
     '',
     'What it does:',
     '- creates a temporary sandbox dir',
     '- runs `happys setup-pr ...` inside that sandbox (fully isolated state)',
     '- on exit (including Ctrl+C): stops sandbox processes and deletes the sandbox dir',
+    '',
+    'legacy note:',
+    '- `--happy-cli` / `--happy-server` are legacy split-repo flags; in monorepo mode, use `--happy` only.',
   ].join('\n');
 }
  

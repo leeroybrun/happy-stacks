@@ -306,7 +306,7 @@ async function cmdSetup({ rootDir, argv }) {
         '  happys setup --profile=selfhost',
         '  happys setup --profile=dev',
         '  happys setup --profile=dev --workspace-dir=~/Development/happy',
-        '  happys setup pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>]',
+        '  happys setup pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>]',
         '  happys setup --auth',
         '  happys setup --no-auth',
         '',
@@ -813,4 +813,3 @@ main().catch((err) => {
   console.error('[setup] failed:', err);
   process.exit(1);
 });
-

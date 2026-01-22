@@ -13,6 +13,7 @@ import { maybeResetTailscaleServe } from './tailscale.mjs';
 import { isDaemonRunning, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/server/validate.mjs';
+import { resolveServerStartScript } from './utils/server/flavor_scripts.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
 import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded, resolveAutoCopyFromMainEnabled } from './utils/stack/startup.mjs';
 import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
@@ -24,12 +25,13 @@ import { ensureDevExpoServer, resolveExpoTailscaleEnabled } from './utils/dev/ex
 import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
+import { resolveServerUiEnv } from './utils/server/ui_env.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
- * - happy-server-light
+ * - server (happy-server-light by default)
  * - happy-cli daemon
- * - serve prebuilt UI via happy-server-light (/)
+ * - optionally serve prebuilt UI (via server or gateway)
  *
  * Optional: Expo dev-client Metro for mobile reviewers (`--mobile`).
  */
@@ -104,6 +106,7 @@ async function main() {
   const serverDir = getComponentDir(rootDir, serverComponentName);
   const cliDir = getComponentDir(rootDir, 'happy-cli');
   const uiDir = getComponentDir(rootDir, 'happy');
+  const serverStartScript = resolveServerStartScript({ serverComponentName, serverDir });
 
   assertServerComponentDirMatches({ rootDir, serverComponentName, serverDir });
   assertServerPrismaProviderMatches({ serverComponentName, serverDir });
@@ -144,12 +147,13 @@ async function main() {
     return;
   }
 
-  if (serveUi && !(await pathExists(uiBuildDir))) {
+  const uiBuildDirExists = await pathExists(uiBuildDir);
+  if (serveUi && !uiBuildDirExists) {
     if (serverComponentName === 'happy-server-light') {
       throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: happys build (legacy in a cloned repo: pnpm build)`);
     }
-    // For happy-server, UI serving is optional via the UI gateway.
-    console.log(`[local] UI build directory not found at ${uiBuildDir}; UI gateway will be disabled`);
+    // For happy-server, UI serving is optional.
+    console.log(`[local] UI build directory not found at ${uiBuildDir}; UI serving will be disabled`);
   }
 
   const children = [];
@@ -218,12 +222,7 @@ async function main() {
     // Avoid noisy failures if a previous run left the metrics port busy.
     // You can override with METRICS_ENABLED=true if you want it.
     METRICS_ENABLED: baseEnv.METRICS_ENABLED ?? 'false',
-    ...(serveUi && serverComponentName === 'happy-server-light'
-      ? {
-          HAPPY_SERVER_LIGHT_UI_DIR: uiBuildDir,
-          HAPPY_SERVER_LIGHT_UI_PREFIX: uiPrefix,
-        }
-      : {}),
+    ...resolveServerUiEnv({ serveUi, uiBuildDir, uiPrefix, uiBuildDirExists }),
   };
   let serverLightAccountCount = null;
   let happyServerAccountCount = null;
@@ -322,7 +321,7 @@ async function main() {
   // Default server start (happy-server-light, or happy-server without managed infra).
   if (!(serverComponentName === 'happy-server' && (baseEnv.HAPPY_STACKS_MANAGED_INFRA ?? baseEnv.HAPPY_LOCAL_MANAGED_INFRA ?? '1') !== '0')) {
     if (!serverAlreadyRunning || restart) {
-      const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: 'start', env: serverEnv });
+      const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: serverStartScript, env: serverEnv });
       children.push(server);
       if (stackMode && runtimeStatePath) {
         await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: server.pid } }).catch(() => {});

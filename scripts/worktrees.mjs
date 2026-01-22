@@ -1,25 +1,39 @@
 import './utils/env/env.mjs';
-import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { copyFile, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { commandExists, resolveCommandPath } from './utils/proc/commands.mjs';
-import { componentDirEnvKey, getComponentDir, getComponentsDir, getHappyStacksHomeDir, getRootDir, getWorkspaceDir } from './utils/paths/paths.mjs';
-import { inferRemoteNameForOwner, parseGithubOwner } from './utils/git/worktrees.mjs';
-import { getWorktreesRoot } from './utils/git/worktrees.mjs';
+import {
+  componentDirEnvKey,
+  coerceHappyMonorepoRootFromPath,
+  getComponentDir,
+  getComponentRepoDir,
+  getComponentsDir,
+  getHappyStacksHomeDir,
+  getRootDir,
+  getWorkspaceDir,
+  happyMonorepoSubdirForComponent,
+  isHappyMonorepoRoot,
+  resolveStackEnvPath,
+} from './utils/paths/paths.mjs';
+import { getWorktreesRoot, inferRemoteNameForOwner, listWorktreeSpecs, parseGithubOwner, resolveComponentSpecToDir } from './utils/git/worktrees.mjs';
 import { parseGithubPullRequest, sanitizeSlugPart } from './utils/git/refs.mjs';
 import { readTextIfExists } from './utils/fs/ops.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
-import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
+import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { isSandboxed } from './utils/env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
+import { listAllStackNames } from './utils/stack/stacks.mjs';
+import { parseDotenv } from './utils/env/dotenv.mjs';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
+const HAPPY_MONOREPO_GROUP_COMPONENTS = ['happy', 'happy-cli', 'happy-server'];
 
 function getActiveStackName() {
   return (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
@@ -29,8 +43,36 @@ function isMainStack() {
   return getActiveStackName() === 'main';
 }
 
+function isHappyMonorepoGroupComponent(component) {
+  return HAPPY_MONOREPO_GROUP_COMPONENTS.includes(String(component ?? '').trim());
+}
+
+function isActiveHappyMonorepo(rootDir, component) {
+  const repoDir = getComponentRepoDir(rootDir, component);
+  return isHappyMonorepoRoot(repoDir);
+}
+
+function worktreeRepoKeyForComponent(rootDir, component) {
+  const c = String(component ?? '').trim();
+  if (isHappyMonorepoGroupComponent(c) && isActiveHappyMonorepo(rootDir, c)) {
+    return 'happy';
+  }
+  return c;
+}
+
+function componentOverrideKeys(component) {
+  const key = componentDirEnvKey(component);
+  return { key, legacyKey: key.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_') };
+}
+
+function getDefaultComponentDir(rootDir, component) {
+  const { key, legacyKey } = componentOverrideKeys(component);
+  // Clone env so we can suppress the override for this lookup.
+  const env = { ...process.env, [key]: '', [legacyKey]: '' };
+  return getComponentDir(rootDir, component, env);
+}
+
 function resolveComponentWorktreeDir({ rootDir, component, spec }) {
-  const worktreesRoot = getWorktreesRoot(rootDir);
   const raw = (spec ?? '').trim();
 
   if (!raw) {
@@ -39,19 +81,37 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
   }
 
   if (raw === 'default' || raw === 'main') {
-    return join(getComponentsDir(rootDir), component);
+    return getDefaultComponentDir(rootDir, component);
   }
 
   if (raw === 'active') {
     return getComponentDir(rootDir, component);
   }
 
-  if (isAbsolute(raw)) {
-    return raw;
+  if (!isAbsolute(raw)) {
+    // Allow passing a repo-relative path (e.g. "components/happy") as an escape hatch.
+    const rel = resolve(getWorkspaceDir(rootDir), raw);
+    if (existsSync(rel)) {
+      return (
+        resolveComponentSpecToDir({ rootDir, component, spec: rel }) ??
+        // Should never happen because rel is absolute and non-empty.
+        rel
+      );
+    }
   }
 
-  // Interpret as <owner>/<rest...> under components/.worktrees/<component>/.
-  return join(worktreesRoot, component, ...raw.split('/'));
+  // Absolute paths and <owner>/<branch...> specs.
+  const resolved = resolveComponentSpecToDir({ rootDir, component, spec: raw });
+  if (resolved) return resolved;
+
+  // Fallback: treat raw as a literal path.
+  if (isAbsolute(raw)) {
+    const monoRoot = coerceHappyMonorepoRootFromPath(raw);
+    const sub = happyMonorepoSubdirForComponent(component);
+    if (monoRoot && sub) return join(monoRoot, sub);
+    return raw;
+  }
+  return null;
 }
 
 async function isWorktreeClean(dir) {
@@ -117,6 +177,181 @@ async function getWorktreeGitDir(worktreeDir) {
   const gitDir = (await git(worktreeDir, ['rev-parse', '--git-dir'])).trim();
   // rev-parse may return a relative path.
   return isAbsolute(gitDir) ? gitDir : resolve(worktreeDir, gitDir);
+}
+
+async function gitShowTopLevel(dir) {
+  return (await git(dir, ['rev-parse', '--show-toplevel'])).trim();
+}
+
+function getTodayYmd() {
+  const now = new Date();
+  const y = String(now.getFullYear());
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function parseGitdirFile(contents) {
+  const raw = (contents ?? '').toString();
+  const line = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.startsWith('gitdir:'));
+  const path = line?.slice('gitdir:'.length).trim();
+  return path || null;
+}
+
+function inferSourceRepoDirFromLinkedGitDir(linkedGitDir) {
+  // Typical worktree gitdir: "<repo>/.git/worktrees/<name>"
+  // We want "<repo>".
+  const worktreesDir = dirname(linkedGitDir);
+  const gitDir = dirname(worktreesDir);
+  if (basename(worktreesDir) !== 'worktrees' || basename(gitDir) !== '.git') {
+    return null;
+  }
+  return dirname(gitDir);
+}
+
+function isJsonMode() {
+  return Boolean((process.argv ?? []).includes('--json'));
+}
+
+async function runMaybeQuiet(cmd, args, options) {
+  if (isJsonMode()) {
+    await runCapture(cmd, args, options);
+    return;
+  }
+  await run(cmd, args, options);
+}
+
+async function detachGitWorktree({ worktreeDir, expectedBranch = null }) {
+  const gitPath = join(worktreeDir, '.git');
+
+  // If `.git` is already a directory, it's already detached.
+  if (await pathExists(join(worktreeDir, '.git', 'HEAD'))) {
+    const head = (await git(worktreeDir, ['rev-parse', 'HEAD'])).trim();
+    let branch = null;
+    try {
+      const b = (await git(worktreeDir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+      branch = b || null;
+    } catch {
+      branch = null;
+    }
+    // Already detached repos have no "source" repo to prune, and we must not delete the branch here.
+    const gitDir = await getWorktreeGitDir(worktreeDir);
+    return { worktreeDir, head, branch, sourceRepoDir: null, linkedGitDir: gitDir, alreadyDetached: true };
+  }
+
+  const gitFileContents = await readFile(gitPath, 'utf-8');
+  const linkedGitDirFromFile = parseGitdirFile(gitFileContents);
+  if (!linkedGitDirFromFile) {
+    throw new Error(`[wt] expected ${gitPath} to be a linked worktree .git file`);
+  }
+  const linkedGitDir = isAbsolute(linkedGitDirFromFile) ? linkedGitDirFromFile : resolve(worktreeDir, linkedGitDirFromFile);
+
+  // If the worktree's linked gitdir has been deleted (common after manual moves/prunes),
+  // we can still archive it by reconstructing a standalone repo from the source repo.
+  const linkedGitDirExists = await pathExists(linkedGitDir);
+  const isBrokenLinkedWorktree = !linkedGitDirExists;
+
+  let branch = null;
+  let head = '';
+
+  if (!isBrokenLinkedWorktree) {
+    head = (await git(worktreeDir, ['rev-parse', 'HEAD'])).trim();
+    try {
+      const b = (await git(worktreeDir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+      branch = b || null;
+    } catch {
+      branch = null;
+    }
+  } else {
+    branch = expectedBranch || null;
+  }
+
+  let sourceRepoDir = null;
+  if (!isBrokenLinkedWorktree) {
+    const commonDir = (await git(worktreeDir, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+    sourceRepoDir = dirname(commonDir);
+  } else {
+    sourceRepoDir = inferSourceRepoDirFromLinkedGitDir(linkedGitDir);
+    if (!sourceRepoDir) {
+      throw new Error(`[wt] unable to infer source repo dir from broken linked gitdir: ${linkedGitDir}`);
+    }
+    if (!head) {
+      try {
+        if (branch) {
+          head = (await runCapture('git', ['rev-parse', branch], { cwd: sourceRepoDir })).trim();
+        } else {
+          head = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: sourceRepoDir })).trim();
+        }
+      } catch {
+        head = '';
+      }
+    }
+  }
+
+  await rename(gitPath, join(worktreeDir, '.git.worktree'));
+  await runMaybeQuiet('git', ['init'], { cwd: worktreeDir });
+
+  const remoteName = 'archive-source';
+  if (sourceRepoDir) {
+    await runMaybeQuiet('git', ['remote', 'add', remoteName, sourceRepoDir], { cwd: worktreeDir });
+    await runMaybeQuiet('git', ['fetch', '--tags', remoteName], { cwd: worktreeDir });
+  }
+
+  if (branch) {
+    await runMaybeQuiet('git', ['update-ref', `refs/heads/${branch}`, head], { cwd: worktreeDir });
+    await runMaybeQuiet('git', ['symbolic-ref', 'HEAD', `refs/heads/${branch}`], { cwd: worktreeDir });
+  } else {
+    await writeFile(join(worktreeDir, '.git', 'HEAD'), `${head}\n`, 'utf-8');
+  }
+
+  // Preserve staged state by copying the per-worktree index into the new repo.
+  if (!isBrokenLinkedWorktree) {
+    await copyFile(join(linkedGitDir, 'index'), join(worktreeDir, '.git', 'index')).catch(() => {});
+  } else if (head) {
+    // Populate the index from HEAD without touching the working tree, so uncommitted changes remain intact.
+    await runMaybeQuiet('git', ['read-tree', head], { cwd: worktreeDir }).catch(() => {});
+  }
+  // Avoid leaving a confusing untracked file behind in the archived repo.
+  await rm(join(worktreeDir, '.git.worktree'), { force: true }).catch(() => {});
+
+  return { worktreeDir, head, branch, sourceRepoDir, linkedGitDir, alreadyDetached: false };
+}
+
+async function findStacksReferencingWorktree({ rootDir, worktreeDir }) {
+  const workspaceDir = getWorkspaceDir(rootDir);
+  const wtReal = await realpath(worktreeDir).catch(() => resolve(worktreeDir));
+  const stackNames = await listAllStackNames();
+  const hits = [];
+
+  for (const name of stackNames) {
+    const { envPath } = resolveStackEnvPath(name);
+    const contents = await readFile(envPath, 'utf-8').catch(() => '');
+    if (!contents) continue;
+    const parsed = parseDotenv(contents);
+    const keys = [];
+
+    for (const [k, v] of parsed.entries()) {
+      if (!k.startsWith('HAPPY_STACKS_COMPONENT_DIR_') && !k.startsWith('HAPPY_LOCAL_COMPONENT_DIR_')) {
+        continue;
+      }
+      const raw = String(v ?? '').trim();
+      if (!raw) continue;
+      const abs = isAbsolute(raw) ? raw : resolve(workspaceDir, raw);
+      const absReal = await realpath(abs).catch(() => resolve(abs));
+      if (absReal === wtReal || absReal.startsWith(wtReal + '/')) {
+        keys.push(k);
+      }
+    }
+
+    if (keys.length) {
+      hits.push({ name, envPath, keys });
+    }
+  }
+
+  return hits;
 }
 
 async function ensureWorktreeExclude(worktreeDir, patterns) {
@@ -317,7 +552,7 @@ function parseWorktreeListPorcelain(out) {
 
 function getComponentRepoRoot(rootDir, component) {
   // Respect component dir overrides so repos can live outside components/ (e.g. an existing checkout at ../happy-server).
-  return getComponentDir(rootDir, component);
+  return getComponentRepoDir(rootDir, component);
 }
 
 async function resolveOwners(repoRoot) {
@@ -460,7 +695,8 @@ async function migrateComponentWorktrees({ rootDir, component }) {
       renamed += 1;
     }
 
-    const destPath = join(wtRoot, component, owner, ...rest.split('/'));
+    const repoKey = worktreeRepoKeyForComponent(rootDir, component);
+    const destPath = join(wtRoot, repoKey, owner, ...rest.split('/'));
     await mkdir(dirname(destPath), { recursive: true });
 
     if (resolve(destPath) !== resolve(wtPath)) {
@@ -494,7 +730,16 @@ async function migrateComponentWorktrees({ rootDir, component }) {
 async function cmdMigrate({ rootDir }) {
   let totalMoved = 0;
   let totalRenamed = 0;
+  const seenRepoKeys = new Set();
+  const migrateComponents = [];
   for (const component of DEFAULT_COMPONENTS) {
+    const repoKey = worktreeRepoKeyForComponent(rootDir, component);
+    if (seenRepoKeys.has(repoKey)) continue;
+    seenRepoKeys.add(repoKey);
+    migrateComponents.push(component);
+  }
+
+  for (const component of migrateComponents) {
     const res = await migrateComponentWorktrees({ rootDir, component });
     totalMoved += res.moved;
     totalRenamed += res.renamed;
@@ -510,15 +755,27 @@ async function cmdMigrate({ rootDir }) {
 
   if (await pathExists(envPath)) {
     const raw = (await readTextIfExists(envPath)) ?? '';
+    const hasHappyMonorepo = isActiveHappyMonorepo(rootDir, 'happy');
     const rewrite = (v) => {
       if (!v.includes('/components/')) {
         return v;
       }
+      if (hasHappyMonorepo) {
+        return v
+          .replace('/components/happy-worktrees/', '/components/.worktrees/happy/')
+          .replace('/components/happy-cli-worktrees/', '/components/.worktrees/happy/')
+          .replace('/components/happy-server-worktrees/', '/components/.worktrees/happy/')
+          .replace('/components/happy-resume-upstream-clean', '/components/.worktrees/happy/')
+          .replace('/components/happy-cli-resume-upstream-clean', '/components/.worktrees/happy/')
+          .replace('/components/happy-server-resume-upstream-clean', '/components/.worktrees/happy/');
+      }
       return v
         .replace('/components/happy-worktrees/', '/components/.worktrees/happy/')
         .replace('/components/happy-cli-worktrees/', '/components/.worktrees/happy-cli/')
+        .replace('/components/happy-server-worktrees/', '/components/.worktrees/happy-server/')
         .replace('/components/happy-resume-upstream-clean', '/components/.worktrees/happy/')
-        .replace('/components/happy-cli-resume-upstream-clean', '/components/.worktrees/happy-cli/');
+        .replace('/components/happy-cli-resume-upstream-clean', '/components/.worktrees/happy-cli/')
+        .replace('/components/happy-server-resume-upstream-clean', '/components/.worktrees/happy-server/');
     };
 
     for (const component of ['happy', 'happy-cli', 'happy-server-light', 'happy-server']) {
@@ -546,6 +803,9 @@ async function cmdUse({ rootDir, args, flags }) {
     throw new Error('[wt] usage: happys wt use <component> <owner/branch|path|default>');
   }
 
+  const updateComponents =
+    isHappyMonorepoGroupComponent(component) && isActiveHappyMonorepo(rootDir, component) ? HAPPY_MONOREPO_GROUP_COMPONENTS : [component];
+
   // Safety: main stack should not be repointed to arbitrary worktrees by default.
   // This is the most common “oops, the main stack now runs my PR checkout” footgun (especially for agents).
   const force = Boolean(flags?.has('--force'));
@@ -553,7 +813,7 @@ async function cmdUse({ rootDir, args, flags }) {
     throw new Error(
       `[wt] refusing to change main stack component override by default.\n` +
         `- stack: main\n` +
-        `- component: ${component}\n` +
+        `- component: ${component}${updateComponents.length > 1 ? ` (monorepo group: ${updateComponents.join(', ')})` : ''}\n` +
         `- requested: ${spec}\n` +
         `\n` +
         `Recommendation:\n` +
@@ -566,7 +826,6 @@ async function cmdUse({ rootDir, args, flags }) {
     );
   }
 
-  const key = componentDirEnvKey(component);
   const worktreesRoot = getWorktreesRoot(rootDir);
   const envPath = process.env.HAPPY_STACKS_ENV_FILE?.trim()
     ? process.env.HAPPY_STACKS_ENV_FILE.trim()
@@ -575,48 +834,57 @@ async function cmdUse({ rootDir, args, flags }) {
       : null;
 
   if (spec === 'default' || spec === 'main') {
+    const updates = updateComponents.map((c) => ({ key: componentDirEnvKey(c), value: '' }));
     // Clear override by setting it to empty (env.local keeps a record of last use, but override becomes inactive).
-    await (envPath
-      ? ensureEnvFileUpdated({ envPath, updates: [{ key, value: '' }] })
-      : ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: '' }] }));
-    return { component, activeDir: join(getComponentsDir(rootDir), component), mode: 'default' };
+    await (envPath ? ensureEnvFileUpdated({ envPath, updates }) : ensureEnvLocalUpdated({ rootDir, updates }));
+    return { component, activeDir: getDefaultComponentDir(rootDir, component), mode: 'default', updatedComponents: updateComponents };
   }
 
-  let dir = spec;
-  if (!isAbsolute(dir)) {
-    // Allow passing a repo-relative path (e.g. "components/happy-cli") as an escape hatch.
-    const rel = resolve(getWorkspaceDir(rootDir), dir);
-    if (await pathExists(rel)) {
-      dir = rel;
-    } else {
-      // Interpret as <owner>/<rest...> under components/.worktrees/<component>/.
-      dir = join(worktreesRoot, component, ...spec.split('/'));
-    }
-  } else {
-    dir = resolve(dir);
+  // Resolve the target to a concrete directory. This returns a component directory (e.g. .../cli)
+  // in monorepo mode, and a repo root for single-repo components.
+  const resolvedDir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  if (!resolvedDir) {
+    throw new Error(`[wt] unable to resolve spec: ${spec}`);
   }
 
-  if (!(await pathExists(dir))) {
-    throw new Error(`[wt] target does not exist: ${dir}`);
-  }
-
-  if (component === 'happy-server-light' || component === 'happy-server') {
-    const mismatch = detectServerComponentDirMismatch({ rootDir, serverComponentName: component, serverDir: dir });
-    if (mismatch) {
+  let writeDir = resolvedDir;
+  if (updateComponents.length > 1) {
+    const monoRoot = coerceHappyMonorepoRootFromPath(resolvedDir);
+    if (!monoRoot) {
       throw new Error(
-        `[wt] invalid target for ${component}:\n` +
-          `- expected a checkout of: ${mismatch.expected}\n` +
-          `- but the path points inside: ${mismatch.actual}\n` +
-          `- path: ${mismatch.serverDir}\n` +
-          `Fix: pick a worktree under components/.worktrees/${mismatch.expected}/ (or run: happys wt use ${mismatch.actual} <spec>).`
+        `[wt] invalid target for happy monorepo component '${component}':\n` +
+          `- expected a path inside the happy monorepo (contains expo-app/cli/server)\n` +
+          `- but got: ${resolvedDir}\n` +
+          `Fix: pick a worktree under ${join(worktreesRoot, 'happy')}/ or pass an absolute path to a monorepo checkout.`
       );
     }
+    writeDir = monoRoot;
   }
 
-  await (envPath
-    ? ensureEnvFileUpdated({ envPath, updates: [{ key, value: dir }] })
-    : ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: dir }] }));
-  return { component, activeDir: dir, mode: 'override' };
+  if (!(await pathExists(writeDir))) {
+    throw new Error(`[wt] target does not exist: ${writeDir}`);
+  }
+
+  for (const c of updateComponents) {
+    if (c !== 'happy-server-light' && c !== 'happy-server') continue;
+    const serverDir = resolveComponentSpecToDir({ rootDir, component: c, spec: writeDir }) ?? writeDir;
+    const mismatch = detectServerComponentDirMismatch({ rootDir, serverComponentName: c, serverDir });
+    if (!mismatch) continue;
+    const expectedRepoKey = worktreeRepoKeyForComponent(rootDir, mismatch.expected);
+    throw new Error(
+      `[wt] invalid target for ${c}:\n` +
+        `- expected a checkout of: ${mismatch.expected}\n` +
+        `- but the path points inside: ${mismatch.actual}\n` +
+        `- path: ${mismatch.serverDir}\n` +
+        `Fix: pick a worktree under components/.worktrees/${expectedRepoKey}/ (or run: happys wt use ${mismatch.actual} <spec>).`
+    );
+  }
+
+  const updates = updateComponents.map((c) => ({ key: componentDirEnvKey(c), value: writeDir }));
+  await (envPath ? ensureEnvFileUpdated({ envPath, updates }) : ensureEnvLocalUpdated({ rootDir, updates }));
+
+  const activeDir = resolveComponentSpecToDir({ rootDir, component, spec: writeDir }) ?? writeDir;
+  return { component, activeDir, mode: 'override', updatedComponents: updateComponents };
 }
 
 async function cmdUseInteractive({ rootDir }) {
@@ -626,25 +894,7 @@ async function cmdUseInteractive({ rootDir }) {
       throw new Error('[wt] component is required');
     }
 
-    const wtRoot = getWorktreesRoot(rootDir);
-    const base = join(wtRoot, component);
-    const specs = [];
-    const walk = async (d, prefix) => {
-      const entries = await readdir(d, { withFileTypes: true });
-      for (const e of entries) {
-        if (!e.isDirectory()) continue;
-        const p = join(d, e.name);
-        const nextPrefix = prefix ? `${prefix}/${e.name}` : e.name;
-        if (await pathExists(join(p, '.git'))) {
-          specs.push(nextPrefix);
-        }
-        await walk(p, nextPrefix);
-      }
-    };
-    if (await pathExists(base)) {
-      await walk(base, '');
-    }
-    specs.sort();
+    const specs = await listWorktreeSpecs({ rootDir, component });
 
     const kindOptions = [{ label: 'default', value: 'default' }];
     if (specs.length) {
@@ -717,8 +967,9 @@ async function cmdNew({ rootDir, argv }) {
   const branchName = `${owner}/${slug}`;
 
   const worktreesRoot = getWorktreesRoot(rootDir);
-  const destPath = join(worktreesRoot, component, owner, ...slug.split('/'));
-  await mkdir(dirname(destPath), { recursive: true });
+  const repoKey = worktreeRepoKeyForComponent(rootDir, component);
+  const destWorktreeRoot = join(worktreesRoot, repoKey, owner, ...slug.split('/'));
+  await mkdir(dirname(destWorktreeRoot), { recursive: true });
 
   // Ensure remotes are present.
   await git(repoRoot, ['fetch', '--all', '--prune', '--quiet']);
@@ -733,37 +984,23 @@ async function cmdNew({ rootDir, argv }) {
   // If the branch already exists (common when migrating between workspaces),
   // attach a new worktree to that branch instead of failing.
   if (await gitOk(repoRoot, ['show-ref', '--verify', `refs/heads/${branchName}`])) {
-    await git(repoRoot, ['worktree', 'add', destPath, branchName]);
+    await git(repoRoot, ['worktree', 'add', destWorktreeRoot, branchName]);
   } else {
-    await git(repoRoot, ['worktree', 'add', '-b', branchName, destPath, base]);
+    await git(repoRoot, ['worktree', 'add', '-b', branchName, destWorktreeRoot, base]);
   }
 
   const depsMode = parseDepsMode(kv.get('--deps'));
-  const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: destPath, depsMode, component });
+  const depsDir = resolveComponentSpecToDir({ rootDir, component, spec: destWorktreeRoot }) ?? destWorktreeRoot;
+  const deps = await maybeSetupDeps({ repoRoot, baseDir: baseWorktreeDir || '', worktreeDir: depsDir, depsMode, component });
 
   const shouldUse = flags.has('--use');
   const force = flags.has('--force');
   if (shouldUse) {
-    if (isMainStack() && !force) {
-      throw new Error(
-        `[wt] refusing to set main stack component override via --use by default.\n` +
-          `- stack: main\n` +
-          `- component: ${component}\n` +
-          `- new worktree: ${destPath}\n` +
-          `\n` +
-          `Recommendation:\n` +
-          `- Use an isolated stack instead:\n` +
-          `  happys stack new exp1 --interactive\n` +
-          `  happys stack wt exp1 -- use ${component} ${owner}/${slug}\n` +
-          `\n` +
-          `If you really intend to repoint the main stack, re-run with --force:\n` +
-          `  happys wt new ${component} ${slug} --use --force\n`
-      );
-    }
-    const key = componentDirEnvKey(component);
-    await ensureEnvLocalUpdated({ rootDir, updates: [{ key, value: destPath }] });
+    // Delegate to cmdUse so monorepo components stay coherent (and so stack-mode writes to the stack env file).
+    await cmdUse({ rootDir, args: [component, destWorktreeRoot], flags });
   }
-  return { component, branch: branchName, path: destPath, base, used: shouldUse, deps };
+
+  return { component, branch: branchName, path: depsDir, base, used: shouldUse, deps, repoKey, worktreeRoot: destWorktreeRoot };
 }
 
 async function cmdDuplicate({ rootDir, argv }) {
@@ -839,13 +1076,14 @@ async function cmdPr({ rootDir, argv }) {
   const branchName = `${owner}/${slug}`;
 
   const worktreesRoot = getWorktreesRoot(rootDir);
-  const destPath = join(worktreesRoot, component, owner, ...slug.split('/'));
-  await mkdir(dirname(destPath), { recursive: true });
+  const repoKey = worktreeRepoKeyForComponent(rootDir, component);
+  const destWorktreeRoot = join(worktreesRoot, repoKey, owner, ...slug.split('/'));
+  await mkdir(dirname(destWorktreeRoot), { recursive: true });
 
-  const exists = await pathExists(destPath);
+  const exists = await pathExists(destWorktreeRoot);
   const doUpdate = flags.has('--update');
   if (exists && !doUpdate) {
-    throw new Error(`[wt] destination already exists: ${destPath}\n[wt] re-run with --update to refresh it`);
+    throw new Error(`[wt] destination already exists: ${destWorktreeRoot}\n[wt] re-run with --update to refresh it`);
   }
 
   // Fetch PR head ref (GitHub convention). Use + to allow force-updated PR branches when --force is set.
@@ -857,16 +1095,16 @@ async function cmdPr({ rootDir, argv }) {
   if (exists) {
     // Update existing worktree.
     const stash = await maybeStash({
-      dir: destPath,
+      dir: destWorktreeRoot,
       enabled: flags.has('--stash'),
       keep: flags.has('--stash-keep'),
       message: `[happy-stacks] wt pr ${component} ${pr.number}`,
     });
-    if (!(await isWorktreeClean(destPath)) && !stash.stashed) {
-      throw new Error(`[wt] worktree is not clean (${destPath}). Re-run with --stash to auto-stash changes.`);
+    if (!(await isWorktreeClean(destWorktreeRoot)) && !stash.stashed) {
+      throw new Error(`[wt] worktree is not clean (${destWorktreeRoot}). Re-run with --stash to auto-stash changes.`);
     }
 
-    oldHead = (await git(destPath, ['rev-parse', 'HEAD'])).trim();
+    oldHead = (await git(destWorktreeRoot, ['rev-parse', 'HEAD'])).trim();
     await git(repoRoot, ['fetch', '--quiet', fetchTarget ?? remoteName, prRef]);
     const newTip = (await git(repoRoot, ['rev-parse', 'FETCH_HEAD'])).trim();
 
@@ -883,27 +1121,27 @@ async function cmdPr({ rootDir, argv }) {
 
     // Update working tree to the fetched tip.
     if (isAncestor) {
-      await git(destPath, ['merge', '--ff-only', newTip]);
+      await git(destWorktreeRoot, ['merge', '--ff-only', newTip]);
     } else {
-      await git(destPath, ['reset', '--hard', newTip]);
+      await git(destWorktreeRoot, ['reset', '--hard', newTip]);
     }
 
     // Only attempt to restore stash if update succeeded without forcing a conflict state.
-    const stashPop = await maybePopStash({ dir: destPath, stashed: stash.stashed, keep: stash.kept });
+    const stashPop = await maybePopStash({ dir: destWorktreeRoot, stashed: stash.stashed, keep: stash.kept });
     if (stashPop.popError) {
       if (!force && oldHead) {
-        await hardReset({ dir: destPath, target: oldHead });
+        await hardReset({ dir: destWorktreeRoot, target: oldHead });
         throw new Error(
           `[wt] PR updated, but restoring stashed changes conflicted.\n` +
             `[wt] Reverted update to keep your working tree clean.\n` +
-            `[wt] Worktree: ${destPath}\n` +
+            `[wt] Worktree: ${destWorktreeRoot}\n` +
             `[wt] Re-run with --update --stash --force to keep the conflict state for manual resolution.`
         );
       }
       // Keep conflict state in place (or if we can't revert).
       throw new Error(
         `[wt] PR updated, but restoring stashed changes conflicted.\n` +
-          `[wt] Worktree: ${destPath}\n` +
+          `[wt] Worktree: ${destWorktreeRoot}\n` +
           `[wt] Conflicts are left in place for manual resolution (--force).`
       );
     }
@@ -919,34 +1157,37 @@ async function cmdPr({ rootDir, argv }) {
         if (branchHead !== newTip) {
           throw new Error(`[wt] branch already exists: ${branchName}\n[wt] re-run with --force to reset it to the PR head`);
         }
-        await git(repoRoot, ['worktree', 'add', destPath, branchName]);
+        await git(repoRoot, ['worktree', 'add', destWorktreeRoot, branchName]);
       } else {
         await git(repoRoot, ['branch', '-f', branchName, newTip]);
-        await git(repoRoot, ['worktree', 'add', destPath, branchName]);
+        await git(repoRoot, ['worktree', 'add', destWorktreeRoot, branchName]);
       }
     } else {
       // Create worktree at PR head (new local branch).
-      await git(repoRoot, ['worktree', 'add', '-b', branchName, destPath, newTip]);
+      await git(repoRoot, ['worktree', 'add', '-b', branchName, destWorktreeRoot, newTip]);
     }
   }
 
   // Optional deps handling (useful when PR branches add/change dependencies).
   const depsMode = parseDepsMode(kv.get('--deps'));
-  const deps = await maybeSetupDeps({ repoRoot, baseDir: repoRoot, worktreeDir: destPath, depsMode, component });
+  const depsDir = resolveComponentSpecToDir({ rootDir, component, spec: destWorktreeRoot }) ?? destWorktreeRoot;
+  const deps = await maybeSetupDeps({ repoRoot, baseDir: repoRoot, worktreeDir: depsDir, depsMode, component });
 
   const shouldUse = flags.has('--use');
   if (shouldUse) {
     // Reuse cmdUse so it writes to env.local or stack env file depending on context.
-    await cmdUse({ rootDir, args: [component, destPath], flags });
+    await cmdUse({ rootDir, args: [component, destWorktreeRoot], flags });
   }
 
-  const newHead = (await git(destPath, ['rev-parse', 'HEAD'])).trim();
+  const newHead = (await git(destWorktreeRoot, ['rev-parse', 'HEAD'])).trim();
   const res = {
     component,
     pr: pr.number,
     remote: remoteName,
     branch: branchName,
-    path: destPath,
+    path: depsDir,
+    worktreeRoot: destWorktreeRoot,
+    repoKey,
     used: shouldUse,
     updated: exists,
     oldHead,
@@ -1507,15 +1748,22 @@ async function cmdSyncAll({ rootDir, argv }) {
   const components = DEFAULT_COMPONENTS;
 
   const results = [];
+  const seenRepoKeys = new Set();
   for (const component of components) {
+    const repoKey = worktreeRepoKeyForComponent(rootDir, component);
+    if (seenRepoKeys.has(repoKey)) {
+      results.push({ component, ok: true, skipped: true, reason: `shared repo (${repoKey})` });
+      continue;
+    }
+    seenRepoKeys.add(repoKey);
     try {
       const res = await cmdSync({
         rootDir,
         argv: remote ? ['sync', component, `--remote=${remote}`] : ['sync', component],
       });
-      results.push({ component, ok: true, ...res });
+      results.push({ component, ok: true, skipped: false, repoKey, ...res });
     } catch (e) {
-      results.push({ component, ok: false, error: String(e?.message ?? e) });
+      results.push({ component, ok: false, skipped: false, repoKey, error: String(e?.message ?? e) });
     }
   }
 
@@ -1526,7 +1774,9 @@ async function cmdSyncAll({ rootDir, argv }) {
 
   const lines = ['[wt] sync-all:'];
   for (const r of results) {
-    if (r.ok) {
+    if (r.ok && r.skipped) {
+      lines.push(`- ↪ ${r.component}: skipped (${r.reason})`);
+    } else if (r.ok) {
       lines.push(`- ✅ ${r.component}: ${r.mirrorBranch} -> ${r.upstreamRef}`);
     } else {
       lines.push(`- ❌ ${r.component}: ${r.error}`);
@@ -1549,7 +1799,7 @@ async function cmdUpdateAll({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));
   const maybeComponent = positionals[1]?.trim() ? positionals[1].trim() : '';
-  const components = maybeComponent ? [maybeComponent] : DEFAULT_COMPONENTS;
+  const requestedComponents = maybeComponent ? [maybeComponent] : DEFAULT_COMPONENTS;
 
   const json = wantsJson(argv, { flags });
 
@@ -1560,6 +1810,15 @@ async function cmdUpdateAll({ rootDir, argv }) {
   const force = flags.has('--force');
   const stash = flags.has('--stash');
   const stashKeep = flags.has('--stash-keep');
+
+  const seenRepoKeys = new Set();
+  const components = [];
+  for (const c of requestedComponents) {
+    const repoKey = worktreeRepoKeyForComponent(rootDir, c);
+    if (seenRepoKeys.has(repoKey)) continue;
+    seenRepoKeys.add(repoKey);
+    components.push(c);
+  }
 
   const results = [];
   for (const component of components) {
@@ -1633,9 +1892,9 @@ async function cmdNewInteractive({ rootDir, argv }) {
 
 async function cmdListOne({ rootDir, component, activeOnly = false }) {
   const wtRoot = getWorktreesRoot(rootDir);
-  const dir = join(wtRoot, component);
-  const key = componentDirEnvKey(component);
-  const active = (process.env[key] ?? '').trim() || join(getComponentsDir(rootDir), component);
+  const repoKey = worktreeRepoKeyForComponent(rootDir, component);
+  const dir = join(wtRoot, repoKey);
+  const active = getComponentDir(rootDir, component);
 
   if (activeOnly) {
     return { component, activeDir: active, worktrees: [] };
@@ -1664,7 +1923,9 @@ async function cmdListOne({ rootDir, component, activeOnly = false }) {
   await walk(dir);
   worktrees.sort();
 
-  return { component, activeDir: active, worktrees };
+  const sub = happyMonorepoSubdirForComponent(component);
+  const mapped = repoKey === 'happy' && isActiveHappyMonorepo(rootDir, component) && sub ? worktrees.map((p) => join(p, sub)) : worktrees;
+  return { component, activeDir: active, worktrees: mapped };
 }
 
 async function cmdList({ rootDir, args, flags }) {
@@ -1682,6 +1943,179 @@ async function cmdList({ rootDir, args, flags }) {
   return await cmdListOne({ rootDir, component, activeOnly });
 }
 
+async function cmdArchive({ rootDir, argv }) {
+  const { flags, kv } = parseArgs(argv);
+  const dryRun = flags.has('--dry-run');
+  const deleteBranch = !flags.has('--no-delete-branch');
+  const detachStacks = flags.has('--detach-stacks');
+
+  const positionals = argv.filter((a) => !a.startsWith('--'));
+  const component = (positionals[1] ?? '').trim();
+  const spec = (positionals[2] ?? '').trim();
+  if (!component) {
+    throw new Error(
+      '[wt] usage: happys wt archive <component> <worktreeSpec|path|active|default|main> [--dry-run] [--date=YYYY-MM-DD] [--no-delete-branch] [--detach-stacks] [--json]'
+    );
+  }
+  if (!spec) {
+    throw new Error(
+      '[wt] usage: happys wt archive <component> <worktreeSpec|path|active|default|main> [--dry-run] [--date=YYYY-MM-DD] [--no-delete-branch] [--detach-stacks] [--json]'
+    );
+  }
+
+  const resolved = resolveComponentWorktreeDir({ rootDir, component, spec });
+  if (!resolved) {
+    throw new Error(`[wt] unable to resolve worktree: ${component} ${spec}`);
+  }
+
+  let worktreeDir = resolved;
+  try {
+    worktreeDir = await gitShowTopLevel(resolved);
+  } catch {
+    // Broken worktrees can have a missing linked gitdir; fall back to the resolved directory.
+    worktreeDir = resolved;
+  }
+  const worktreesRoot = resolve(getWorktreesRoot(rootDir));
+  const worktreesRootReal = await realpath(worktreesRoot).catch(() => worktreesRoot);
+  const worktreeDirReal = await realpath(worktreeDir).catch(() => worktreeDir);
+  const rel = relative(worktreesRootReal, worktreeDirReal);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`[wt] refusing to archive non-worktree path (expected under ${worktreesRoot}): ${worktreeDir}`);
+  }
+
+  const date = (kv.get('--date') ?? '').toString().trim() || getTodayYmd();
+  const archiveRoot = join(dirname(worktreesRoot), '.worktrees-archive', date);
+  const destDir = join(archiveRoot, rel);
+
+  const expectedBranch = rel.split('/').slice(1).join('/') || null;
+  let head = '';
+  let branch = null;
+  try {
+    head = (await git(worktreeDir, ['rev-parse', 'HEAD'])).trim();
+    try {
+      const b = (await git(worktreeDir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+      branch = b || null;
+    } catch {
+      branch = null;
+    }
+  } catch {
+    // For broken linked worktrees, fall back to the branch implied by the worktree path.
+    branch = expectedBranch;
+    try {
+      const gitFileContents = await readFile(join(worktreeDir, '.git'), 'utf-8');
+      const linkedGitDirFromFile = parseGitdirFile(gitFileContents);
+      if (linkedGitDirFromFile) {
+        const linkedGitDir = isAbsolute(linkedGitDirFromFile) ? linkedGitDirFromFile : resolve(worktreeDir, linkedGitDirFromFile);
+        const sourceRepoDir = inferSourceRepoDirFromLinkedGitDir(linkedGitDir);
+        if (sourceRepoDir && branch) {
+          head = (await runCapture('git', ['rev-parse', branch], { cwd: sourceRepoDir })).trim();
+        }
+      }
+    } catch {
+      head = '';
+    }
+  }
+
+  const workspaceDir = getWorkspaceDir(rootDir);
+  const sourcePath = relative(workspaceDir, worktreeDir);
+
+  const linkedStacks = await findStacksReferencingWorktree({ rootDir, worktreeDir });
+  if (dryRun) {
+    return { ok: true, dryRun: true, component, worktreeDir, destDir, head, branch, deleteBranch, detachStacks, linkedStacks };
+  }
+
+  let shouldDetachStacks = detachStacks;
+  if (linkedStacks.length && !shouldDetachStacks) {
+    const names = linkedStacks.map((s) => s.name).join(', ');
+    if (!isTty() || isJsonMode()) {
+      throw new Error(`[wt] refusing to archive worktree still referenced by stack(s): ${names}. Re-run with --detach-stacks.`);
+    }
+    const action = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title: `Worktree is still referenced by stack(s): ${names}`,
+        options: [
+          { label: 'abort (recommended)', value: 'abort' },
+          { label: 'detach those stacks from this worktree', value: 'detach' },
+          { label: 'archive the linked stacks (also archives this worktree)', value: 'archive-stacks' },
+        ],
+        defaultIndex: 0,
+      });
+    });
+
+    if (action === 'abort') {
+      throw new Error('[wt] archive aborted');
+    }
+    if (action === 'archive-stacks') {
+      for (const s of linkedStacks) {
+        // eslint-disable-next-line no-await-in-loop
+        await run(process.execPath, [join(rootDir, 'scripts', 'stack.mjs'), 'archive', s.name, `--date=${date}`], { cwd: rootDir, env: process.env });
+      }
+      return {
+        ok: true,
+        dryRun: false,
+        component,
+        worktreeDir,
+        destDir,
+        head,
+        branch,
+        deleteBranch,
+        detachStacks: false,
+        linkedStacks,
+        archivedVia: 'stack-archive',
+      };
+    }
+    shouldDetachStacks = true;
+  }
+
+  for (const s of linkedStacks) {
+    if (!shouldDetachStacks) break;
+    // eslint-disable-next-line no-await-in-loop
+    await ensureEnvFilePruned({ envPath: s.envPath, removeKeys: s.keys });
+  }
+
+  const detached = await detachGitWorktree({ worktreeDir, expectedBranch: expectedBranch ?? branch ?? null });
+
+  await mkdir(dirname(destDir), { recursive: true });
+  await rename(worktreeDir, destDir);
+
+  const meta = [
+    `archivedAt=${new Date().toISOString()}`,
+    `component=${component}`,
+    `ref=${rel.split('/').slice(1).join('/')}`,
+    `sourcePath=${sourcePath}`,
+    `head=${detached.head || head}`,
+    '',
+  ].join('\n');
+  await writeFile(join(destDir, 'ARCHIVE_META.txt'), meta, 'utf-8');
+
+  // Remove the stale worktree registry entry (its path is now gone).
+  if (detached.sourceRepoDir && !detached.alreadyDetached) {
+    await runMaybeQuiet('git', ['worktree', 'prune'], { cwd: detached.sourceRepoDir });
+  }
+
+  if (deleteBranch && detached.branch && detached.sourceRepoDir && !detached.alreadyDetached) {
+    const worktreesRaw = await runCapture('git', ['worktree', 'list', '--porcelain'], { cwd: detached.sourceRepoDir });
+    const inUse = worktreesRaw.includes(`branch refs/heads/${detached.branch}`);
+    if (inUse) {
+      throw new Error(`[wt] refusing to delete branch still checked out by a worktree: ${detached.branch}`);
+    }
+    await runMaybeQuiet('git', ['branch', '-D', detached.branch], { cwd: detached.sourceRepoDir });
+  }
+
+  return {
+    ok: true,
+    dryRun: false,
+    component,
+    worktreeDir,
+    destDir,
+    head: detached.head || head,
+    branch: detached.branch,
+    deleteBranch,
+    detachStacks,
+    linkedStacks,
+  };
+}
+
 async function main() {
   const rootDir = getRootDir(import.meta.url);
   const argv = process.argv.slice(2);
@@ -1695,7 +2129,7 @@ async function main() {
     printResult({
       json,
       data: {
-        commands: ['migrate', 'sync', 'sync-all', 'list', 'new', 'pr', 'use', 'status', 'update', 'update-all', 'push', 'git', 'shell', 'code', 'cursor'],
+        commands: ['migrate', 'sync', 'sync-all', 'list', 'new', 'pr', 'use', 'status', 'update', 'update-all', 'push', 'git', 'shell', 'code', 'cursor', 'archive'],
         interactive: ['new', 'use'],
       },
       text: [
@@ -1716,12 +2150,17 @@ async function main() {
         '  happys wt shell <component> [worktreeSpec|active|default|main|path] [--shell=/bin/zsh] [--json]',
         '  happys wt code <component> [worktreeSpec|active|default|main|path] [--json]',
         '  happys wt cursor <component> [worktreeSpec|active|default|main|path] [--json]',
+        '  happys wt archive <component> <worktreeSpec|active|default|main|path> [--dry-run] [--date=YYYY-MM-DD] [--no-delete-branch] [--detach-stacks] [--json]',
         '',
         'selectors:',
         '  (omitted) or "active": current active checkout (env override if set; else components/<component>)',
-        '  "default" or "main": components/<component>',
-        '  "<owner>/<branch...>": components/.worktrees/<component>/<owner>/<branch...>',
+        '  "default" or "main": components/<component> (monorepo: derived from components/happy)',
+        '  "<owner>/<branch...>": components/.worktrees/<component>/<owner>/<branch...> (monorepo: components/.worktrees/happy/<owner>/<branch...>)',
         '  "<absolute path>": explicit checkout path',
+        '',
+        'monorepo notes:',
+        '- happy, happy-cli, and happy-server can share a single git worktree (slopus/happy).',
+        '- In monorepo mode, `wt use` updates all three component dir overrides together.',
         '',
         'components:',
         `  ${DEFAULT_COMPONENTS.join(' | ')}`,
@@ -1894,6 +2333,17 @@ async function main() {
         lines.push('');
       }
       printResult({ json: false, text: lines.join('\n') });
+    }
+    return;
+  }
+  if (cmd === 'archive') {
+    const res = await cmdArchive({ rootDir, argv });
+    if (json) {
+      printResult({ json, data: res });
+    } else if (res.dryRun) {
+      printResult({ json: false, text: `[wt] would archive ${res.component}: ${res.worktreeDir} -> ${res.destDir} (dry-run)` });
+    } else {
+      printResult({ json: false, text: `[wt] archived ${res.component}: ${res.destDir}` });
     }
     return;
   }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
-import { getComponentsDir } from '../paths/paths.mjs';
+import { getComponentRepoDir, getComponentsDir, isHappyMonorepoRoot } from '../paths/paths.mjs';
 
 function isInside(path, dir) {
   const p = resolve(path);
@@ -16,8 +16,14 @@ export function detectServerComponentDirMismatch({ rootDir, serverComponentName,
     return null;
   }
 
-  const otherRepo = resolve(componentsDir, other);
-  const otherWts = resolve(componentsDir, '.worktrees', other);
+  const expectedRepo = resolve(getComponentRepoDir(rootDir, serverComponentName));
+  const otherRepo = resolve(getComponentRepoDir(rootDir, other));
+  // Unified server flavors can legitimately share a single repo/dir.
+  if (expectedRepo === otherRepo) {
+    return null;
+  }
+  const otherKey = isHappyMonorepoRoot(otherRepo) ? 'happy' : other;
+  const otherWts = resolve(componentsDir, '.worktrees', otherKey);
 
   if (isInside(serverDir, otherRepo) || isInside(serverDir, otherWts)) {
     return { expected: serverComponentName, actual: other, serverDir };
@@ -32,10 +38,13 @@ export function assertServerComponentDirMatches({ rootDir, serverComponentName, 
     return;
   }
 
+  const expectedRepoDir = getComponentRepoDir(rootDir, mismatch.expected);
+  const expectedRepoKey = isHappyMonorepoRoot(expectedRepoDir) ? 'happy' : mismatch.expected;
+
   const hint =
     mismatch.expected === 'happy-server-light'
-      ? 'Fix: either switch flavor (`happys srv use happy-server`) or switch the active checkout for happy-server-light (`happys wt use happy-server-light default` or a worktree under .worktrees/happy-server-light/).'
-      : 'Fix: either switch flavor (`happys srv use happy-server-light`) or switch the active checkout for happy-server (`happys wt use happy-server default` or a worktree under .worktrees/happy-server/).';
+      ? `Fix: either switch flavor (\`happys srv use happy-server\`) or switch the active checkout for happy-server-light (\`happys wt use happy-server-light default\` or a worktree under .worktrees/${expectedRepoKey}/).`
+      : `Fix: either switch flavor (\`happys srv use happy-server-light\`) or switch the active checkout for happy-server (\`happys wt use happy-server default\` or a worktree under .worktrees/${expectedRepoKey}/).`;
 
   throw new Error(
     `[server] server component dir mismatch:\n` +
@@ -55,6 +64,8 @@ function detectPrismaProvider(schemaText) {
 
 export function assertServerPrismaProviderMatches({ serverComponentName, serverDir }) {
   const schemaPath = join(serverDir, 'prisma', 'schema.prisma');
+  const sqliteSchemaPath = join(serverDir, 'prisma', 'schema.sqlite.prisma');
+
   let schemaText = '';
   try {
     schemaText = readFileSync(schemaPath, 'utf-8');
@@ -64,17 +75,39 @@ export function assertServerPrismaProviderMatches({ serverComponentName, serverD
   }
 
   const provider = detectPrismaProvider(schemaText);
-  if (!provider) {
-    return;
-  }
+  if (!provider) return;
 
-  if (serverComponentName === 'happy-server-light' && provider !== 'sqlite') {
-    throw new Error(
-      `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${provider}\" in:\n` +
-        `- ${schemaPath}\n` +
-        `This usually means you're pointing happy-server-light at an upstream happy-server checkout/PR (Postgres).\n` +
-        `Fix: either switch server flavor to happy-server, or point happy-server-light at a fork checkout that keeps sqlite support.`
-    );
+  // Unified happy-server flavors:
+  // - full: prisma/schema.prisma (postgresql)
+  // - light: prisma/schema.sqlite.prisma (sqlite)
+  if (serverComponentName === 'happy-server-light') {
+    try {
+      const sqliteSchemaText = readFileSync(sqliteSchemaPath, 'utf-8');
+      const sqliteProvider = detectPrismaProvider(sqliteSchemaText);
+      if (sqliteProvider && sqliteProvider !== 'sqlite') {
+        throw new Error(
+          `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${sqliteProvider}\" in:\n` +
+            `- ${sqliteSchemaPath}\n` +
+            `Fix: point happy-server-light at a checkout that includes sqlite support, or switch server flavor to happy-server.`
+        );
+      }
+      if (sqliteProvider === 'sqlite') {
+        return;
+      }
+      // If schema.sqlite.prisma exists but we couldn't parse provider, fall through to legacy check below.
+    } catch {
+      // schema.sqlite.prisma missing or unreadable; fall through to legacy behavior.
+    }
+
+    if (provider !== 'sqlite') {
+      throw new Error(
+        `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${provider}\" in:\n` +
+          `- ${schemaPath}\n` +
+          `This usually means you're pointing happy-server-light at a postgres-only happy-server checkout/PR.\n` +
+          `Fix: either switch server flavor to happy-server, or use a checkout that supports the light flavor (e.g. one that contains prisma/schema.sqlite.prisma).`
+      );
+    }
+    return;
   }
 
   if (serverComponentName === 'happy-server' && provider === 'sqlite') {
@@ -85,4 +118,3 @@ export function assertServerPrismaProviderMatches({ serverComponentName, serverD
     );
   }
 }
-

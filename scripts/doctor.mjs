@@ -202,10 +202,6 @@ async function main() {
 
   // UI build dir check
   if (serveUi) {
-    if (serverComponentName !== 'happy-server-light') {
-      report.checks.uiServing = { ok: false, reason: `requires happy-server-light (current: ${serverComponentName})` };
-      if (!json) console.log(`ℹ️ ui serving requires happy-server-light (current: ${serverComponentName})`);
-    }
     if (await pathExists(uiBuildDir)) {
       report.checks.uiBuildDir = { ok: true, path: uiBuildDir };
       if (!json) console.log('✅ ui build dir present');

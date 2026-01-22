@@ -34,7 +34,7 @@ export function getHappysRegistry() {
       aliases: ['setupPR', 'setuppr'],
       kind: 'node',
       scriptRelPath: 'scripts/setup_pr.mjs',
-      rootUsage: 'happys setup-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
+      rootUsage: 'happys setup-pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
       description: 'One-shot: set up + run a PR stack (maintainer-friendly)',
     },
     {
@@ -42,7 +42,7 @@ export function getHappysRegistry() {
       aliases: ['reviewPR', 'reviewpr'],
       kind: 'node',
       scriptRelPath: 'scripts/review_pr.mjs',
-      rootUsage: 'happys review-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
+      rootUsage: 'happys review-pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
       description: 'Run setup-pr in a temporary sandbox (auto-cleaned)',
     },
     {
@@ -145,6 +145,13 @@ export function getHappysRegistry() {
       scriptRelPath: 'scripts/migrate.mjs',
       rootUsage: 'happys migrate light-to-server --from-stack=<name> --to-stack=<name> [--include-files] [--force] [--json]',
       description: 'Migrate data between server flavors (experimental)',
+    },
+    {
+      name: 'monorepo',
+      kind: 'node',
+      scriptRelPath: 'scripts/monorepo.mjs',
+      rootUsage: 'happys monorepo port --target=/abs/path/to/monorepo [--branch=port/<name>] [--dry-run] [--3way] [--json]',
+      description: 'Port split-repo commits into monorepo (experimental)',
     },
     {
       name: 'mobile',
@@ -363,4 +370,3 @@ export function renderHappysRootHelp() {
     '  happys help [command]',
   ].join('\n');
 }
-

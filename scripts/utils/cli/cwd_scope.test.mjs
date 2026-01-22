@@ -35,7 +35,7 @@ test('inferComponentFromCwd resolves components/<component> repo root', async (t
   assert.deepEqual(inferred, { component: 'happy', repoDir: repoRoot });
 });
 
-test('inferComponentFromCwd resolves components/.worktrees/<component>/<owner>/<branch> repo root', async (t) => {
+test('inferComponentFromCwd resolves happy monorepo subpackages under components/happy', async (t) => {
   const rootDir = await withTempRoot(t);
   const prevWorkspace = process.env.HAPPY_STACKS_WORKSPACE_DIR;
   process.env.HAPPY_STACKS_WORKSPACE_DIR = rootDir;
@@ -47,14 +47,48 @@ test('inferComponentFromCwd resolves components/.worktrees/<component>/<owner>/<
     }
   });
 
-  const wtRoot = join(rootDir, 'components', '.worktrees', 'happy', 'slopus', 'pr', '123-fix', 'nested');
-  await mkdir(wtRoot, { recursive: true });
+  const monoRoot = join(rootDir, 'components', 'happy');
+  await mkdir(join(monoRoot, 'expo-app'), { recursive: true });
+  await mkdir(join(monoRoot, 'cli', 'src'), { recursive: true });
+  await mkdir(join(monoRoot, 'server'), { recursive: true });
+  await writeFile(join(monoRoot, 'expo-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(monoRoot, 'cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(monoRoot, 'server', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(monoRoot, '.git'), 'gitdir: /tmp/fake\n', 'utf-8');
+
+  const invokedCwd = join(monoRoot, 'cli', 'src');
+  const inferred = inferComponentFromCwd({
+    rootDir,
+    invokedCwd,
+    components: ['happy', 'happy-cli', 'happy-server'],
+  });
+  assert.deepEqual(inferred, { component: 'happy-cli', repoDir: monoRoot });
+});
+
+test('inferComponentFromCwd resolves happy monorepo worktree roots under components/.worktrees/happy', async (t) => {
+  const rootDir = await withTempRoot(t);
+  const prevWorkspace = process.env.HAPPY_STACKS_WORKSPACE_DIR;
+  process.env.HAPPY_STACKS_WORKSPACE_DIR = rootDir;
+  t.after(() => {
+    if (prevWorkspace == null) {
+      delete process.env.HAPPY_STACKS_WORKSPACE_DIR;
+    } else {
+      process.env.HAPPY_STACKS_WORKSPACE_DIR = prevWorkspace;
+    }
+  });
+
   const repoRoot = join(rootDir, 'components', '.worktrees', 'happy', 'slopus', 'pr', '123-fix');
+  await mkdir(join(repoRoot, 'expo-app'), { recursive: true });
+  await mkdir(join(repoRoot, 'cli', 'nested'), { recursive: true });
+  await mkdir(join(repoRoot, 'server'), { recursive: true });
+  await writeFile(join(repoRoot, 'expo-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(repoRoot, 'cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(repoRoot, 'server', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(repoRoot, '.git'), 'gitdir: /tmp/fake\n', 'utf-8');
 
-  const invokedCwd = join(repoRoot, 'nested');
-  const inferred = inferComponentFromCwd({ rootDir, invokedCwd, components: ['happy'] });
-  assert.deepEqual(inferred, { component: 'happy', repoDir: repoRoot });
+  const invokedCwd = join(repoRoot, 'cli', 'nested');
+  const inferred = inferComponentFromCwd({ rootDir, invokedCwd, components: ['happy', 'happy-cli', 'happy-server'] });
+  assert.deepEqual(inferred, { component: 'happy-cli', repoDir: repoRoot });
 });
 
 test('inferComponentFromCwd returns null outside known component roots', async (t) => {
@@ -74,4 +108,3 @@ test('inferComponentFromCwd returns null outside known component roots', async (
   const inferred = inferComponentFromCwd({ rootDir, invokedCwd, components: ['happy'] });
   assert.equal(inferred, null);
 });
-

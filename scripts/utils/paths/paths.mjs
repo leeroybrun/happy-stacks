@@ -14,6 +14,16 @@ const PRIMARY_STORAGE_ROOT = join(homedir(), '.happy', 'stacks');
 const LEGACY_STORAGE_ROOT = join(homedir(), '.happy', 'local');
 const PRIMARY_HOME_DIR = join(homedir(), '.happy-stacks');
 
+// Upstream monorepo layout (slopus/happy):
+// - expo-app/ (Happy UI)
+// - cli/      (happy-cli)
+// - server/   (happy-server)
+const HAPPY_MONOREPO_COMPONENT_SUBDIR = {
+  happy: 'expo-app',
+  'happy-cli': 'cli',
+  'happy-server': 'server',
+};
+
 export function getRootDir(importMetaUrl) {
   return dirname(dirname(fileURLToPath(importMetaUrl)));
 }
@@ -61,14 +71,114 @@ function normalizePathForEnv(rootDir, raw, env = process.env) {
   return expanded.startsWith('/') ? expanded : resolve(workspaceDir, expanded);
 }
 
+export function isHappyMonorepoComponentName(name) {
+  return Object.prototype.hasOwnProperty.call(HAPPY_MONOREPO_COMPONENT_SUBDIR, String(name ?? '').trim());
+}
+
+export function happyMonorepoSubdirForComponent(name) {
+  return HAPPY_MONOREPO_COMPONENT_SUBDIR[String(name ?? '').trim()] ?? null;
+}
+
+export function isHappyMonorepoRoot(dir) {
+  const d = String(dir ?? '').trim();
+  if (!d) return false;
+  try {
+    return (
+      existsSync(join(d, 'expo-app', 'package.json')) &&
+      existsSync(join(d, 'cli', 'package.json')) &&
+      existsSync(join(d, 'server', 'package.json'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function coerceHappyMonorepoRootFromPath(path) {
+  const p = String(path ?? '').trim();
+  if (!p) return null;
+  let cur = resolve(p);
+  while (true) {
+    if (isHappyMonorepoRoot(cur)) return cur;
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+function resolveHappyMonorepoPackageDir({ monorepoRoot, component }) {
+  const sub = happyMonorepoSubdirForComponent(component);
+  if (!sub) return null;
+  return join(monorepoRoot, sub);
+}
+
+export function getComponentRepoDir(rootDir, name, env = process.env) {
+  const componentDir = getComponentDir(rootDir, name, env);
+  const n = String(name ?? '').trim();
+  if (isHappyMonorepoComponentName(n)) {
+    const root = coerceHappyMonorepoRootFromPath(componentDir);
+    if (root) return root;
+  }
+  return componentDir;
+}
+
 export function getComponentDir(rootDir, name, env = process.env) {
   const stacksKey = componentDirEnvKey(name);
   const legacyKey = stacksKey.replace(/^HAPPY_STACKS_/, 'HAPPY_LOCAL_');
   const fromEnv = normalizePathForEnv(rootDir, env[stacksKey] ?? env[legacyKey], env);
-  if (fromEnv) {
+  const n = String(name ?? '').trim();
+
+  // If the component is part of the happy monorepo, allow pointing the env var at either:
+  // - the monorepo root, OR
+  // - the package directory (expo-app/cli/server), OR
+  // - any path inside those (we normalize to the package dir).
+  if (fromEnv && isHappyMonorepoComponentName(n)) {
+    const root = coerceHappyMonorepoRootFromPath(fromEnv);
+    if (root) {
+      const pkg = resolveHappyMonorepoPackageDir({ monorepoRoot: root, component: n });
+      return pkg || fromEnv;
+    }
     return fromEnv;
   }
-  return join(getComponentsDir(rootDir, env), name);
+
+  if (fromEnv) return fromEnv;
+
+  const componentsDir = getComponentsDir(rootDir, env);
+  const defaultDir = join(componentsDir, n);
+
+  // Unified server flavors:
+  // If happy-server-light isn't explicitly configured, allow it to reuse the happy-server checkout
+  // when that checkout contains the sqlite schema (prisma/schema.sqlite.prisma).
+  if (n === 'happy-server-light') {
+    const fullServerDir = getComponentDir(rootDir, 'happy-server', env);
+    try {
+      if (fullServerDir && existsSync(join(fullServerDir, 'prisma', 'schema.sqlite.prisma'))) {
+        return fullServerDir;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Monorepo default behavior:
+  // - If components/happy is a monorepo checkout, derive all monorepo component dirs from it.
+  // - This allows a single checkout at components/happy to satisfy happy, happy-cli, and happy-server.
+  if (isHappyMonorepoComponentName(n)) {
+    // If the defaultDir is itself a monorepo root (common for "happy"), map to its package dir.
+    if (existsSync(defaultDir) && isHappyMonorepoRoot(defaultDir)) {
+      return resolveHappyMonorepoPackageDir({ monorepoRoot: defaultDir, component: n }) || defaultDir;
+    }
+    // If the legacy defaultDir exists (multi-repo), keep it.
+    if (existsSync(defaultDir) && existsSync(join(defaultDir, 'package.json'))) {
+      return defaultDir;
+    }
+    // Fallback: derive from the monorepo root at components/happy if present.
+    const monorepoRoot = join(componentsDir, 'happy');
+    if (existsSync(monorepoRoot) && isHappyMonorepoRoot(monorepoRoot)) {
+      return resolveHappyMonorepoPackageDir({ monorepoRoot, component: n }) || defaultDir;
+    }
+  }
+
+  return defaultDir;
 }
 
 export function getStackName(env = process.env) {
@@ -191,4 +301,3 @@ export function getDefaultAutostartPaths(env = process.env) {
     legacyStderrPath,
   };
 }
-

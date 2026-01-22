@@ -24,11 +24,15 @@ export async function assertCliPrereqs({ git = false, pnpm = false, codex = fals
 
   if (pnpm) {
     const hasPnpm = await commandExists('pnpm');
-    if (!hasPnpm) {
+    const hasYarn = await commandExists('yarn');
+    if (!hasPnpm && !hasYarn) {
       missing.push({
-        name: 'pnpm',
-        why: 'required to install dependencies for Happy Stacks components',
-        install: ['Install it via Corepack: `corepack enable && corepack prepare pnpm@latest --activate`'],
+        name: 'yarn/pnpm',
+        why: 'required to install dependencies for Happy Stacks components (varies per component)',
+        install: [
+          'Enable Corepack (recommended): `corepack enable`',
+          'Or install pnpm: `corepack prepare pnpm@latest --activate`',
+        ],
       });
     }
   }
@@ -69,4 +73,3 @@ export async function assertCliPrereqs({ git = false, pnpm = false, codex = fals
       `[prereqs] After installing, re-run the command.`
   );
 }
-

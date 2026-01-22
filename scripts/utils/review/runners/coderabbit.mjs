@@ -16,4 +16,3 @@ export async function runCodeRabbitReview({ repoDir, baseRef, env }) {
   const res = await runCaptureResult('coderabbit', args, { cwd: repoDir, env });
   return { ...res, stdout: res.out, stderr: res.err };
 }
-

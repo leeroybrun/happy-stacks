@@ -1,7 +1,7 @@
 import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
-import { chmod, copyFile, mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { chmod, copyFile, mkdir, open, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 // NOTE: random bytes usage centralized in scripts/utils/crypto/tokens.mjs
 import { homedir } from 'node:os';
@@ -11,12 +11,14 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { killProcessTree, run, runCapture } from './utils/proc/proc.mjs';
 import {
   componentDirEnvKey,
+  coerceHappyMonorepoRootFromPath,
   getComponentDir,
   getComponentsDir,
   getHappyStacksHomeDir,
   getLegacyStorageRoot,
   getRootDir,
   getStacksStorageRoot,
+  happyMonorepoSubdirForComponent,
   resolveStackEnvPath,
 } from './utils/paths/paths.mjs';
 import { isTcpPortFree, listListenPids, pickNextFreeTcpPort } from './utils/net/ports.mjs';
@@ -28,7 +30,7 @@ import {
   resolveComponentSpecToDir,
   worktreeSpecFromDir,
 } from './utils/git/worktrees.mjs';
-import { isTty, prompt, promptWorktreeSource, withRl } from './utils/cli/wizard.mjs';
+import { isTty, prompt, promptSelect, promptWorktreeSource, withRl } from './utils/cli/wizard.mjs';
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
@@ -242,18 +244,41 @@ function stringifyEnv(env) {
 const readExistingEnv = readTextOrEmpty;
 
 function resolveDefaultComponentDirs({ rootDir }) {
-  const componentNames = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
-  const out = {};
-  for (const name of componentNames) {
+  function pickDefaultDir(name) {
     const embedded = join(rootDir, 'components', name);
     const workspace = join(getComponentsDir(rootDir), name);
     // CRITICAL:
     // In sandbox mode, never point stacks at the repo's embedded `components/*` checkouts.
     // Sandboxes must use the sandbox workspace clones (HAPPY_STACKS_WORKSPACE_DIR/components/*),
     // otherwise worktrees/branches collide with the user's real machine state.
-    const dir = !isSandboxed() && existsSync(embedded) ? embedded : workspace;
-    out[`HAPPY_STACKS_COMPONENT_DIR_${name.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = dir;
+    return !isSandboxed() && existsSync(embedded) ? embedded : workspace;
   }
+
+  const out = {};
+
+  const happyRoot = pickDefaultDir('happy');
+  const monoRoot = existsSync(happyRoot) ? coerceHappyMonorepoRootFromPath(happyRoot) : null;
+
+  if (monoRoot) {
+    const subdir = (component) => happyMonorepoSubdirForComponent(component);
+    out.HAPPY_STACKS_COMPONENT_DIR_HAPPY = join(monoRoot, subdir('happy'));
+    out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = join(monoRoot, subdir('happy-cli'));
+    const serverDir = join(monoRoot, subdir('happy-server'));
+    out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = serverDir;
+    out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT = existsSync(join(serverDir, 'prisma', 'schema.sqlite.prisma'))
+      ? serverDir
+      : pickDefaultDir('happy-server-light');
+    return out;
+  }
+
+  // Prefer a single unified happy-server checkout for both flavors when it includes sqlite support.
+  const fullServerDir = pickDefaultDir('happy-server');
+  const hasUnifiedLight = existsSync(join(fullServerDir, 'prisma', 'schema.sqlite.prisma'));
+
+  out.HAPPY_STACKS_COMPONENT_DIR_HAPPY = pickDefaultDir('happy');
+  out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = pickDefaultDir('happy-cli');
+  out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = fullServerDir;
+  out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT = hasUnifiedLight ? fullServerDir : pickDefaultDir('happy-server-light');
   return out;
 }
 
@@ -551,7 +576,7 @@ async function cmdNew({ rootDir, argv, emit = true }) {
   if (!stackName) {
     throw new Error(
       '[stack] usage: happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] ' +
-        '[--happy=default|<owner/...>|<path>] [--happy-cli=...] [--happy-server=...] [--happy-server-light=...] ' +
+        '[--happy=default|<owner/...>|<path>] [--happy-server-light=...] ' +
         '[--copy-auth-from=<stack|legacy>] [--link-auth] [--no-copy-auth] [--interactive] [--force-port]'
     );
   }
@@ -672,24 +697,84 @@ async function cmdNew({ rootDir, argv, emit = true }) {
     }
   }
 
-  // happy
-  const happySpec = config.components.happy;
-  if (happySpec && typeof happySpec === 'object' && happySpec.create) {
-    const dir = await createWorktree({ rootDir, component: 'happy', slug: happySpec.slug, remoteName: happySpec.remote || 'upstream' });
-    stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY = dir;
-  } else {
-    const dir = resolveComponentSpecToDir({ rootDir, component: 'happy', spec: happySpec });
-    if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY = resolve(rootDir, dir);
+  const localHappyMonorepo = Boolean(coerceHappyMonorepoRootFromPath(getComponentDir(rootDir, 'happy', process.env)));
+  let monorepoPinned = false;
+
+  // happy / happy-cli / happy-server can be a single monorepo (slopus/happy).
+  if (localHappyMonorepo) {
+    const monoSpecs = [
+      { component: 'happy', spec: config.components.happy },
+      { component: 'happy-cli', spec: config.components['happy-cli'] },
+      { component: 'happy-server', spec: config.components['happy-server'] },
+    ].filter((x) => x.spec);
+
+    if (monoSpecs.length) {
+      const primary = monoSpecs[0];
+      const canon = (spec) => {
+        if (spec && typeof spec === 'object' && spec.create) {
+          const remote = String(spec.remote || 'upstream');
+          return `create:${String(spec.slug)}@${remote}`;
+        }
+        return String(spec);
+      };
+      for (const s of monoSpecs.slice(1)) {
+        if (canon(s.spec) !== canon(primary.spec)) {
+          throw new Error(
+            `[stack] conflicting monorepo component specs.\n` +
+              `- happy: ${canon(config.components.happy)}\n` +
+              `- happy-cli: ${canon(config.components['happy-cli'])}\n` +
+              `- happy-server: ${canon(config.components['happy-server'])}\n` +
+              `Fix: in monorepo mode, pass only one of --happy/--happy-cli/--happy-server (or pass the same value for all).`
+          );
+        }
+      }
+
+      let happyDir = '';
+      if (primary.spec && typeof primary.spec === 'object' && primary.spec.create) {
+        happyDir = await createWorktree({ rootDir, component: 'happy', slug: primary.spec.slug, remoteName: primary.spec.remote || 'upstream' });
+      } else {
+        const dir = resolveComponentSpecToDir({ rootDir, component: 'happy', spec: primary.spec });
+        if (dir) happyDir = resolve(rootDir, dir);
+      }
+
+      const monoRoot = happyDir ? coerceHappyMonorepoRootFromPath(happyDir) : null;
+      if (!monoRoot) {
+        throw new Error(
+          `[stack] unable to resolve happy monorepo root from spec.\n` +
+            `- spec: ${canon(primary.spec)}\n` +
+            `- resolved: ${happyDir || '(empty)'}\n` +
+            `Fix: ensure the target checkout/worktree exists and is a happy monorepo (contains expo-app/cli/server).`
+        );
+      }
+
+      const subdir = (c) => happyMonorepoSubdirForComponent(c);
+      stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY = join(monoRoot, subdir('happy'));
+      stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = join(monoRoot, subdir('happy-cli'));
+      stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = join(monoRoot, subdir('happy-server'));
+      monorepoPinned = true;
+    }
   }
 
-  // happy-cli
-  const cliSpec = config.components['happy-cli'];
-  if (cliSpec && typeof cliSpec === 'object' && cliSpec.create) {
-    const dir = await createWorktree({ rootDir, component: 'happy-cli', slug: cliSpec.slug, remoteName: cliSpec.remote || 'upstream' });
-    stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = dir;
-  } else {
-    const dir = resolveComponentSpecToDir({ rootDir, component: 'happy-cli', spec: cliSpec });
-    if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = resolve(rootDir, dir);
+  if (!monorepoPinned) {
+    // happy
+    const happySpec = config.components.happy;
+    if (happySpec && typeof happySpec === 'object' && happySpec.create) {
+      const dir = await createWorktree({ rootDir, component: 'happy', slug: happySpec.slug, remoteName: happySpec.remote || 'upstream' });
+      stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY = dir;
+    } else {
+      const dir = resolveComponentSpecToDir({ rootDir, component: 'happy', spec: happySpec });
+      if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY = resolve(rootDir, dir);
+    }
+
+    // happy-cli
+    const cliSpec = config.components['happy-cli'];
+    if (cliSpec && typeof cliSpec === 'object' && cliSpec.create) {
+      const dir = await createWorktree({ rootDir, component: 'happy-cli', slug: cliSpec.slug, remoteName: cliSpec.remote || 'upstream' });
+      stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = dir;
+    } else {
+      const dir = resolveComponentSpecToDir({ rootDir, component: 'happy-cli', spec: cliSpec });
+      if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = resolve(rootDir, dir);
+    }
   }
 
   // Server component directory override (optional)
@@ -708,13 +793,15 @@ async function cmdNew({ rootDir, argv, emit = true }) {
       if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT = resolve(rootDir, dir);
     }
   } else if (serverComponent === 'happy-server') {
-    const spec = config.components['happy-server'];
-    if (spec && typeof spec === 'object' && spec.create) {
-      const dir = await createWorktree({ rootDir, component: 'happy-server', slug: spec.slug, remoteName: spec.remote || 'upstream' });
-      stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = dir;
-    } else {
-      const dir = resolveComponentSpecToDir({ rootDir, component: 'happy-server', spec });
-      if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = resolve(rootDir, dir);
+    if (!monorepoPinned) {
+      const spec = config.components['happy-server'];
+      if (spec && typeof spec === 'object' && spec.create) {
+        const dir = await createWorktree({ rootDir, component: 'happy-server', slug: spec.slug, remoteName: spec.remote || 'upstream' });
+        stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = dir;
+      } else {
+        const dir = resolveComponentSpecToDir({ rootDir, component: 'happy-server', spec });
+        if (dir) stackEnv.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = resolve(rootDir, dir);
+      }
     }
   }
 
@@ -896,11 +983,73 @@ async function cmdEdit({ rootDir, argv }) {
     }
   };
 
-  await applyComponent('happy', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY', config.components.happy);
-  await applyComponent('happy-cli', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI', config.components['happy-cli']);
-  if (serverComponent === 'happy-server') {
-    await applyComponent('happy-server', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER', config.components['happy-server']);
+  const existingHappy = String(next.HAPPY_STACKS_COMPONENT_DIR_HAPPY ?? '').trim();
+  const happyMonorepo = Boolean(coerceHappyMonorepoRootFromPath(existingHappy)) || Boolean(coerceHappyMonorepoRootFromPath(getComponentDir(rootDir, 'happy', process.env)));
+
+  if (happyMonorepo) {
+    const monoSpecs = [
+      { component: 'happy', spec: config.components.happy },
+      { component: 'happy-cli', spec: config.components['happy-cli'] },
+      { component: 'happy-server', spec: config.components['happy-server'] },
+    ].filter((x) => x.spec);
+
+    if (monoSpecs.length) {
+      const primary = monoSpecs[0];
+      const canon = (spec) => {
+        if (spec && typeof spec === 'object' && spec.create) {
+          const remote = String(spec.remote || 'upstream');
+          return `create:${String(spec.slug)}@${remote}`;
+        }
+        return String(spec);
+      };
+      for (const s of monoSpecs.slice(1)) {
+        if (canon(s.spec) !== canon(primary.spec)) {
+          throw new Error(
+            `[stack] edit: conflicting monorepo component specs.\n` +
+              `- happy: ${canon(config.components.happy)}\n` +
+              `- happy-cli: ${canon(config.components['happy-cli'])}\n` +
+              `- happy-server: ${canon(config.components['happy-server'])}\n` +
+              `Fix: in monorepo mode, pass only one of --happy/--happy-cli/--happy-server (or pass the same value for all).`
+          );
+        }
+      }
+
+      let happyDir = '';
+      if (primary.spec && typeof primary.spec === 'object' && primary.spec.create) {
+        happyDir = await createWorktree({ rootDir, component: 'happy', slug: primary.spec.slug, remoteName: primary.spec.remote || next.HAPPY_STACKS_STACK_REMOTE });
+      } else {
+        const dir = resolveComponentSpecToDir({ rootDir, component: 'happy', spec: primary.spec });
+        if (dir) happyDir = resolve(rootDir, dir);
+      }
+
+      const monoRoot = happyDir ? coerceHappyMonorepoRootFromPath(happyDir) : null;
+      if (!monoRoot) {
+        throw new Error(
+          `[stack] edit: unable to resolve happy monorepo root from spec.\n` +
+            `- spec: ${canon(primary.spec)}\n` +
+            `- resolved: ${happyDir || '(empty)'}\n` +
+            `Fix: ensure the target checkout/worktree exists and is a happy monorepo (contains expo-app/cli/server).`
+        );
+      }
+
+      const subdir = (c) => happyMonorepoSubdirForComponent(c);
+      next.HAPPY_STACKS_COMPONENT_DIR_HAPPY = join(monoRoot, subdir('happy'));
+      next.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = join(monoRoot, subdir('happy-cli'));
+      next.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER = join(monoRoot, subdir('happy-server'));
+    } else {
+      await applyComponent('happy', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY', config.components.happy);
+      await applyComponent('happy-cli', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI', config.components['happy-cli']);
+      await applyComponent('happy-server', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER', config.components['happy-server']);
+    }
   } else {
+    await applyComponent('happy', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY', config.components.happy);
+    await applyComponent('happy-cli', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI', config.components['happy-cli']);
+    if (serverComponent === 'happy-server') {
+      await applyComponent('happy-server', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER', config.components['happy-server']);
+    }
+  }
+
+  if (serverComponent === 'happy-server-light') {
     await applyComponent('happy-server-light', 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT', config.components['happy-server-light']);
   }
 
@@ -2324,6 +2473,150 @@ async function readStackEnvObject(stackName) {
   return { envPath, env };
 }
 
+function getTodayYmd() {
+  const now = new Date();
+  const y = String(now.getFullYear());
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function cmdArchiveStack({ rootDir, argv, stackName }) {
+  const { flags, kv } = parseArgs(argv);
+  const json = wantsJson(argv, { flags });
+  const dryRun = flags.has('--dry-run');
+  const date = (kv.get('--date') ?? '').toString().trim() || getTodayYmd();
+
+  if (!stackExistsSync(stackName)) {
+    throw new Error(`[stack] archive: stack does not exist: ${stackName}`);
+  }
+
+  const { env } = await readStackEnvObject(stackName);
+  const serverComponent = parseServerComponentFromEnv(env);
+  const components = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
+
+  const componentsDir = getComponentsDir(rootDir);
+  const workspaceDir = dirname(componentsDir);
+  const worktreesRoot = join(componentsDir, '.worktrees');
+
+  // Collect unique git worktree roots referenced by this stack.
+  const byRoot = new Map();
+  for (const component of components) {
+    const key = envKeyForComponentDir({ serverComponent, component });
+    const legacyKey = key.replace('HAPPY_STACKS_', 'HAPPY_LOCAL_');
+    const raw = (env[key] ?? env[legacyKey] ?? '').toString().trim();
+    if (!raw) continue;
+    const abs = isAbsolute(raw) ? raw : resolve(workspaceDir, raw);
+    // Only archive paths that live under components/.worktrees/.
+    const rel = relative(worktreesRoot, abs);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const top = (await runCapture('git', ['rev-parse', '--show-toplevel'], { cwd: abs })).trim();
+      if (!top) continue;
+      if (!byRoot.has(top)) {
+        byRoot.set(top, { component, dir: top });
+      }
+    } catch {
+      // ignore invalid git dirs
+    }
+  }
+
+  const { baseDir } = resolveStackEnvPath(stackName);
+  const destStackDir = join(dirname(baseDir), '.archived', date, stackName);
+
+  // Safety: avoid archiving a worktree that is still actively referenced by other stacks.
+  // If we did, we'd break those stacks by moving their active checkout.
+  if (!dryRun && byRoot.size) {
+    const otherStacks = new Map(); // envPath -> Set(keys)
+    const otherNames = new Set();
+
+    for (const wt of byRoot.values()) {
+      // eslint-disable-next-line no-await-in-loop
+      const out = await runCapture(
+        process.execPath,
+        [join(rootDir, 'scripts', 'worktrees.mjs'), 'archive', wt.component, wt.dir, '--dry-run', `--date=${date}`, '--json'],
+        { cwd: rootDir, env: process.env }
+      );
+      const info = JSON.parse(out);
+      const linked = Array.isArray(info.linkedStacks) ? info.linkedStacks : [];
+      for (const s of linked) {
+        if (!s?.name || s.name === stackName) continue;
+        otherNames.add(s.name);
+        const envPath = String(s.envPath ?? '').trim();
+        if (!envPath) continue;
+        const set = otherStacks.get(envPath) ?? new Set();
+        for (const k of Array.isArray(s.keys) ? s.keys : []) {
+          if (k) set.add(String(k));
+        }
+        otherStacks.set(envPath, set);
+      }
+    }
+
+    if (otherNames.size) {
+      const names = Array.from(otherNames).sort().join(', ');
+      if (json || !isTty()) {
+        throw new Error(`[stack] archive: worktree(s) are still referenced by other stacks: ${names}. Resolve first (detach or archive those stacks).`);
+      }
+
+      const action = await withRl(async (rl) => {
+        return await promptSelect(rl, {
+          title: `Worktree(s) referenced by "${stackName}" are still in use by other stacks: ${names}`,
+          options: [
+            { label: 'abort (recommended)', value: 'abort' },
+            { label: 'detach those stacks from the shared worktree(s)', value: 'detach' },
+            { label: 'archive the linked stacks as well', value: 'archive-stacks' },
+          ],
+          defaultIndex: 0,
+        });
+      });
+
+      if (action === 'abort') {
+        throw new Error('[stack] archive aborted');
+      }
+      if (action === 'archive-stacks') {
+        for (const name of Array.from(otherNames).sort()) {
+          // eslint-disable-next-line no-await-in-loop
+          await run(process.execPath, [join(rootDir, 'scripts', 'stack.mjs'), 'archive', name, `--date=${date}`], { cwd: rootDir, env: process.env });
+        }
+      } else {
+        for (const [envPath, keys] of otherStacks.entries()) {
+          // eslint-disable-next-line no-await-in-loop
+          await ensureEnvFilePruned({ envPath, removeKeys: Array.from(keys) });
+        }
+      }
+    }
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      stackName,
+      date,
+      stackBaseDir: baseDir,
+      archivedStackDir: destStackDir,
+      worktrees: Array.from(byRoot.values()),
+    };
+  }
+
+  await mkdir(dirname(destStackDir), { recursive: true });
+  await rename(baseDir, destStackDir);
+
+  const archivedWorktrees = [];
+  for (const wt of byRoot.values()) {
+    if (!existsSync(wt.dir)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const out = await runCapture(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), 'archive', wt.component, wt.dir, `--date=${date}`, '--json'], {
+      cwd: rootDir,
+      env: process.env,
+    });
+    archivedWorktrees.push(JSON.parse(out));
+  }
+
+  return { ok: true, dryRun: false, stackName, date, archivedStackDir: destStackDir, archivedWorktrees };
+}
+
 function envKeyForComponentDir({ serverComponent, component }) {
   if (component === 'happy') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY';
   if (component === 'happy-cli') return 'HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI';
@@ -2484,11 +2777,11 @@ async function cmdPrStack({ rootDir, argv }) {
       json,
       data: {
         usage:
-          'happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--background] [--mobile] [--expo-tailscale] [--json] [-- <stack dev/start args...>]',
+          'happys stack pr <name> --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--server=happy-server|happy-server-light] [--remote=upstream] [--deps=none|link|install|link-or-install] [--seed-auth] [--copy-auth-from=<stack>] [--with-infra] [--auth-force] [--dev|--start] [--background] [--mobile] [--expo-tailscale] [--json] [-- <stack dev/start args...>]',
       },
       text: [
         '[stack] usage:',
-        '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start]',
+        '  happys stack pr <name> --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start]',
         '    [--seed-auth] [--copy-auth-from=<stack>] [--link-auth] [--with-infra] [--auth-force]',
         '    [--remote=upstream] [--deps=none|link|install|link-or-install] [--update] [--force] [--background]',
         '    [--mobile]         # also start Expo dev-client Metro for mobile',
@@ -2499,12 +2792,11 @@ async function cmdPrStack({ rootDir, argv }) {
         '  # Create stack + check out PRs + start dev UI',
         '  happys stack pr pr123 \\',
         '    --happy=https://github.com/slopus/happy/pull/123 \\',
-        '    --happy-cli=https://github.com/slopus/happy-cli/pull/456 \\',
         '    --seed-auth --copy-auth-from=dev-auth \\',
         '    --dev',
         '',
         '  # Use numeric PR refs (remote defaults to upstream)',
-        '  happys stack pr pr123 --happy=123 --happy-cli=456 --seed-auth --copy-auth-from=dev-auth --dev',
+        '  happys stack pr pr123 --happy=123 --seed-auth --copy-auth-from=dev-auth --dev',
         '',
         '  # Reuse an existing non-stacks Happy install for auth seeding',
         '  (deprecated) legacy ~/.happy is not supported for reliable seeding',
@@ -2550,6 +2842,22 @@ async function cmdPrStack({ rootDir, argv }) {
   }
   if (prServerLight && prServer) {
     throw new Error('[stack] pr: cannot specify both --happy-server and --happy-server-light');
+  }
+
+  const happyMonorepoActive = Boolean(coerceHappyMonorepoRootFromPath(getComponentDir(rootDir, 'happy', process.env)));
+  if (happyMonorepoActive) {
+    if (prCli) {
+      throw new Error(
+        '[stack] pr: --happy-cli is not supported when using the slopus/happy monorepo.\n' +
+          'Fix: use --happy=<pr> to pin the monorepo (UI + CLI + server) in one worktree.'
+      );
+    }
+    if (prServer) {
+      throw new Error(
+        '[stack] pr: --happy-server is not supported when using the slopus/happy monorepo.\n' +
+          'Fix: use --happy=<pr> to pin the monorepo (UI + CLI + server) in one worktree.'
+      );
+    }
   }
 
   const serverFromArg = (kv.get('--server') ?? '').trim();
@@ -2697,12 +3005,19 @@ async function cmdPrStack({ rootDir, argv }) {
   }
 
   // 2) Checkout PR worktrees and pin them to the stack env file.
-  const prSpecs = [
-    { component: 'happy', pr: prHappy },
-    { component: 'happy-cli', pr: prCli },
-    ...(serverComponent === 'happy-server' ? [{ component: 'happy-server', pr: prServer }] : []),
-    ...(serverComponent === 'happy-server-light' ? [{ component: 'happy-server-light', pr: prServerLight }] : []),
-  ].filter((x) => x.pr);
+  const prSpecs = (
+    happyMonorepoActive
+      ? [
+          ...(prHappy ? [{ component: 'happy', pr: prHappy }] : []),
+          ...(serverComponent === 'happy-server-light' && prServerLight ? [{ component: 'happy-server-light', pr: prServerLight }] : []),
+        ]
+      : [
+          ...(prHappy ? [{ component: 'happy', pr: prHappy }] : []),
+          ...(prCli ? [{ component: 'happy-cli', pr: prCli }] : []),
+          ...(serverComponent === 'happy-server' && prServer ? [{ component: 'happy-server', pr: prServer }] : []),
+          ...(serverComponent === 'happy-server-light' && prServerLight ? [{ component: 'happy-server-light', pr: prServerLight }] : []),
+        ]
+  ).filter((x) => x.pr);
 
   const worktrees = [];
   const stackEnvPath = resolveStackEnvPath(stackName).envPath;
@@ -2730,9 +3045,10 @@ async function cmdPrStack({ rootDir, argv }) {
         // If you asked to pin a component to a PR checkout, it MUST be a worktree path under
         // the active workspace components dir (including sandbox workspace).
         if (parsed?.path && !isComponentWorktreePath({ rootDir, component, dir: parsed.path, env })) {
+          const expectedRepoKey = parsed?.repoKey ? String(parsed.repoKey) : component;
           throw new Error(
             `[stack] pr: refusing to pin ${component} because the checked out path is not a worktree.\n` +
-              `- expected under: ${join(getComponentsDir(rootDir, env), '.worktrees', component)}/...\n` +
+              `- expected under: ${join(getComponentsDir(rootDir, env), '.worktrees', expectedRepoKey)}/...\n` +
               `- actual: ${String(parsed.path ?? '').trim()}\n` +
               `Fix: this is a bug. Please re-run with --force, or delete/recreate the stack (${stackName}).`
           );
@@ -2766,6 +3082,40 @@ async function cmdPrStack({ rootDir, argv }) {
         // eslint-disable-next-line no-console
         console.log(`[stack] pr: ${stackName}: ${component}: checked out (${short(out.newHead)})`);
       }
+    }
+  }
+
+  // Monorepo shortcut:
+  // If `--happy=<pr>` was provided and the local checkout is the slopus/happy monorepo, pin
+  // happy-cli and (optionally) happy-server to that same worktree without fetching separate PRs.
+  if (happyMonorepoActive && prHappy) {
+    const happyWt = worktrees.find((w) => w?.component === 'happy');
+    const happyPath = String(happyWt?.path ?? '').trim();
+    const happyRoot = happyWt?.worktreeRoot ? resolve(String(happyWt.worktreeRoot)) : happyPath ? coerceHappyMonorepoRootFromPath(happyPath) : null;
+    if (!happyRoot) {
+      throw new Error('[stack] pr: expected happy monorepo worktree root but could not resolve it from the checked out path.');
+    }
+
+    const derive = (component) => {
+      const sub = happyMonorepoSubdirForComponent(component);
+      if (!sub) return null;
+      return join(happyRoot, sub);
+    };
+
+    const derivedComponents = [
+      'happy-cli',
+      ...(serverComponent === 'happy-server' ? ['happy-server'] : []),
+    ];
+
+    for (const c of derivedComponents) {
+      const p = derive(c);
+      if (!p) continue;
+      if (!isComponentWorktreePath({ rootDir, component: c, dir: p, env: process.env })) {
+        throw new Error(`[stack] pr: refusing to pin ${c} because the derived path is not a worktree: ${p}`);
+      }
+      const key = componentDirEnvKey(c);
+      await ensureEnvFileUpdated({ envPath: stackEnvPath, updates: [{ key, value: p }] });
+      worktrees.push({ component: c, path: p });
     }
   }
 
@@ -3011,7 +3361,8 @@ async function main() {
           'list',
           'migrate',
           'audit',
-        'duplicate',
+          'archive',
+          'duplicate',
           'info',
           'pr',
           'create-dev-auth-seed',
@@ -3041,14 +3392,15 @@ async function main() {
       },
       text: [
         '[stack] usage:',
-        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--happy-cli=...] [--interactive] [--copy-auth-from=<stack>] [--no-copy-auth] [--force-port] [--json]',
+        '  happys stack new <name> [--port=NNN] [--server=happy-server|happy-server-light] [--happy=default|<owner/...>|<path>] [--interactive] [--copy-auth-from=<stack>] [--no-copy-auth] [--force-port] [--json]',
         '  happys stack edit <name> --interactive [--json]',
         '  happys stack list [--json]',
         '  happys stack migrate [--json]   # copy legacy env files from ~/.happy/local/stacks/* -> ~/.happy/stacks/*',
         '  happys stack audit [--fix] [--fix-main] [--fix-ports] [--fix-workspace] [--fix-paths] [--unpin-ports] [--unpin-ports-except=stack1,stack2] [--json]',
+        '  happys stack archive <name> [--dry-run] [--date=YYYY-MM-DD] [--json]',
         '  happys stack duplicate <from> <to> [--duplicate-worktrees] [--deps=none|link|install|link-or-install] [--json]',
         '  happys stack info <name> [--json]',
-        '  happys stack pr <name> --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
+        '  happys stack pr <name> --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
         '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--non-interactive] [--json]',
         '  happys stack env <name> set KEY=VALUE [KEY2=VALUE2...] | unset KEY [KEY2...] | get KEY | list | path [--json]',
         '  happys stack auth <name> status|login|copy-from [--json]',
@@ -3203,6 +3555,18 @@ async function main() {
 
   // Remaining args after "<cmd> <name>"
   const passthrough = argv.slice(2);
+
+  if (cmd === 'archive') {
+    const res = await cmdArchiveStack({ rootDir, argv, stackName });
+    if (json) {
+      printResult({ json, data: res });
+    } else if (res.dryRun) {
+      console.log(`[stack] would archive "${stackName}" -> ${res.archivedStackDir} (dry-run)`);
+    } else {
+      console.log(`[stack] archived "${stackName}" -> ${res.archivedStackDir}`);
+    }
+    return;
+  }
 
   if (cmd === 'env') {
     const hasPositional = passthrough.some((a) => !a.startsWith('-'));

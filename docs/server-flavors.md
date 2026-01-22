@@ -4,7 +4,21 @@ Happy Stacks supports two server “flavors”. You can switch between them glob
 
 ## What’s the difference?
 
-Both are forks/flavors of the same upstream server repo (`slopus/happy-server`), but optimized for different use cases:
+Both are forks/flavors of the same upstream server repo (`slopus/happy-server`), but optimized for different use cases.
+
+### Unified codebase (recommended)
+
+When your `happy-server` checkout includes the light flavor artifacts (notably `prisma/schema.sqlite.prisma`), Happy Stacks treats it as a **single unified server codebase** that supports both:
+
+- `happy-server` (full / Postgres+Redis+S3)
+- `happy-server-light` (light / SQLite+local files, can serve UI)
+
+In that setup:
+
+- there is **no server code duplication**
+- `happy-server-light` can point at the **same checkout/worktree** as `happy-server`
+- `happys stack new` will default to pinning **both** server component dirs to the same path
+- `happys start/dev --server=happy-server-light` will run `start:light` / `dev:light` when available
 
 - **`happy-server-light`** (recommended default)
   - optimized for local usage
@@ -73,7 +87,8 @@ Notes:
 - **`happys start`** is “production-like”. It avoids running heavyweight schema sync loops under launchd KeepAlive.
 - **`happys dev`** is for rapid iteration:
   - for `happy-server`: Happy Stacks runs `prisma migrate deploy` by default (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`).
-  - for `happy-server-light`: the upstream dev script runs `prisma db push` by default (configurable via `HAPPY_STACKS_PRISMA_PUSH`).
+  - for `happy-server-light`: the dev loop runs `prisma db push` by default (configurable via `HAPPY_STACKS_PRISMA_PUSH`).
+    - in unified mode, it targets `prisma/schema.sqlite.prisma`
 
 Important: for a given run (`happys start` / `happys dev`) you choose **one** flavor.
 
@@ -125,7 +140,9 @@ There are two separate concepts:
   - controlled by `HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT` and `HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER`
   - easiest via `happys wt use happy-server-light ...` / `happys wt use happy-server ...`
 
-If you set `HAPPY_STACKS_SERVER_COMPONENT=happy-server-light` but accidentally point the *server-light component dir* at a `happy-server` worktree (or vice versa), `happys start/dev/doctor` will refuse to run and print a fix hint.
+If you set `HAPPY_STACKS_SERVER_COMPONENT=happy-server-light` but accidentally point the *server-light component dir* at a postgres-only `happy-server` checkout (or vice versa), `happys start/dev/doctor` will refuse to run and print a fix hint.
+
+In unified mode (same repo supports both flavors), it is valid (and recommended) for both component dirs to point at the same checkout.
 
 `happys wt use` also prevents the most common mismatch when selecting server worktrees inside `components/` / `components/.worktrees/`.
 

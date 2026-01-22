@@ -16,6 +16,7 @@ import { dirname } from 'node:path';
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
+import { resolveServerLightPrismaDbPushArgs } from './utils/server/flavor_scripts.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/auth/dev_key.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
@@ -633,7 +634,7 @@ async function cmdCopyFrom({ argv, json }) {
           await pmExecBin({
             dir: serverDirForPrisma,
             bin: 'prisma',
-            args: ['db', 'push'],
+            args: resolveServerLightPrismaDbPushArgs({ serverDir: serverDirForPrisma }),
             env: { ...process.env, DATABASE_URL: targetDatabaseUrl },
             quiet: json,
           }).catch(() => {});

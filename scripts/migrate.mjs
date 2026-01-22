@@ -1,7 +1,6 @@
 import './utils/env/env.mjs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { createRequire } from 'node:module';
 
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
@@ -13,6 +12,7 @@ import { ensureHappyServerManagedInfra, applyHappyServerMigrations } from './uti
 import { runCapture } from './utils/proc/proc.mjs';
 import { pickNextFreeTcpPort } from './utils/net/ports.mjs';
 import { getEnvValue } from './utils/env/values.mjs';
+import { importPrismaClientForHappyServerLight, importPrismaClientFromNodeModules } from './utils/server/prisma_import.mjs';
 
 function usage() {
   return [
@@ -52,14 +52,6 @@ async function ensureTargetSecretMatchesSource({ sourceSecretPath, targetSecretP
   } catch {
     return null;
   }
-}
-
-async function importPrismaClientFrom(dir) {
-  const req = createRequire(import.meta.url);
-  const resolved = req.resolve('@prisma/client', { paths: [dir] });
-  // eslint-disable-next-line import/no-dynamic-require
-  const mod = req(resolved);
-  return mod.PrismaClient;
 }
 
 async function migrateLightToServer({ rootDir, fromStack, toStack, includeFiles, force, json }) {
@@ -139,8 +131,8 @@ async function migrateLightToServer({ rootDir, fromStack, toStack, includeFiles,
   await copyFile(fromParsed.path, snapshotPath);
   const snapshotDbUrl = `file:${snapshotPath}`;
 
-  const SourcePrismaClient = await importPrismaClientFrom(lightDir);
-  const TargetPrismaClient = await importPrismaClientFrom(fullDir);
+  const SourcePrismaClient = await importPrismaClientForHappyServerLight({ serverDir: lightDir });
+  const TargetPrismaClient = await importPrismaClientFromNodeModules({ dir: fullDir });
 
   const sourceDb = new SourcePrismaClient({ datasources: { db: { url: snapshotDbUrl } } });
   const targetDb = new TargetPrismaClient({ datasources: { db: { url: infra.env.DATABASE_URL } } });
@@ -289,4 +281,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

@@ -162,7 +162,12 @@ if (hasHomeConfig) {
   const stacksStorageRootRaw = (process.env.HAPPY_STACKS_STORAGE_DIR ?? process.env.HAPPY_LOCAL_STORAGE_DIR ?? '').trim();
   const stacksStorageRoot = stacksStorageRootRaw ? expandHome(stacksStorageRootRaw) : join(homedir(), '.happy', 'stacks');
   const allowLegacy = !isSandboxed() || sandboxAllowsGlobalSideEffects();
-  const legacyStacksRoot = allowLegacy ? join(homedir(), '.happy', 'local', 'stacks') : join(stacksStorageRoot, '__legacy_disabled__');
+  // If the user explicitly overrides the stacks storage root, do not auto-discover a legacy env file from the real home dir.
+  // This keeps isolated runs (tests, sandboxes, custom dirs) from accidentally loading a "real" machine stack env file.
+  const legacyStacksRoot =
+    allowLegacy && !stacksStorageRootRaw
+      ? join(homedir(), '.happy', 'local', 'stacks')
+      : join(stacksStorageRoot, '__legacy_disabled__');
 
   const candidates = [
     join(stacksStorageRoot, stackName, 'env'),
@@ -204,8 +209,7 @@ process.env.NPM_CONFIG_PACKAGE_MANAGER_STRICT = process.env.NPM_CONFIG_PACKAGE_M
   const delimiter = process.platform === 'win32' ? ';' : ':';
   const current = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
   const nodeBinDir = dirname(process.execPath);
-  const want = [nodeBinDir, '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
+  const want = [nodeBinDir, '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/bin', '/bin'];
   const next = [...want.filter((p) => p && !current.includes(p)), ...current];
   process.env.PATH = next.join(delimiter);
 })();
-

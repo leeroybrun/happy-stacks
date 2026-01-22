@@ -48,4 +48,3 @@ export async function runCodexReview({ repoDir, baseRef, env, jsonMode }) {
   const res = await runCaptureResult('codex', args, { cwd: repoDir, env });
   return { ...res, stdout: res.out, stderr: res.err };
 }
-

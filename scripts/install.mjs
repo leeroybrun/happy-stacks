@@ -2,7 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { getComponentDir, getRootDir } from './utils/paths/paths.mjs';
+import { getComponentDir, getComponentRepoDir, getRootDir, isHappyMonorepoRoot } from './utils/paths/paths.mjs';
 import { getServerComponentName } from './utils/server/server.mjs';
 import { ensureCliBuilt, ensureDepsInstalled, ensureHappyCliLocalNpmLinked } from './utils/proc/pm.mjs';
 import { dirname, join } from 'node:path';
@@ -36,8 +36,12 @@ const DEFAULT_FORK_REPOS = {
 const DEFAULT_UPSTREAM_REPOS = {
   // Upstream for server-light lives in the main happy-server repo.
   serverLight: 'https://github.com/slopus/happy-server.git',
-  serverFull: 'https://github.com/slopus/happy-server.git',
-  cli: 'https://github.com/slopus/happy-cli.git',
+  serverFull: 'https://github.com/slopus/happy.git',
+  // slopus/happy is now a monorepo that contains:
+  // - expo-app/ (UI)
+  // - cli/      (happy-cli)
+  // - server/   (happy-server)
+  cli: 'https://github.com/slopus/happy.git',
   ui: 'https://github.com/slopus/happy.git',
 };
 
@@ -55,8 +59,8 @@ function repoUrlsFromOwners({ forkOwner, upstreamOwner }) {
     upstream: {
       // server-light upstream lives in happy-server
       serverLight: up('happy-server'),
-      serverFull: up('happy-server'),
-      cli: up('happy-cli'),
+      serverFull: up('happy'),
+      cli: up('happy'),
       ui: up('happy'),
     },
   };
@@ -81,12 +85,14 @@ function resolveRepoSource({ flags }) {
 
 function getRepoUrls({ repoSource }) {
   const defaults = repoSource === 'upstream' ? DEFAULT_UPSTREAM_REPOS : DEFAULT_FORK_REPOS;
+  const ui = process.env.HAPPY_LOCAL_UI_REPO_URL?.trim() || defaults.ui;
   return {
     // Backwards compatible: HAPPY_LOCAL_SERVER_REPO_URL historically referred to the server-light component.
     serverLight: process.env.HAPPY_LOCAL_SERVER_LIGHT_REPO_URL?.trim() || process.env.HAPPY_LOCAL_SERVER_REPO_URL?.trim() || defaults.serverLight,
-    serverFull: process.env.HAPPY_LOCAL_SERVER_FULL_REPO_URL?.trim() || defaults.serverFull,
-    cli: process.env.HAPPY_LOCAL_CLI_REPO_URL?.trim() || defaults.cli,
-    ui: process.env.HAPPY_LOCAL_UI_REPO_URL?.trim() || defaults.ui,
+    // Default to the UI repo when using a monorepo (override to keep split repos).
+    serverFull: process.env.HAPPY_LOCAL_SERVER_FULL_REPO_URL?.trim() || defaults.serverFull || ui,
+    cli: process.env.HAPPY_LOCAL_CLI_REPO_URL?.trim() || defaults.cli || ui,
+    ui,
   };
 }
 
@@ -347,49 +353,71 @@ async function main() {
         `- use --server=happy-server with --upstream`
     );
   }
-  const serverLightDir = getComponentDir(rootDir, 'happy-server-light');
-  const serverFullDir = getComponentDir(rootDir, 'happy-server');
-  const cliDir = getComponentDir(rootDir, 'happy-cli');
-  const uiDir = getComponentDir(rootDir, 'happy');
+  // Repo roots (clone locations)
+  const uiRepoDir = getComponentRepoDir(rootDir, 'happy');
+  const serverLightRepoDir = getComponentRepoDir(rootDir, 'happy-server-light');
 
-  // Ensure components exist (embedded layout)
-  if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
+  // Ensure UI exists first (monorepo anchor in slopus/happy).
   await ensureComponentPresent({
-      dir: serverLightDir,
-    label: 'SERVER',
-      repoUrl: repos.serverLight,
-      allowClone,
-    });
-  }
-  if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
-    await ensureComponentPresent({
-      dir: serverFullDir,
-      label: 'SERVER_FULL',
-      repoUrl: repos.serverFull,
-    allowClone,
-  });
-  }
-  await ensureComponentPresent({
-    dir: cliDir,
-    label: 'CLI',
-    repoUrl: repos.cli,
-    allowClone,
-  });
-  await ensureComponentPresent({
-    dir: uiDir,
+    dir: uiRepoDir,
     label: 'UI',
     repoUrl: repos.ui,
     allowClone,
   });
 
+  // Package dirs (where we run installs/builds). Recompute after cloning UI.
+  const uiDir = getComponentDir(rootDir, 'happy');
+  const cliDir = getComponentDir(rootDir, 'happy-cli');
+  const serverFullDir = getComponentDir(rootDir, 'happy-server');
+
+  const cliRepoDir = getComponentRepoDir(rootDir, 'happy-cli');
+  const serverFullRepoDir = getComponentRepoDir(rootDir, 'happy-server');
+  const hasMonorepo = isHappyMonorepoRoot(uiRepoDir);
+
+  // Ensure other components exist.
+  // - server-light stays separate for now.
+  // - full server + cli may be embedded in the monorepo.
+  if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
+    await ensureComponentPresent({
+      dir: serverLightRepoDir,
+      label: 'SERVER',
+      repoUrl: repos.serverLight,
+      allowClone,
+    });
+  }
+  if (!hasMonorepo) {
+    if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
+      await ensureComponentPresent({
+        dir: serverFullRepoDir,
+        label: 'SERVER_FULL',
+        repoUrl: repos.serverFull,
+        allowClone,
+      });
+    }
+    await ensureComponentPresent({
+      dir: cliRepoDir,
+      label: 'CLI',
+      repoUrl: repos.cli,
+      allowClone,
+    });
+  } else {
+    if ((serverComponentName === 'both' || serverComponentName === 'happy-server') && !(await pathExists(serverFullDir))) {
+      throw new Error(`[bootstrap] expected monorepo server package at ${serverFullDir} (missing).`);
+    }
+    if (!(await pathExists(cliDir))) {
+      throw new Error(`[bootstrap] expected monorepo cli package at ${cliDir} (missing).`);
+    }
+  }
+
   // Ensure expected branches are checked out for server flavors (avoids "server-light directory contains full server" mistakes).
   if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
-    await ensureGitBranchCheckedOut({ repoDir: serverLightDir, branch: 'happy-server-light', label: 'SERVER' });
+    await ensureGitBranchCheckedOut({ repoDir: serverLightRepoDir, branch: 'happy-server-light', label: 'SERVER' });
   }
   if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
-    // In fork mode, full server is a branch in the fork server repo. In upstream mode, use upstream main.
-    const serverFullBranch = repoSource === 'upstream' ? 'main' : 'happy-server';
-    await ensureGitBranchCheckedOut({ repoDir: serverFullDir, branch: serverFullBranch, label: 'SERVER_FULL' });
+    // In fork mode (split repos), full server is a branch in the fork server repo.
+    // In upstream mode and in monorepo mode, use main.
+    const serverFullBranch = isHappyMonorepoRoot(serverFullRepoDir) ? 'main' : repoSource === 'upstream' ? 'main' : 'happy-server';
+    await ensureGitBranchCheckedOut({ repoDir: serverFullRepoDir, branch: serverFullBranch, label: 'SERVER_FULL' });
   }
 
   const cliDirFinal = cliDir;
@@ -399,7 +427,7 @@ async function main() {
   const skipUiDeps = flags.has('--no-ui-deps') || (process.env.HAPPY_STACKS_INSTALL_NO_UI_DEPS ?? '').trim() === '1';
   const skipCliDeps = flags.has('--no-cli-deps') || (process.env.HAPPY_STACKS_INSTALL_NO_CLI_DEPS ?? '').trim() === '1';
   if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
-    await ensureDepsInstalled(serverLightDir, 'happy-server-light');
+    await ensureDepsInstalled(getComponentDir(rootDir, 'happy-server-light'), 'happy-server-light');
   }
   if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
     await ensureDepsInstalled(serverFullDir, 'happy-server');
@@ -445,14 +473,16 @@ async function main() {
   if (wizard?.configureGit) {
     // Ensure upstream remotes exist so `happys wt sync-all` works consistently.
     const upstreamRepos = getRepoUrls({ repoSource: 'upstream' });
-    await ensureUpstreamRemote({ repoDir: uiDir, upstreamUrl: upstreamRepos.ui });
-    await ensureUpstreamRemote({ repoDir: cliDir, upstreamUrl: upstreamRepos.cli });
-    // server-light and server-full both track upstream happy-server
-    if (await pathExists(serverLightDir)) {
-      await ensureUpstreamRemote({ repoDir: serverLightDir, upstreamUrl: upstreamRepos.serverLight });
+    await ensureUpstreamRemote({ repoDir: uiRepoDir, upstreamUrl: upstreamRepos.ui });
+    if (cliRepoDir !== uiRepoDir) {
+      await ensureUpstreamRemote({ repoDir: cliRepoDir, upstreamUrl: upstreamRepos.cli });
     }
-    if (await pathExists(serverFullDir)) {
-      await ensureUpstreamRemote({ repoDir: serverFullDir, upstreamUrl: upstreamRepos.serverFull });
+    // server-light and server-full both track upstream happy-server
+    if (await pathExists(serverLightRepoDir)) {
+      await ensureUpstreamRemote({ repoDir: serverLightRepoDir, upstreamUrl: upstreamRepos.serverLight });
+    }
+    if (serverFullRepoDir !== uiRepoDir && (await pathExists(serverFullRepoDir))) {
+      await ensureUpstreamRemote({ repoDir: serverFullRepoDir, upstreamUrl: upstreamRepos.serverFull });
     }
 
     // Create/update mirror branches like slopus/main for each repo (best-effort).
@@ -469,7 +499,16 @@ async function main() {
       ok: true,
       repoSource,
       serverComponentName,
-      dirs: { serverLightDir, serverFullDir, cliDir: cliDirFinal, uiDir: uiDirFinal },
+      dirs: {
+        uiRepoDir,
+        uiDir: uiDirFinal,
+        cliRepoDir,
+        cliDir: cliDirFinal,
+        serverLightRepoDir,
+        serverLightDir: getComponentDir(rootDir, 'happy-server-light'),
+        serverFullRepoDir,
+        serverFullDir,
+      },
       cloned: allowClone,
       autostart: enableAutostart ? 'enabled' : sandboxed && enableAutostartRaw && !allowGlobal ? 'skipped (sandbox)' : disableAutostart ? 'disabled' : 'unchanged',
       interactive: Boolean(wizard),

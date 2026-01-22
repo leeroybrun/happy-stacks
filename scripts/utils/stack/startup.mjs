@@ -3,17 +3,20 @@ import { ensureDepsInstalled, pmExecBin } from '../proc/pm.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from '../env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveServerLightPrismaClientImport, resolveServerLightPrismaDbPushArgs } from '../server/flavor_scripts.mjs';
 
 function looksLikeMissingTableError(msg) {
   const s = String(msg ?? '').toLowerCase();
   return s.includes('does not exist') || s.includes('no such table');
 }
 
-async function probeAccountCount({ serverDir, env }) {
+async function probeAccountCount({ serverComponentName, serverDir, env }) {
+  const clientImport =
+    serverComponentName === 'happy-server-light' ? resolveServerLightPrismaClientImport({ serverDir }) : '@prisma/client';
   const probe = `
 	let db;
 	try {
-	  const { PrismaClient } = await import('@prisma/client');
+	  const { PrismaClient } = await import(${JSON.stringify(clientImport)});
 	  db = new PrismaClient();
 	  const accountCount = await db.account.count();
 	  console.log(JSON.stringify({ accountCount }));
@@ -93,15 +96,15 @@ export async function ensureServerLightSchemaReady({ serverDir, env }) {
   await ensureDepsInstalled(serverDir, 'happy-server-light');
 
   try {
-    const accountCount = await probeAccountCount({ serverDir, env });
+    const accountCount = await probeAccountCount({ serverComponentName: 'happy-server-light', serverDir, env });
     return { ok: true, pushed: false, accountCount };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (!looksLikeMissingTableError(msg)) {
       throw e;
     }
-    await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['db', 'push'], env });
-    const accountCount = await probeAccountCount({ serverDir, env });
+    await pmExecBin({ dir: serverDir, bin: 'prisma', args: resolveServerLightPrismaDbPushArgs({ serverDir }), env });
+    const accountCount = await probeAccountCount({ serverComponentName: 'happy-server-light', serverDir, env });
     return { ok: true, pushed: true, accountCount };
   }
 }
@@ -110,7 +113,7 @@ export async function ensureHappyServerSchemaReady({ serverDir, env }) {
   await ensureDepsInstalled(serverDir, 'happy-server');
 
   try {
-    const accountCount = await probeAccountCount({ serverDir, env });
+    const accountCount = await probeAccountCount({ serverComponentName: 'happy-server', serverDir, env });
     return { ok: true, migrated: false, accountCount };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -119,7 +122,7 @@ export async function ensureHappyServerSchemaReady({ serverDir, env }) {
     }
     // If tables are missing, try migrations (safe for postgres). Then re-probe.
     await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['migrate', 'deploy'], env });
-    const accountCount = await probeAccountCount({ serverDir, env });
+    const accountCount = await probeAccountCount({ serverComponentName: 'happy-server', serverDir, env });
     return { ok: true, migrated: true, accountCount };
   }
 }

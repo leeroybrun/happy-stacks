@@ -23,6 +23,7 @@ import { resolveMobileQrPayload } from './utils/mobile/dev_client_links.mjs';
 import { renderQrAscii } from './utils/ui/qr.mjs';
 import { inferPrStackBaseName } from './utils/stack/pr_stack_name.mjs';
 import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
+import { coerceHappyMonorepoRootFromPath, getComponentDir } from './utils/paths/paths.mjs';
 
 function pickReviewerMobileSchemeEnv(env) {
   // For review-pr flows, reviewers typically have the standard Happy dev build on their phone,
@@ -214,12 +215,12 @@ async function main() {
       json,
       data: {
         usage:
-          'happys setup-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--happy-server=<pr-url|number>|--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile] [--deps=none|link|install|link-or-install] [--forks|--upstream] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--json] [-- <stack dev/start args...>]',
+          'happys setup-pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile] [--deps=none|link|install|link-or-install] [--forks|--upstream] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--json] [-- <stack dev/start args...>]',
       },
       text: [
         '[setup-pr] usage:',
-        '  happys setup-pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]',
-        '  happys setup pr --happy=<pr-url|number> [--happy-cli=<pr-url|number>] [--dev]   # alias',
+        '  happys setup-pr --happy=<pr-url|number> [--dev]',
+        '  happys setup pr --happy=<pr-url|number> [--dev]   # alias',
         '',
         'What it does (idempotent):',
         '- ensures happy-stacks home exists (init)',
@@ -235,7 +236,11 @@ async function main() {
         'example:',
         '  happys setup-pr \\',
         '    --happy=https://github.com/slopus/happy/pull/123 \\',
-        '    --happy-cli=https://github.com/slopus/happy-cli/pull/456',
+        '    --dev',
+        '',
+        'legacy note:',
+        '  In the pre-monorepo split-repo era, happy-cli/happy-server had separate PRs.',
+        '  In monorepo mode, use --happy only (it covers UI + CLI + server).',
       ].join('\n'),
     });
     return;
@@ -252,6 +257,15 @@ async function main() {
   }
   if (prServer && prServerLight) {
     throw new Error('[setup-pr] cannot specify both --happy-server and --happy-server-light');
+  }
+
+  const happyMonorepoActive = Boolean(coerceHappyMonorepoRootFromPath(getComponentDir(rootDir, 'happy', process.env)));
+  if (happyMonorepoActive && (prCli || prServer)) {
+    throw new Error(
+      '[setup-pr] this workspace uses the slopus/happy monorepo.\n' +
+        'Fix: use --happy=<pr> only (it covers UI + CLI + server).\n' +
+        'Note: --happy-cli/--happy-server are legacy flags for the pre-monorepo split repos.'
+    );
   }
 
   const wantsDev = flags.has('--dev') || (!flags.has('--start') && !flags.has('--prod'));
@@ -697,4 +711,3 @@ main().catch((err) => {
   console.error('[setup-pr] failed:', err);
   process.exit(1);
 });
-

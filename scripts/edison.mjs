@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { mkdir, lstat, rename, symlink, writeFile, readdir, chmod } from 'node:fs/promises';
 import os from 'node:os';
+import { normalizeGitRoots } from './utils/edison/git_roots.mjs';
 
 const COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 
@@ -1343,7 +1344,7 @@ async function resolveFingerprintGitRoots({ rootDir, stackEnv, edisonArgs }) {
     const d = resolveComponentDirFromStackEnv({ rootDir, stackEnv, component: c });
     if (d) dirs.push(d);
   }
-  return dirs.length ? dirs : fallback;
+  return normalizeGitRoots(dirs.length ? dirs : fallback);
 }
 
 async function cmdTrackCoherence({ rootDir, argv, json }) {
@@ -1852,4 +1853,3 @@ main().catch((err) => {
   console.error('[edison] failed:', err);
   process.exit(1);
 });
-

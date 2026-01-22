@@ -2,6 +2,9 @@ import { createInterface } from 'node:readline/promises';
 import { listWorktreeSpecs } from '../git/worktrees.mjs';
 
 export function isTty() {
+  if (process.env.HAPPY_STACKS_TEST_TTY === '1') {
+    return true;
+  }
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
@@ -68,4 +71,3 @@ export async function promptWorktreeSource({ rl, rootDir, component, stackName, 
   }
   return { create: true, slug, remote: createRemote };
 }
-

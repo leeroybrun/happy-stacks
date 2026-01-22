@@ -15,7 +15,7 @@ import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs'
  * Build a lightweight static web UI bundle (no Expo dev server).
  *
  * Output directory default: ~/.happy/stacks/main/ui (legacy: ~/.happy/local/ui)
- * Server will serve it at / when HAPPY_SERVER_LIGHT_UI_DIR is set.
+ * Server will serve it at / when HAPPY_SERVER_UI_DIR is set.
  * (Legacy /ui paths are redirected to /.)
  */
 
