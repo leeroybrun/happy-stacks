@@ -8,6 +8,7 @@ set -euo pipefail
 # - Node (via nvm)
 # - corepack (yarn/pnpm shims)
 # - basic build tooling for native deps used by Expo/React Native ecosystem
+# - a few common CLI utilities used in developer workflows (zip/unzip/jq/rsync)
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "[provision] expected Linux; got: $(uname -s)" >&2
@@ -24,7 +25,11 @@ sudo apt-get install -y \
   git \
   build-essential \
   python3 \
-  pkg-config
+  pkg-config \
+  unzip \
+  zip \
+  jq \
+  rsync
 
 echo "[provision] installing nvm + Node..."
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
@@ -36,16 +41,21 @@ fi
 # shellcheck disable=SC1090
 source "$NVM_DIR/nvm.sh"
 
-# Use a modern Node; match the repo's expectations if it ever adds .nvmrc.
-NODE_VERSION="${NODE_VERSION:-22}"
+# Use the current Node.js LTS by default.
+# Override if needed: `NODE_VERSION=24 ...` (or any version supported by nvm).
+# (As of 2026-01-24, the current LTS line is 24.x.)
+NODE_VERSION="${NODE_VERSION:-lts/*}"
 nvm install "$NODE_VERSION"
 nvm use "$NODE_VERSION"
 
 echo "[provision] enabling corepack..."
 corepack enable >/dev/null 2>&1 || true
+# Pre-activate common package managers so first-run installs are smoother.
+# (Yarn classic is used by the slopus/happy monorepo today.)
+corepack prepare yarn@1.22.22 --activate >/dev/null 2>&1 || true
+corepack prepare pnpm@latest --activate >/dev/null 2>&1 || true
 
 echo "[provision] done."
 echo "[provision] Node: $(node --version)"
 echo "[provision] npm:  $(npm --version)"
 echo "[provision] git:  $(git --version)"
-

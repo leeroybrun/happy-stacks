@@ -31,15 +31,27 @@ Inside the VM:
 curl -fsSL https://raw.githubusercontent.com/leeroybrun/happy-local/main/scripts/provision/linux-ubuntu-review-pr.sh -o /tmp/linux-ubuntu-review-pr.sh && chmod +x /tmp/linux-ubuntu-review-pr.sh && /tmp/linux-ubuntu-review-pr.sh
 ```
 
+### 3b) (Optional) Run the Happy Stacks dev setup wizard
+
+If your goal is to **work on changes** (not just review a PR), you can run the dev profile:
+
+```bash
+npx --yes happy-stacks@latest setup --profile=dev
+```
+
+Notes:
+- This bootstraps a workspace (clones repos, installs deps, sets up worktrees/stacks tooling).
+- On Linux VMs you typically want `--no-mobile` workflows (iOS dev-client requires Xcode/macOS).
+
 ### 4) Run `review-pr` via `npx` (published package)
 
 Inside the VM:
 
 ```bash
 npx --yes happy-stacks@latest review-pr \
-  --happy=https://github.com/leeroybrun/happy/pull/10 \
-  --happy-cli=https://github.com/leeroybrun/happy-cli/pull/12 \
+  --happy=https://github.com/slopus/happy/pull/<PR_NUMBER> \
   --no-mobile \
+  --keep-sandbox \
   --verbose
 ```
 
@@ -80,3 +92,38 @@ Containers are excellent for server-only validation, but are usually **not** the
 
 Use containers only if you explicitly want “CLI-only” checks and are okay opening URLs manually.
 
+---
+
+## Resetting / starting fresh
+
+### Full reset (recommended): recreate the VM
+
+On the macOS host:
+
+```bash
+limactl stop happy-pr || true
+limactl delete happy-pr
+limactl create --name happy-pr --tty=false template://ubuntu-24.04
+limactl start happy-pr
+```
+
+Then re-run the provisioning step (Node + build deps) from this doc.
+
+### Soft reset: keep the VM, delete Happy Stacks state
+
+If you want a “clean-ish” rerun without recreating the VM, delete the Happy Stacks home + any workspace you chose:
+
+Inside the VM:
+
+```bash
+rm -rf ~/.happy-stacks ~/.happy
+```
+
+If you used `happys setup --profile=dev` and picked a custom workspace directory (outside `~/.happy-stacks/workspace`), delete that directory too.
+
+---
+
+## Notes / scope
+
+- This doc targets **web-only** validation (`--no-mobile`) on Ubuntu ARM64 VMs.
+- On-device iOS testing via `--mobile` requires a macOS host with Xcode (not possible inside the Linux VM).
