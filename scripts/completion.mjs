@@ -12,6 +12,8 @@ import { getHappysRegistry } from './utils/cli/cli_registry.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
 import { getHappyStacksHomeDir, getRootDir } from './utils/paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { banner, bullets, cmd, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, yellow } from './utils/ui/ansi.mjs';
 
 function detectShell() {
   const raw = (process.env.SHELL ?? '').toLowerCase();
@@ -303,13 +305,17 @@ async function main() {
       json,
       data: { commands: ['print', 'install'], flags: ['--shell=zsh|bash|fish', '--json'] },
       text: [
-        '[completion] usage:',
-        '  happys completion print [--shell=zsh|bash|fish] [--json]',
-        '  happys completion install [--shell=zsh|bash|fish] [--json]',
+        banner('completion', { subtitle: 'Shell completions for happys/happy-stacks.' }),
         '',
-        'notes:',
-        '  - installs best-effort shell completions for happys/happy-stacks',
-        '  - re-run after upgrading happys to refresh completions',
+        sectionTitle('usage:'),
+        `  ${cyan('happys completion')} print [--shell=zsh|bash|fish] [--json]`,
+        `  ${cyan('happys completion')} install [--shell=zsh|bash|fish] [--json]`,
+        '',
+        sectionTitle('notes:'),
+        bullets([
+          dim('Installs best-effort completions for happys/happy-stacks.'),
+          dim('Re-run after upgrading happys to refresh completions.'),
+        ]),
       ].join('\n'),
     });
     return;
@@ -351,9 +357,9 @@ async function main() {
         `[completion] installed: ${file}`,
         hook?.path ? (hook.updated ? `[completion] enabled via: ${hook.path}` : `[completion] already enabled in: ${hook.path}`) : null,
         hook?.skipped === 'sandbox'
-          ? '[completion] note: skipped editing shell rc files (sandbox mode). To enable this, re-run with HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1'
+          ? `[completion] note: skipped editing shell rc files (sandbox mode). To enable this, re-run with ${cyan('HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1')}`
           : null,
-        '[completion] note: restart your terminal (or source your shell config) to pick it up.',
+        `[completion] note: restart your terminal (or source your shell config) to pick it up.`,
       ]
         .filter(Boolean)
         .join('\n'),

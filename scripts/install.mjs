@@ -25,17 +25,19 @@ import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
 
 const DEFAULT_FORK_REPOS = {
   serverLight: 'https://github.com/leeroybrun/happy-server-light.git',
-  // Both server flavors live as branches in the same fork repo:
-  // - happy-server-light (sqlite)
-  // - happy-server (full)
-  serverFull: 'https://github.com/leeroybrun/happy-server-light.git',
-  cli: 'https://github.com/leeroybrun/happy-cli.git',
+  // Monorepo fork (slopus/happy):
+  // - expo-app/ (UI)
+  // - cli/      (happy-cli)
+  // - server/   (happy-server)
+  serverFull: 'https://github.com/leeroybrun/happy.git',
+  cli: 'https://github.com/leeroybrun/happy.git',
   ui: 'https://github.com/leeroybrun/happy.git',
 };
 
 const DEFAULT_UPSTREAM_REPOS = {
-  // Upstream for server-light lives in the main happy-server repo.
-  serverLight: 'https://github.com/slopus/happy-server.git',
+  // Server-light is not upstreamed yet; for now, use the maintained fork.
+  // When upstream ships server-light, this default can switch to slopus/*.
+  serverLight: 'https://github.com/leeroybrun/happy-server-light.git',
   serverFull: 'https://github.com/slopus/happy.git',
   // slopus/happy is now a monorepo that contains:
   // - expo-app/ (UI)
@@ -51,14 +53,15 @@ function repoUrlsFromOwners({ forkOwner, upstreamOwner }) {
   return {
     forks: {
       serverLight: fork('happy-server-light'),
-      // Fork convention: server full is a branch in happy-server-light repo (not a separate repo).
-      serverFull: fork('happy-server-light'),
-      cli: fork('happy-cli'),
+      // Monorepo: UI + CLI + full server share a single repo.
+      serverFull: fork('happy'),
+      cli: fork('happy'),
       ui: fork('happy'),
     },
     upstream: {
-      // server-light upstream lives in happy-server
-      serverLight: up('happy-server'),
+      // Monorepo: UI + CLI + full server share a single repo.
+      // Server-light is not upstreamed yet; default to the maintained fork.
+      serverLight: DEFAULT_UPSTREAM_REPOS.serverLight,
       serverFull: up('happy'),
       cli: up('happy'),
       ui: up('happy'),
@@ -73,25 +76,48 @@ function resolveRepoSource({ flags }) {
   if (flags.has('--upstream')) {
     return 'upstream';
   }
-  const fromEnv = (process.env.HAPPY_LOCAL_REPO_SOURCE ?? '').trim().toLowerCase();
+  const fromEnv = (process.env.HAPPY_STACKS_REPO_SOURCE ?? process.env.HAPPY_LOCAL_REPO_SOURCE ?? '').trim().toLowerCase();
   if (fromEnv === 'fork' || fromEnv === 'forks') {
     return 'forks';
   }
   if (fromEnv === 'upstream') {
     return 'upstream';
   }
-  return 'forks';
+  // Default for external contributors.
+  return 'upstream';
 }
 
 function getRepoUrls({ repoSource }) {
   const defaults = repoSource === 'upstream' ? DEFAULT_UPSTREAM_REPOS : DEFAULT_FORK_REPOS;
-  const ui = process.env.HAPPY_LOCAL_UI_REPO_URL?.trim() || defaults.ui;
+  const ui =
+    process.env.HAPPY_STACKS_UI_REPO_URL?.trim() ||
+    process.env.HAPPY_LOCAL_UI_REPO_URL?.trim() ||
+    defaults.ui;
+  const cli =
+    process.env.HAPPY_STACKS_CLI_REPO_URL?.trim() ||
+    process.env.HAPPY_LOCAL_CLI_REPO_URL?.trim() ||
+    defaults.cli ||
+    ui;
+
+  // Server-light is special while it remains fork-only:
+  // - if repoSource is upstream, we still default server-light to the maintained fork,
+  //   unless the user explicitly overrides via env.
+  const serverLightDefault = repoSource === 'upstream' ? DEFAULT_FORK_REPOS.serverLight : defaults.serverLight;
   return {
     // Backwards compatible: HAPPY_LOCAL_SERVER_REPO_URL historically referred to the server-light component.
-    serverLight: process.env.HAPPY_LOCAL_SERVER_LIGHT_REPO_URL?.trim() || process.env.HAPPY_LOCAL_SERVER_REPO_URL?.trim() || defaults.serverLight,
+    serverLight:
+      process.env.HAPPY_STACKS_SERVER_LIGHT_REPO_URL?.trim() ||
+      process.env.HAPPY_LOCAL_SERVER_LIGHT_REPO_URL?.trim() ||
+      process.env.HAPPY_STACKS_SERVER_REPO_URL?.trim() ||
+      process.env.HAPPY_LOCAL_SERVER_REPO_URL?.trim() ||
+      serverLightDefault,
     // Default to the UI repo when using a monorepo (override to keep split repos).
-    serverFull: process.env.HAPPY_LOCAL_SERVER_FULL_REPO_URL?.trim() || defaults.serverFull || ui,
-    cli: process.env.HAPPY_LOCAL_CLI_REPO_URL?.trim() || defaults.cli || ui,
+    serverFull:
+      process.env.HAPPY_STACKS_SERVER_FULL_REPO_URL?.trim() ||
+      process.env.HAPPY_LOCAL_SERVER_FULL_REPO_URL?.trim() ||
+      defaults.serverFull ||
+      ui,
+    cli,
     ui,
   };
 }
@@ -174,21 +200,43 @@ async function ensureUpstreamRemote({ repoDir, upstreamUrl }) {
 
 async function interactiveWizard({ rootDir, defaults }) {
   return await withRl(async (rl) => {
-    const repoSource = await promptSelect(rl, {
-      title: `${bold('Repo source')}\n${dim('Where should Happy Stacks clone the component repos from?')}`,
-      options: [
-        { label: `${cyan('forks')} (${green('recommended')}) — works best with Happy Stacks features`, value: 'forks' },
-        { label: `${cyan('upstream')} (slopus/*)`, value: 'upstream' },
-      ],
-      defaultIndex: defaults.repoSource === 'upstream' ? 1 : 0,
-    });
+    // Repo source is intentionally not prompted during bootstrap:
+    // - default: upstream (best for external contributors)
+    // - advanced: pass --forks (then we prompt for fork owner)
+    const repoSource = defaults.repoSource;
 
     // eslint-disable-next-line no-console
-    console.log(dim('Tip: keep the defaults unless you maintain your own forks.'));
-    const forkOwner = await prompt(rl, `GitHub fork owner (default: ${defaults.forkOwner}): `, { defaultValue: defaults.forkOwner });
-    const upstreamOwner = await prompt(rl, `GitHub upstream owner (default: ${defaults.upstreamOwner}): `, {
-      defaultValue: defaults.upstreamOwner,
-    });
+    console.log(
+      dim(
+        `Repo source: ${cyan(repoSource)}${
+          repoSource === 'upstream' ? ` ${green('(recommended)')}` : ''
+        }${repoSource === 'forks' ? ` ${dim('(advanced)')}` : ''}`
+      )
+    );
+    if (repoSource === 'upstream') {
+      // eslint-disable-next-line no-console
+      console.log(
+        dim(
+          `Note: ${cyan('happy-server-light')} is not upstreamed yet, so we clone it from the maintained fork (${DEFAULT_FORK_REPOS.serverLight}).`
+        )
+      );
+      // eslint-disable-next-line no-console
+      console.log(dim(`Tip: to use forks, re-run: ${cyan('happys bootstrap --interactive --forks')}`));
+    }
+
+    let forkOwner = defaults.forkOwner;
+    let upstreamOwner = defaults.upstreamOwner;
+
+    if (repoSource === 'forks') {
+      // eslint-disable-next-line no-console
+      console.log(dim('Tip: choose this if you already have a fork of slopus/happy.'));
+      forkOwner = (
+        await prompt(rl, `GitHub fork owner (default: ${defaults.forkOwner}): `, { defaultValue: defaults.forkOwner })
+      ).trim() || defaults.forkOwner;
+      upstreamOwner = (
+        await prompt(rl, `GitHub upstream owner (default: ${defaults.upstreamOwner}): `, { defaultValue: defaults.upstreamOwner })
+      ).trim() || defaults.upstreamOwner;
+    }
 
     const serverMode = await promptSelect(rl, {
       title: `${bold('Server components')}\n${dim('Choose which server repo(s) to clone and install deps for.')}`,
@@ -240,8 +288,8 @@ async function interactiveWizard({ rootDir, defaults }) {
 
     return {
       repoSource,
-      forkOwner: forkOwner.trim() || defaults.forkOwner,
-      upstreamOwner: upstreamOwner.trim() || defaults.upstreamOwner,
+      forkOwner,
+      upstreamOwner,
       serverComponentName: serverMode,
       allowClone,
       enableAutostart,
@@ -342,17 +390,6 @@ async function main() {
   const disableAutostart = flags.has('--no-autostart');
 
   const serverComponentName = (wizard?.serverComponentName ?? getServerComponentName({ kv })).trim();
-  // Safety: upstream server-light is not a separate upstream repo/branch today.
-  // Upstream slopus/happy-server is Postgres-only, while happy-server-light requires sqlite.
-  if (repoSource === 'upstream' && (serverComponentName === 'happy-server-light' || serverComponentName === 'both')) {
-    throw new Error(
-      `[bootstrap] --upstream is not supported for happy-server-light (sqlite).\n` +
-        `Reason: upstream ${DEFAULT_UPSTREAM_REPOS.serverLight} does not provide a happy-server-light branch.\n` +
-        `Fix:\n` +
-        `- use --forks (recommended), OR\n` +
-        `- use --server=happy-server with --upstream`
-    );
-  }
   // Repo roots (clone locations)
   const uiRepoDir = getComponentRepoDir(rootDir, 'happy');
   const serverLightRepoDir = getComponentRepoDir(rootDir, 'happy-server-light');

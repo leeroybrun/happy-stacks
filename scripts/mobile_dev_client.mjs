@@ -4,6 +4,8 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { getRootDir } from './utils/paths/paths.mjs';
 import { join } from 'node:path';
+import { banner, cmd, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, yellow } from './utils/ui/ansi.mjs';
 
 import { defaultDevClientIdentity } from './utils/mobile/identifiers.mjs';
 
@@ -19,12 +21,15 @@ async function main() {
         flags: ['--device=<id-or-name>', '--clean', '--configuration=Debug|Release', '--json'],
       },
       text: [
-        '[mobile-dev-client] usage:',
-        '  happys mobile-dev-client --install [--device=...] [--clean] [--configuration=Debug|Release] [--json]',
+        banner('mobile-dev-client', { subtitle: 'Install the shared iOS dev-client app (one-time).' }),
         '',
-        'Notes:',
-        '- Installs a dedicated "Happy Stacks Dev" Expo dev-client app on your iPhone.',
-        '- This app is intended to be reused across stacks (no per-stack installs for dev-client).',
+        sectionTitle('usage:'),
+        `  ${cyan('happys mobile-dev-client')} --install [--device=...] [--clean] [--configuration=Debug|Release] [--json]`,
+        '',
+        sectionTitle('notes:'),
+        `- Installs a dedicated ${cyan('Happy Stacks Dev')} Expo dev-client app on your iPhone.`,
+        `- This app is intended to be ${cyan('reused across stacks')} (no per-stack installs).`,
+        `- Requires ${yellow('Xcode')} + ${yellow('CocoaPods')} (macOS).`,
       ].join('\n'),
     });
     return;
@@ -34,7 +39,7 @@ async function main() {
     printResult({
       json,
       data: { ok: false, error: 'missing_install_flag' },
-      text: '[mobile-dev-client] missing --install. Run: happys mobile-dev-client --help',
+      text: `${yellow('!')} missing ${cyan('--install')}. Run: ${cmd('happys mobile-dev-client --help')}`,
     });
     process.exit(1);
   }

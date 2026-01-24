@@ -28,6 +28,7 @@ import { bold, cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { detectSwiftbarPluginInstalled } from './utils/menubar/swiftbar.mjs';
+import { banner, bullets, cmd as cmdFmt, kv, sectionTitle } from './utils/ui/layout.mjs';
 
 function resolveWorkspaceDirDefault() {
   const explicit = (process.env.HAPPY_STACKS_WORKSPACE_DIR ?? process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? '').toString().trim();
@@ -58,14 +59,15 @@ async function resolveMainServerPort() {
 }
 
 async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, tailscaleWanted, menubarMode }) {
-  const repoSourceForProfile =
-    profile === 'selfhost' ? (serverComponent === 'happy-server-light' ? 'forks' : 'upstream') : null;
+  // Repo source here describes where we clone the main Happy monorepo from (UI + CLI + full server).
+  // Server-light (sqlite) remains fork-only for now and is handled separately in bootstrap defaults.
+  const repoSourceForProfile = profile === 'selfhost' ? 'upstream' : null;
   const updates = [
     { key: 'HAPPY_STACKS_SERVER_COMPONENT', value: serverComponent },
     { key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: serverComponent },
     // Default for selfhost:
-    // - full server: upstream (slopus/*)
-    // - server-light: forks (sqlite server-light is not available upstream today)
+    // - monorepo: upstream (slopus/*)
+    // - server-light: fork-only today (handled in bootstrap)
     ...(repoSourceForProfile
       ? [
           { key: 'HAPPY_STACKS_REPO_SOURCE', value: repoSourceForProfile },
@@ -99,6 +101,65 @@ async function detectDockerSupport() {
   } catch {
     return { installed: true, running: false };
   }
+}
+
+async function detectGitSupport() {
+  return await commandExists('git');
+}
+
+async function detectTailscaleSupport() {
+  const installed = await commandExists('tailscale');
+  return { installed };
+}
+
+function isSwiftbarAppInstalled() {
+  if (process.platform !== 'darwin') return false;
+  // Best-effort: not exhaustive, but catches the common case.
+  return existsSync('/Applications/SwiftBar.app');
+}
+
+async function detectIosDevTools() {
+  if (process.platform !== 'darwin') return { ok: false, hasXcode: false, hasCocoapods: false };
+  const hasXcode = await commandExists('xcodebuild');
+  const hasCocoapods = await commandExists('pod');
+  return { ok: hasXcode && hasCocoapods, hasXcode, hasCocoapods };
+}
+
+async function runSetupPreflight({ profile, serverComponent, tailscaleWanted, menubarWanted, autostartWanted }) {
+  // Fail-fast on the truly required bits (so we don't get halfway through and crash).
+  const gitOk = await detectGitSupport();
+  if (!gitOk) {
+    throw new Error(
+      `[setup] missing prerequisite: git\n` +
+        `Happy Stacks needs git to clone/update component repos.\n` +
+        `Fix: install git, then re-run setup.`
+    );
+  }
+
+  const sandboxed = isSandboxed();
+  const allowGlobal = sandboxAllowsGlobalSideEffects();
+
+  const docker = profile === 'selfhost' ? await detectDockerSupport() : { installed: false, running: false };
+  const tailscale = tailscaleWanted ? await detectTailscaleSupport() : { installed: false };
+  const ios = profile === 'dev' ? await detectIosDevTools() : { ok: false, hasXcode: false, hasCocoapods: false };
+
+  const canInstallAutostart = autostartWanted && (!sandboxed || allowGlobal);
+  const canInstallMenubar = menubarWanted && process.platform === 'darwin' && (!sandboxed || allowGlobal);
+  const canEnableTailscale = tailscaleWanted && tailscale.installed && (!sandboxed || allowGlobal);
+
+  return {
+    gitOk,
+    docker,
+    tailscale,
+    ios,
+    sandboxed,
+    allowGlobal,
+    canInstallAutostart,
+    canInstallMenubar,
+    canEnableTailscale,
+    swiftbarAppInstalled: menubarWanted ? isSwiftbarAppInstalled() : null,
+    serverComponent,
+  };
 }
 
 async function runNodeScript({ rootDir, rel, args = [], env = process.env }) {
@@ -714,10 +775,17 @@ async function cmdSetup({ rootDir, argv }) {
 
     installPath = await withRl(async (rl) => {
       const v = await promptSelect(rl, {
-        title: bold('Shell PATH'),
+        title:
+          `${bold('Command shortcuts')}\n` +
+          `${dim(
+            `Optional: add ${cyan(join(getCanonicalHomeDir(), 'bin'))} to your shell PATH so you can run ${cyan(
+              'happys'
+            )} from any terminal.`
+          )}\n` +
+          `${dim(`If you skip this, you can always run commands via ${cyan('npx happy-stacks ...')}.`)}`,
         options: [
-          { label: `no (default) — you can run via npx / full path`, value: false },
-          { label: `yes — add ${cyan(join(getCanonicalHomeDir(), 'bin'))} to your PATH`, value: true },
+          { label: `no (default) — keep using ${cyan('npx happy-stacks ...')}`, value: false },
+          { label: `yes (${green('recommended')}) — enable ${cyan('happys')} in your terminal`, value: true },
         ],
         defaultIndex: installPath ? 1 : 0,
       });
@@ -730,6 +798,57 @@ async function cmdSetup({ rootDir, argv }) {
   if (!supportsMenubar) menubarWanted = false;
 
   const menubarMode = profile === 'selfhost' ? 'selfhost' : 'dev';
+
+  // Preflight: warn early + decide what we can actually do this run.
+  const preflight = await runSetupPreflight({ profile, serverComponent, tailscaleWanted, menubarWanted, autostartWanted });
+  if (interactive && process.stdout.isTTY && !json) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(banner('Preflight', { subtitle: profile === 'selfhost' ? 'Check prerequisites for self-hosting.' : 'Check prerequisites for development setup.' }));
+
+    const lines = [];
+    if (profile === 'selfhost') {
+      if (serverComponent === 'happy-server') {
+        lines.push(
+          preflight.docker.installed && preflight.docker.running
+            ? `${green('✓')} Docker: running`
+            : `${yellow('!')} Docker: ${!preflight.docker.installed ? 'not installed' : 'not running'} (full server needs Docker)`
+        );
+      } else {
+        lines.push(
+          preflight.docker.installed
+            ? `${green('✓')} Docker: detected ${dim('(not required for server-light)')}`
+            : `${dim('•')} Docker: not detected ${dim('(server-light does not need it)')}`
+        );
+      }
+      if (tailscaleWanted) {
+        lines.push(
+          preflight.tailscale.installed
+            ? `${green('✓')} Tailscale: detected`
+            : `${yellow('!')} Tailscale: not installed ${dim('(remote HTTPS will be available after install)')}`
+        );
+      }
+      if (menubarWanted && process.platform === 'darwin') {
+        lines.push(
+          preflight.swiftbarAppInstalled
+            ? `${green('✓')} SwiftBar: installed`
+            : `${yellow('!')} SwiftBar: not detected ${dim('(plugin can be installed, but you need SwiftBar to use it)')}`
+        );
+      }
+    } else {
+      // dev profile: iOS tooling is only relevant if user chooses mobile-dev-client later.
+      if (process.platform === 'darwin') {
+        lines.push(
+          preflight.ios.ok
+            ? `${green('✓')} iOS tooling: Xcode + CocoaPods detected`
+            : `${dim('•')} iOS tooling: ${!preflight.ios.hasXcode ? 'missing Xcode' : ''}${!preflight.ios.hasXcode && !preflight.ios.hasCocoapods ? ' + ' : ''}${!preflight.ios.hasCocoapods ? 'missing CocoaPods' : ''}`.trim()
+        );
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log(lines.length ? lines.join('\n') : dim('(no checks)'));
+  }
 
   const config = {
     profile,
@@ -787,7 +906,7 @@ async function cmdSetup({ rootDir, argv }) {
     menubarMode,
   });
 
-  // 3) Bootstrap components. Selfhost defaults to upstream; dev defaults to existing bootstrap wizard (forks by default).
+  // 3) Bootstrap components.
   if (profile === 'dev') {
     // Developer setup: keep the existing bootstrap wizard.
     await runNodeScriptMaybeQuiet({
@@ -852,17 +971,22 @@ async function cmdSetup({ rootDir, argv }) {
     }
   } else {
     // Selfhost setup: run non-interactively and keep it simple.
-    const repoFlag = serverComponent === 'happy-server-light' ? '--forks' : '--upstream';
     await runNodeScriptMaybeQuiet({
       label: 'bootstrap components',
       rootDir,
       rel: 'scripts/install.mjs',
-      args: [`--server=${serverComponent}`, repoFlag],
+      // Self-hosting: always clone the Happy monorepo from upstream.
+      // Server-light (sqlite) is still fork-only today and is handled by bootstrap defaults.
+      args: [`--server=${serverComponent}`, '--upstream'],
     });
   }
 
   // 4) Optional: install autostart (macOS launchd / Linux systemd user).
   if (autostartWanted) {
+    if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+      // eslint-disable-next-line no-console
+      console.log(dim(`Autostart skipped in sandbox mode. To allow: ${cyan('HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1')}`));
+    } else {
     if (process.platform === 'linux') {
       const ok = await ensureSystemdAvailable();
       if (!ok) {
@@ -874,15 +998,30 @@ async function cmdSetup({ rootDir, argv }) {
     } else {
       await installService();
     }
+    }
   }
 
   // 5) Optional: install menubar assets (macOS only).
   if (menubarWanted && process.platform === 'darwin') {
-    await runNodeScript({ rootDir, rel: 'scripts/menubar.mjs', args: ['install'] });
+    if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+      // eslint-disable-next-line no-console
+      console.log(dim(`Menu bar install skipped in sandbox mode. To allow: ${cyan('HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1')}`));
+    } else {
+      await runNodeScript({ rootDir, rel: 'scripts/menubar.mjs', args: ['install'] });
+    }
   }
 
   // 6) Optional: enable tailscale serve (best-effort).
   if (tailscaleWanted) {
+    const tailscaleOk = await commandExists('tailscale');
+    if (!tailscaleOk) {
+      // eslint-disable-next-line no-console
+      console.log(`${yellow('!')} Tailscale not installed. To enable remote HTTPS later: ${cyan('happys tailscale enable')}`);
+      await openUrlInBrowser('https://tailscale.com/download').catch(() => {});
+    } else if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
+      // eslint-disable-next-line no-console
+      console.log(dim(`Tailscale enable skipped in sandbox mode. To allow: ${cyan('HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1')}`));
+    } else {
     try {
       const internalPort = await resolveMainServerPort();
       const internalServerUrl = `http://127.0.0.1:${internalPort}`;
@@ -899,6 +1038,7 @@ async function cmdSetup({ rootDir, argv }) {
       // eslint-disable-next-line no-console
       console.log('[setup] tailscale not available. Install it from: https://tailscale.com/download');
       await openUrlInBrowser('https://tailscale.com/download').catch(() => {});
+    }
     }
   }
 

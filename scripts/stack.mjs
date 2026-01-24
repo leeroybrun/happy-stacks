@@ -44,6 +44,7 @@ import { waitForHttpOk } from './utils/server/server.mjs';
 import { resolveLocalhostHost, preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { bold, cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
+import { banner, bullets, cmd as cmdFmt, kv, sectionTitle } from './utils/ui/layout.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth/files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
@@ -70,7 +71,7 @@ import { isCursorInstalled, openWorkspaceInEditor, writeStackCodeWorkspace } fro
 import { readLastLines } from './utils/fs/tail.mjs';
 import { defaultStackReleaseIdentity } from './utils/mobile/identifiers.mjs';
 import { interactiveEdit, interactiveNew } from './utils/stack/interactive_stack_config.mjs';
-import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
+import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { getDaemonEnv, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 
 function stackNameFromArg(positionals, idx) {
@@ -3262,19 +3263,27 @@ async function cmdStackOpen({ rootDir, stackName, json, includeStackDir, include
 }
 
 async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
+  const { flags } = parseArgs(argv);
+  const wantsHelpFlag = wantsHelp(argv, { flags });
+
   const positionals = argv.filter((a) => a && a !== '--' && !a.startsWith('--'));
   const action = (positionals[0] ?? 'status').toString().trim();
 
-  if (!action || action === 'help' || action === '--help' || action === '-h') {
+  if (wantsHelpFlag || !action || action === 'help') {
     printResult({
       json,
       data: { ok: true, stackName, commands: ['start', 'stop', 'restart', 'status'] },
       text: [
-        '[stack] usage:',
-        '  happys stack daemon <name> start|stop|restart|status [--json]',
+        banner('stack daemon', { subtitle: `Manage the happy-cli daemon for stack ${cyan(stackName || 'main')}.` }),
         '',
-        'example:',
-        `  happys stack daemon ${stackName} restart`,
+        sectionTitle('usage:'),
+        `  ${cyan('happys stack daemon')} <name> status [--json]`,
+        `  ${cyan('happys stack daemon')} <name> start [--json]`,
+        `  ${cyan('happys stack daemon')} <name> stop [--json]`,
+        `  ${cyan('happys stack daemon')} <name> restart [--json]`,
+        '',
+        sectionTitle('example:'),
+        `  ${cmdFmt(`happys stack daemon ${stackName || 'main'} restart`)}`,
       ].join('\n'),
     });
     return;
@@ -3301,10 +3310,13 @@ async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
         (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim() ||
         getComponentDir(rootDir, 'happy-cli');
       const cliBin = join(cliDir, 'bin', 'happy.mjs');
-      const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? join(resolveStackEnvPath(stackName).baseDir, 'cli')).toString();
+      const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ??
+        env.HAPPY_LOCAL_CLI_HOME_DIR ??
+        join(resolveStackEnvPath(stackName).baseDir, 'cli')).toString();
       const serverPort = resolveServerPortFromEnv({ env, defaultPort: 3005 });
-      const internalServerUrl = `http://127.0.0.1:${serverPort}`;
-      const { publicServerUrl } = getPublicServerUrlEnvOverride({ env, serverPort, stackName });
+      const urls = await resolveServerUrls({ env, serverPort, allowEnable: false });
+      const internalServerUrl = urls.internalServerUrl;
+      const publicServerUrl = urls.publicServerUrl;
       const daemonEnv = getDaemonEnv({ baseEnv: env, cliHomeDir, internalServerUrl, publicServerUrl });
 
       if (action === 'start' || action === 'restart') {
@@ -3338,11 +3350,13 @@ async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
   }
 
   if (res?.status) {
-    console.log(`[stack] daemon: ${res.status}`);
+    console.log('');
+    console.log(sectionTitle('Daemon'));
+    console.log(res.status);
     return;
   }
 
-  console.log('[stack] daemon command completed');
+  console.log(`${green('✓')} daemon command completed`);
 }
 
 async function main() {
@@ -3361,6 +3375,13 @@ async function main() {
   // Allow subcommand-specific help (so `happys stack pr --help` shows PR stack flags).
   if (wantsHelpFlag && cmd === 'pr') {
     await cmdPrStack({ rootDir, argv });
+    return;
+  }
+  // Allow subcommand-specific help (so `happys stack daemon <name> --help` works).
+  if (wantsHelpFlag && cmd === 'daemon') {
+    const stackName = stackNameFromArg(positionals, 1) || 'main';
+    const passthrough = argv.slice(2);
+    await cmdStackDaemon({ rootDir, stackName, argv: passthrough, json });
     return;
   }
   if (wantsHelpFlag || cmd === 'help') {
@@ -3552,6 +3573,14 @@ async function main() {
                 '  happys stack env <name> list',
                 '  happys stack env <name> path',
               ]
+            : cmd === 'daemon'
+              ? [
+                  '[stack] usage:',
+                  '  happys stack daemon <name> start|stop|restart|status [--json]',
+                  '',
+                  'example:',
+                  '  happys stack daemon main status',
+                ]
             : cmd.startsWith('tailscale:')
               ? [
                   '[stack] usage:',
