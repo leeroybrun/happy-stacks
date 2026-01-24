@@ -288,7 +288,11 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
     }
 
     // Guided wizard: creates stack, starts temporary UI/server, stores dev key (optional), logs in CLI.
-    await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth', '--login'] });
+    await runNodeScript({
+      rootDir,
+      rel: 'scripts/stack.mjs',
+      args: ['create-dev-auth-seed', 'dev-auth', '--login', '--skip-default-seed'],
+    });
   } else {
     // eslint-disable-next-line no-console
     console.log(dim(`Found an existing ${cyan('dev-auth')} seed stack; configuring auth reuse for new stacks.`));
@@ -305,6 +309,22 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
       { key: 'HAPPY_LOCAL_AUTH_LINK', value: linkChoice === 'link' ? '1' : '0' },
     ],
   });
+
+  {
+    const envLocalPath = join(getCanonicalHomeDir(), 'env.local');
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Automatic sign-in for new stacks'));
+    // eslint-disable-next-line no-console
+    console.log(dim(`Enabled: when you create a new stack, Happy Stacks will reuse auth from ${cyan(seedChoice)} automatically.`));
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Seed from:')} ${cyan(seedChoice)}`);
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Mode:')} ${linkChoice === 'link' ? 'symlink' : 'copy'} ${dim(linkChoice === 'link' ? '(recommended)' : '')}`.trim());
+    // eslint-disable-next-line no-console
+    console.log(dim(`Config: ${envLocalPath}`));
+  }
 
   // Optional: seed existing stacks now (useful if the user already has stacks).
   const allStacks = await listAllStackNames().catch(() => ['main']);
@@ -517,7 +537,7 @@ async function cmdSetup({ rootDir, argv }) {
             `- ${cyan('init')}: set up Happy Stacks home + shims`,
             `- ${cyan('bootstrap')}: clone/install components + dev tooling`,
             `- ${cyan('auth')}: (recommended) set up a ${cyan('dev-auth')} seed stack (login once, reuse everywhere)`,
-            `- ${cyan('stacks')}: (recommended) create an isolated dev stack (keep main stable)`,
+            `- ${cyan('stacks')}: (recommended) next you’ll create an isolated dev stack for day-to-day work (keeps main stable)`,
             `- ${cyan('mobile')}: (optional) install the iOS dev-client (for phone testing)`,
             '',
             dim(`Tip: for PR work, use ${cyan('worktrees')} (isolated branches) + ${cyan('stacks')} (isolated runtime state).`),
@@ -917,27 +937,6 @@ async function cmdSetup({ rootDir, argv }) {
       // Recommended: dev-auth seed stack setup (login once, reuse across stacks).
       await maybeConfigureAuthDefaults({ rootDir, profile, interactive });
 
-      // Recommended: create an isolated dev stack (keeps main stable).
-      const createStack = await withRl(async (rl) => {
-        return await promptSelect(rl, {
-          title: `${bold('Stacks')}\n${dim('Recommended: keep main stable by doing dev work in a dedicated stack.')}`,
-          options: [
-            { label: `yes (${green('recommended')}) — create a new development stack`, value: true },
-            { label: `no — I will use ${cyan('main')} for now`, value: false },
-          ],
-          defaultIndex: 0,
-        });
-      });
-      if (createStack) {
-        await runNodeScriptMaybeQuiet({
-          label: 'create dev stack',
-          rootDir,
-          rel: 'scripts/stack.mjs',
-          args: ['new', '--interactive'],
-          interactiveChild: true,
-        });
-      }
-
       // Optional: mobile dev-client install (macOS only).
       if (process.platform === 'darwin') {
         const installMobile = await withRl(async (rl) => {
@@ -1129,21 +1128,15 @@ async function cmdSetup({ rootDir, argv }) {
     // eslint-disable-next-line no-console
     console.log(dim('Next steps (development):'));
     // eslint-disable-next-line no-console
-    console.log(`  ${yellow('happys dev')}          ${dim('# run the dev stack (server + daemon + Expo web)')}`);
+    console.log(`  ${yellow('happys stack new dev --interactive')} ${dim('# create a dedicated dev stack (recommended)')}`);
+    // eslint-disable-next-line no-console
+    console.log(`  ${yellow('happys stack dev dev')}              ${dim('# run that stack (server + daemon + Expo web)')}`);
     // eslint-disable-next-line no-console
     console.log(`  ${yellow('happys wt new ...')}   ${dim('# create a worktree for a branch/PR')}`);
     // eslint-disable-next-line no-console
     console.log(`  ${yellow('happys stack new ...')} ${dim('# create an isolated runtime stack')}`);
     // eslint-disable-next-line no-console
     console.log(`  ${yellow('happys stack dev <name>')} ${dim('# run a specific stack')}`);
-    // eslint-disable-next-line no-console
-    console.log('');
-    // eslint-disable-next-line no-console
-    console.log(dim('Legacy note: if you still have split repos/branches (pre-monorepo), run:'));
-    // eslint-disable-next-line no-console
-    console.log(`  ${yellow('happys import')}        ${dim('# guided import + optional monorepo migration')}`);
-    // eslint-disable-next-line no-console
-    console.log(`  ${yellow('happys import llm --copy')} ${dim('# copy/paste an LLM prompt to drive the flow')}`);
   }
 }
 

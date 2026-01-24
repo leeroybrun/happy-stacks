@@ -2158,6 +2158,8 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
   const serverComponent = (kv.get('--server') ?? '').trim() || 'happy-server-light';
   const interactive = !flags.has('--non-interactive') && (flags.has('--interactive') || isTty());
   const bindMode = resolveBindModeFromArgs({ flags, kv });
+  const skipDefaultSeed =
+    flags.has('--skip-default-seed') || flags.has('--no-default-seed') || flags.has('--no-configure-default-seed');
   const forceLogin =
     flags.has('--login') ? true : flags.has('--no-login') || flags.has('--skip-login') ? false : null;
 
@@ -2285,6 +2287,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
 
             let serverProc = null;
             let uiProc = null;
+            let uiStopRequested = false;
             try {
               steps.start('start temporary server');
               const started = await startDevServer({
@@ -2333,6 +2336,8 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
 
               if (quietAuthFlow && uiProc) {
                 uiProc.once('exit', (code, sig) => {
+                  // We intentionally SIGINT Expo when we're done with login.
+                  if (uiStopRequested && (sig === 'SIGINT' || sig === 'SIGTERM')) return;
                   if (code === 0) return;
                   void (async () => {
                     const c = typeof code === 'number' ? code : null;
@@ -2405,6 +2410,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               if (uiProc) {
                 console.log('');
                 console.log(`[stack] stopping temporary UI (pid=${uiProc.pid})...`);
+                uiStopRequested = true;
                 killProcessTree(uiProc, 'SIGINT');
                 await Promise.race([
                   new Promise((resolve) => uiProc.on('exit', resolve)),
@@ -2430,26 +2436,33 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         console.log(`[stack] skipping guided login. You can do it later with: ${yellow(`happys stack auth ${name} login`)}`);
       }
 
-      const wantEnv = await promptSelect(rl, {
-        title: `${bold('Default auth seed')}\n${dim(`Recommended: set ${cyan(name)} as the default seed for new stacks (writes ${getHomeEnvLocalPath()}).`)}`,
-        options: [
-          { label: `yes (${green('recommended')}) — enable auto-seeding for new stacks`, value: true },
-          { label: `no — I will configure this later`, value: false },
-        ],
-        defaultIndex: 0,
-      });
-      if (wantEnv) {
+      if (!skipDefaultSeed) {
         const envLocalPath = getHomeEnvLocalPath();
-        await ensureEnvFileUpdated({
-          envPath: envLocalPath,
-          updates: [
-            { key: 'HAPPY_STACKS_AUTH_SEED_FROM', value: name },
-            { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '1' },
+        const wantEnv = await promptSelect(rl, {
+          title:
+            `${bold('Automatic sign-in for new stacks')}\n` +
+            `${dim(`Recommended: when you create a new stack, copy/symlink auth from ${cyan(name)} automatically.`)}\n` +
+            `${dim(`This writes ${cyan('HAPPY_STACKS_AUTO_AUTH_SEED=1')} + ${cyan(`HAPPY_STACKS_AUTH_SEED_FROM=${name}`)} in ${envLocalPath}.`)}`,
+          options: [
+            { label: `yes (${green('recommended')}) — enable automatic auth seeding`, value: true },
+            { label: `no — I will configure this later`, value: false },
           ],
+          defaultIndex: 0,
         });
-        console.log(`[stack] updated: ${envLocalPath}`);
-      } else {
-        console.log(`[stack] tip: set in ${getHomeEnvLocalPath()}: HAPPY_STACKS_AUTH_SEED_FROM=${name} and HAPPY_STACKS_AUTO_AUTH_SEED=1`);
+        if (wantEnv) {
+          await ensureEnvFileUpdated({
+            envPath: envLocalPath,
+            updates: [
+              { key: 'HAPPY_STACKS_AUTH_SEED_FROM', value: name },
+              { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '1' },
+            ],
+          });
+          console.log(`[stack] updated: ${envLocalPath}`);
+        } else {
+          console.log(
+            `[stack] tip: set in ${envLocalPath}: HAPPY_STACKS_AUTH_SEED_FROM=${name} and HAPPY_STACKS_AUTO_AUTH_SEED=1`
+          );
+        }
       }
 
       if (!savedDevKey) {
@@ -3536,7 +3549,7 @@ async function main() {
         '  happys stack duplicate <from> <to> [--duplicate-worktrees] [--deps=none|link|install|link-or-install] [--json]',
         '  happys stack info <name> [--json]',
         '  happys stack pr <name> --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
-        '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--login|--no-login] [--non-interactive] [--json]',
+        '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--login|--no-login] [--skip-default-seed] [--non-interactive] [--json]',
         '  happys stack daemon <name> start|stop|restart|status [--json]',
         '  happys stack happy <name> [-- ...]',
         '  happys stack env <name> set KEY=VALUE [KEY2=VALUE2...] | unset KEY [KEY2...] | get KEY | list | path [--json]',
