@@ -220,6 +220,7 @@ export async function ensureDevExpoServer({
   children,
   spawnOptions = {},
   expoTailscale = false,
+  quiet = false,
 } = {}) {
   const wantWeb = Boolean(startUi);
   const wantDevClient = Boolean(startMobile);
@@ -372,9 +373,11 @@ export async function ensureDevExpoServer({
     }
   }
 
-  // eslint-disable-next-line no-console
-  console.log(`[local] expo: starting Expo (${expoModeLabel({ wantWeb, wantDevClient })}, metro port=${metroPort}, host=${host})`);
-  const proc = await expoSpawn({ label: 'expo', dir: uiDir, args, env, options: spawnOptions });
+  if (!quiet) {
+    // eslint-disable-next-line no-console
+    console.log(`[local] expo: starting Expo (${expoModeLabel({ wantWeb, wantDevClient })}, metro port=${metroPort}, host=${host})`);
+  }
+  const proc = await expoSpawn({ label: 'expo', dir: uiDir, args, env, options: spawnOptions, quiet });
   children.push(proc);
 
   // Start Tailscale forwarder if enabled
@@ -386,7 +389,7 @@ export async function ensureDevExpoServer({
       stackName,
       children,
     });
-    if (!tailscaleResult.ok) {
+    if (!tailscaleResult.ok && !quiet) {
       // eslint-disable-next-line no-console
       console.warn(`[local] expo: Tailscale forwarder not started: ${tailscaleResult.error}`);
     }

@@ -284,6 +284,10 @@ export function getDefaultAutostartPaths(env = process.env) {
   const stdoutPath = hasPrimaryLogs ? primaryStdoutPath : hasLegacyLogs ? legacyStdoutPath : primaryStdoutPath;
   const stderrPath = hasPrimaryLogs ? primaryStderrPath : hasLegacyLogs ? legacyStderrPath : primaryStderrPath;
 
+  // Linux (systemd --user) uses the same label convention as LaunchAgents.
+  const systemdUnitName = `${activeLabel}.service`;
+  const systemdUnitPath = join(homedir(), '.config', 'systemd', 'user', systemdUnitName);
+
   return {
     baseDir,
     logsDir,
@@ -293,6 +297,8 @@ export function getDefaultAutostartPaths(env = process.env) {
     // Active (best-effort) for commands like status/logs/start/stop.
     label: activeLabel,
     plistPath: activePlistPath,
+    systemdUnitName,
+    systemdUnitPath,
     stdoutPath,
     stderrPath,
 

@@ -10,6 +10,8 @@ import { run, runCapture } from './utils/proc/proc.mjs';
 import { isHappyMonorepoRoot } from './utils/paths/paths.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { bold, cyan, dim, green, red, yellow } from './utils/ui/ansi.mjs';
+import { clipboardAvailable, copyTextToClipboard } from './utils/ui/clipboard.mjs';
+import { detectInstalledLlmTools } from './utils/llm/tools.mjs';
 
 function usage() {
   return [
@@ -18,6 +20,7 @@ function usage() {
     '  happys monorepo port guide [--target=/abs/path/to/monorepo] [--json]',
     '  happys monorepo port status [--target=/abs/path/to/monorepo] [--json]',
     '  happys monorepo port continue [--target=/abs/path/to/monorepo] [--json]',
+    '  happys monorepo port llm --target=/abs/path/to/monorepo [--copy] [--json]',
     '    [--from-happy=/abs/path/to/old-happy --from-happy-base=<ref> --from-happy-ref=<ref>]',
     '    [--from-happy-cli=/abs/path/to/old-happy-cli --from-happy-cli-base=<ref> --from-happy-cli-ref=<ref>]',
     '    [--from-happy-server=/abs/path/to/old-happy-server --from-happy-server-base=<ref> --from-happy-server-ref=<ref>]',
@@ -37,6 +40,11 @@ function usage() {
     '    git am --continue',
     '  or abort with:',
     '    git am --abort',
+    '',
+    'LLM tip:',
+    '- If you want an LLM to help resolve conflicts, run:',
+    '    happys monorepo port llm --target=/abs/path/to/monorepo --copy',
+    '  then paste the copied prompt into your LLM.',
   ].join('\n');
 }
 
@@ -1021,6 +1029,7 @@ async function cmdPortGuide({ kv, json }) {
             options: [
               { label: `${green('continue')} (git am --continue)`, value: 'continue' },
               { label: `${cyan('show status again')}`, value: 'status' },
+              { label: `${cyan('llm prompt')} ${dim('(copy/paste)')}`, value: 'llm' },
               { label: `${yellow('skip current patch')} (git am --skip)`, value: 'skip' },
               { label: `${red('abort')} (git am --abort)`, value: 'abort' },
               { label: `${dim('quit guide (leave state as-is)')}`, value: 'quit' },
@@ -1029,6 +1038,12 @@ async function cmdPortGuide({ kv, json }) {
           });
 
           if (action === 'status') {
+            continue;
+          }
+          if (action === 'llm') {
+            const llmFlags = new Set([...(attemptFlags ?? []), '--copy']);
+            // eslint-disable-next-line no-await-in-loop
+            await cmdPortLlm({ kv: attemptKv, flags: llmFlags, json: false });
             continue;
           }
           if (action === 'abort') {
@@ -1055,6 +1070,63 @@ async function cmdPortGuide({ kv, json }) {
     // eslint-disable-next-line no-console
     console.log(`${green('[monorepo]')} guide complete`);
   });
+}
+
+async function cmdPortLlm({ kv, flags, json }) {
+  const targetRepoRoot = await resolveTargetRepoRootFromArgs({ kv });
+  const promptText = [
+    'You are an assistant helping the user port split-repo commits into the slopus/happy monorepo.',
+    '',
+    `Target monorepo root: ${targetRepoRoot}`,
+    '',
+    'How to run the port:',
+    `- guided (recommended): happys monorepo port guide --target=${targetRepoRoot}`,
+    `- machine-readable report: happys monorepo port --target=${targetRepoRoot} --json`,
+    '',
+    'If a conflict happens (git am in progress):',
+    `- inspect state (JSON): happys monorepo port status --target=${targetRepoRoot} --json`,
+    `- inspect state (text): happys monorepo port status --target=${targetRepoRoot}`,
+    `- after fixing files:       git -C ${targetRepoRoot} am --continue`,
+    `- or via wrapper:           happys monorepo port continue --target=${targetRepoRoot}`,
+    `- to skip current patch:    git -C ${targetRepoRoot} am --skip`,
+    `- to abort:                git -C ${targetRepoRoot} am --abort`,
+    '',
+    'Instructions:',
+    '- Prefer minimal conflict resolutions that preserve intent.',
+    '- Keep changes scoped to expo-app/, cli/, server/.',
+    '- After each continue, re-check status until port completes.',
+  ].join('\n');
+  const tools = await detectInstalledLlmTools();
+
+  if (json) {
+    printResult({ json, data: { targetRepoRoot, prompt: promptText, detectedTools: tools.map((t) => t.id) } });
+    return;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(bold('[monorepo] LLM prompt (copy/paste):'));
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(promptText);
+  if (tools.length) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(dim(`[monorepo] detected LLM CLIs: ${tools.map((t) => t.id).join(', ')}`));
+  }
+
+  const wantsCopy = flags?.has?.('--copy') || process.argv.includes('--copy');
+  if (wantsCopy && (await clipboardAvailable())) {
+    const res = await copyTextToClipboard(promptText);
+    // eslint-disable-next-line no-console
+    console.log(res.ok ? green('✓ Copied to clipboard') : dim(`(Clipboard copy failed: ${res.reason || 'unknown'})`));
+  } else if (wantsCopy) {
+    // eslint-disable-next-line no-console
+    console.log(dim('(Clipboard copy unavailable on this system)'));
+  }
 }
 
 async function main() {
@@ -1084,6 +1156,10 @@ async function main() {
   }
   if (sub === 'guide') {
     await cmdPortGuide({ kv, json });
+    return;
+  }
+  if (sub === 'llm') {
+    await cmdPortLlm({ kv, flags, json });
     return;
   }
 

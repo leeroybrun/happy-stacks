@@ -704,15 +704,29 @@ async function cmdSetup({ rootDir, argv }) {
 
       if (supportsAutostart) {
         const a = getDefaultAutostartPaths();
-        const autostartAlreadyInstalled = Boolean(existsSync(a.primaryPlistPath) || existsSync(a.legacyPlistPath));
+        const autostartAlreadyInstalled =
+          process.platform === 'darwin'
+            ? Boolean(existsSync(a.primaryPlistPath) || existsSync(a.legacyPlistPath))
+            : process.platform === 'linux'
+              ? Boolean(existsSync(a.systemdUnitPath))
+              : false;
         if (!autostartExplicit && autostartAlreadyInstalled) {
           autostartWanted = false;
           // eslint-disable-next-line no-console
           console.log(`${green('✓')} Autostart: already installed ${dim('(leaving as-is)')}`);
         } else {
           autostartWanted = await withRl(async (rl) => {
+            const detail =
+              process.platform === 'darwin'
+                ? 'macOS: launchd LaunchAgent'
+                : process.platform === 'linux'
+                  ? 'Linux: systemd --user service'
+                  : '';
             const v = await promptSelect(rl, {
-              title: `${bold('Autostart')}\n${dim('Optional: start Happy automatically at login (launchd/systemd user service).')}`,
+              title:
+                `${bold('Autostart')}\n` +
+                `${dim('Optional: start Happy automatically at login.')}` +
+                (detail ? `\n${dim(detail)}` : ''),
               options: [
                 { label: 'no (default)', value: false },
                 { label: 'yes', value: true },
@@ -1140,6 +1154,14 @@ async function cmdSetup({ rootDir, argv }) {
     console.log(`  ${yellow('happys stack new ...')} ${dim('# create an isolated runtime stack')}`);
     // eslint-disable-next-line no-console
     console.log(`  ${yellow('happys stack dev <name>')} ${dim('# run a specific stack')}`);
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(dim('Legacy note: if you still have split repos/branches (pre-monorepo), run:'));
+    // eslint-disable-next-line no-console
+    console.log(`  ${yellow('happys import')}        ${dim('# guided import + optional monorepo migration')}`);
+    // eslint-disable-next-line no-console
+    console.log(`  ${yellow('happys import llm --copy')} ${dim('# copy/paste an LLM prompt to drive the flow')}`);
   }
 }
 

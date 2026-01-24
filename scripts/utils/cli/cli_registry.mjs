@@ -154,6 +154,13 @@ export function getHappysRegistry() {
       description: 'Port split-repo commits into monorepo (experimental)',
     },
     {
+      name: 'import',
+      kind: 'node',
+      scriptRelPath: 'scripts/import.mjs',
+      rootUsage: 'happys import [--json]',
+      description: 'Guided: import legacy split repos (and migrate to monorepo)',
+    },
+    {
       name: 'mobile',
       kind: 'node',
       scriptRelPath: 'scripts/mobile.mjs',

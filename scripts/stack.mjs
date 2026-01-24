@@ -73,6 +73,8 @@ import { defaultStackReleaseIdentity } from './utils/mobile/identifiers.mjs';
 import { interactiveEdit, interactiveNew } from './utils/stack/interactive_stack_config.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { getDaemonEnv, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
+import { createStepPrinter } from './utils/cli/progress.mjs';
+import { getVerbosityLevel } from './utils/cli/verbosity.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -2182,6 +2184,10 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         console.log('');
         console.log(`[stack] starting ${serverComponent} temporarily so we can log in...`);
 
+        const verbosity = getVerbosityLevel(process.env);
+        const quietAuthFlow = verbosity === 0;
+        const steps = createStepPrinter({ enabled: quietAuthFlow });
+
         const serverPort = await pickNextFreeTcpPort(3005, { host: '127.0.0.1' });
         const internalServerUrl = `http://127.0.0.1:${serverPort}`;
         const publicServerUrl = await preferStackLocalhostUrl(`http://localhost:${serverPort}`, { stackName: name });
@@ -2220,6 +2226,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
             let serverProc = null;
             let uiProc = null;
             try {
+              steps.start('start temporary server');
               const started = await startDevServer({
                 serverComponentName: serverComponent,
                 serverDir: resolvedServerDir,
@@ -2234,11 +2241,14 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 serverAlreadyRunning: false,
                 restart: true,
                 children,
-                spawnOptions: { stdio: 'ignore' },
+                spawnOptions: quietAuthFlow ? { stdio: 'ignore' } : {},
+                quiet: quietAuthFlow,
               });
               serverProc = started.serverProc;
+              steps.stop('✓', 'start temporary server');
 
               // Start Expo (web) so /terminal/connect exists for happy-cli web auth.
+              steps.start('start temporary UI');
               const uiRes = await ensureDevExpoServer({
                 startUi: true,
                 startMobile: false,
@@ -2253,11 +2263,13 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 stackName: name,
                 envPath: env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '',
                 children,
-                spawnOptions: { stdio: 'ignore' },
+                spawnOptions: quietAuthFlow ? { stdio: 'ignore' } : {},
+                quiet: quietAuthFlow,
               });
               if (uiRes?.skipped === false && uiRes.proc) {
                 uiProc = uiRes.proc;
               }
+              steps.stop('✓', 'start temporary UI');
 
               console.log('');
               const uiPort = uiRes?.port;
@@ -2275,6 +2287,11 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 console.log(`- click: "Create Account"`);
                 console.log(`- then open: ${uiSettings}`);
                 console.log(`- tap: "Secret Key" to reveal + copy it`);
+                console.log('');
+                console.log(`${bold('Press Enter')} to open it in your browser.`);
+                await prompt(rl, '', { defaultValue: '' });
+                await openUrlInBrowser(uiRoot).catch(() => {});
+                console.log(`${green('✓')} Browser opened`);
               } else {
                 console.log(`- UI is running but the port was not detected; rerun with DEBUG logs if needed`);
               }

@@ -44,9 +44,10 @@ export async function expoSpawn({
   args,
   env,
   ensureDepsLabel = 'happy',
+  quiet = false,
   options,
 }) {
-  await ensureDepsInstalled(dir, ensureDepsLabel);
-  return await pmSpawnBin({ label, dir, bin: 'expo', args, env, options });
+  await ensureDepsInstalled(dir, ensureDepsLabel, { quiet });
+  return await pmSpawnBin({ label, dir, bin: 'expo', args, env, options, quiet });
 }
 

@@ -190,11 +190,14 @@ async function ensureUpstreamRemote({ repoDir, upstreamUrl }) {
     return;
   }
   try {
-    await run('git', ['remote', 'get-url', 'upstream'], { cwd: repoDir });
+    // Use capture here to avoid printing scary errors like:
+    //   "error: No such remote 'upstream'"
+    // when we're just probing for existence.
+    await runCapture('git', ['remote', 'get-url', 'upstream'], { cwd: repoDir });
     // Upstream remote exists; best-effort update if different.
-    await run('git', ['remote', 'set-url', 'upstream', upstreamUrl], { cwd: repoDir }).catch(() => {});
+    await runCapture('git', ['remote', 'set-url', 'upstream', upstreamUrl], { cwd: repoDir }).catch(() => {});
   } catch {
-    await run('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: repoDir });
+    await runCapture('git', ['remote', 'add', 'upstream', upstreamUrl], { cwd: repoDir });
   }
 }
 

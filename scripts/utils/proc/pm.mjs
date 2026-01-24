@@ -77,7 +77,9 @@ async function ensureYarnReady({ dir, env, quiet = false }) {
   // If stdin isn't a TTY (e.g. `happys tui ...` uses stdio:ignore for child stdin),
   // Corepack prompts can deadlock. Provide a single "yes" to unblock initial downloads.
   const isTui = (e.HAPPY_STACKS_TUI ?? e.HAPPY_LOCAL_TUI ?? '').toString().trim() === '1';
-  const autoYes = isTui || !process.stdin.isTTY;
+  // Also auto-yes in quiet mode so guided flows don't get stuck on:
+  //   "Corepack is about to download ... Do you want to continue? [Y/n]"
+  const autoYes = isTui || !process.stdin.isTTY || quiet;
   const stdio = quiet ? 'ignore' : 'inherit';
   await run('yarn', ['--version'], { cwd: dir, env: e, stdio, ...(autoYes ? { input: 'y\n' } : {}) });
   _yarnReadyKeys.add(key);
@@ -438,11 +440,12 @@ export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = 
   const componentArgs = usesObjectStyle ? (dir.args ?? []) : (args ?? []);
   const componentEnv = usesObjectStyle ? (dir.env ?? process.env) : (env ?? process.env);
   const options = usesObjectStyle ? (dir.options ?? {}) : {};
+  const quiet = usesObjectStyle ? Boolean(dir.quiet) : false;
 
   const effectiveEnv = await applyStackCacheEnv(componentEnv);
   const pm = await getComponentPm(componentDir, effectiveEnv);
   if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet: false });
+    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet });
   }
   if (pm.name === 'yarn') {
     return spawnProc(componentLabel, pm.cmd, ['run', componentBin, ...componentArgs], effectiveEnv, { cwd: componentDir, ...options });
@@ -458,11 +461,12 @@ export async function pmSpawnScript(dir, label, script, args, { env = process.en
   const componentArgs = usesObjectStyle ? (dir.args ?? []) : (args ?? []);
   const componentEnv = usesObjectStyle ? (dir.env ?? process.env) : (env ?? process.env);
   const options = usesObjectStyle ? (dir.options ?? {}) : {};
+  const quiet = usesObjectStyle ? Boolean(dir.quiet) : false;
 
   const effectiveEnv = await applyStackCacheEnv(componentEnv);
   const pm = await getComponentPm(componentDir, effectiveEnv);
   if (pm.name === 'yarn') {
-    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet: false });
+    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet });
   }
   if (pm.name === 'yarn') {
     return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], effectiveEnv, { cwd: componentDir, ...options });

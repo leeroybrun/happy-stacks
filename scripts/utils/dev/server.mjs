@@ -44,6 +44,8 @@ export async function startDevServer({
   serverAlreadyRunning,
   restart,
   children,
+  spawnOptions = {},
+  quiet = false,
 }) {
   const serverEnv = {
     ...baseEnv,
@@ -85,7 +87,7 @@ export async function startDevServer({
   }
 
   // Ensure server deps exist before any Prisma/docker work.
-  await ensureDepsInstalled(serverDir, serverComponentName);
+  await ensureDepsInstalled(serverDir, serverComponentName, { quiet, env: serverEnv });
 
   const prismaPush = (baseEnv.HAPPY_STACKS_PRISMA_PUSH ?? baseEnv.HAPPY_LOCAL_PRISMA_PUSH ?? '1').toString().trim() !== '0';
   const serverScript = resolveServerDevScript({ serverComponentName, serverDir, prismaPush });
@@ -113,7 +115,14 @@ export async function startDevServer({
     return { serverEnv, serverScript, serverProc: null };
   }
 
-  const server = await pmSpawnScript({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
+  const server = await pmSpawnScript({
+    label: 'server',
+    dir: serverDir,
+    script: serverScript,
+    env: serverEnv,
+    options: spawnOptions,
+    quiet,
+  });
   children.push(server);
   if (stackMode && runtimeStatePath) {
     await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: server.pid } }).catch(() => {});
