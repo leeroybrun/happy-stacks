@@ -87,6 +87,14 @@ For stack-specific worktree selection (which components a stack uses), use:
 - `happys stack edit <name> --interactive`
   - or `happys stack wt <name> -- use --interactive`
 
+### Monorepo note (worktree switching)
+
+In **monorepo stacks**, `happy`, `happy-cli`, and `happy-server` typically point into the same git repo.
+To avoid version skew, the menu does **not** offer per-component “use this worktree” actions for these components.
+Use the stack-level selector instead (it will switch the monorepo checkout and derive the rest):
+
+- `happys stack wt <name> -- use happy --interactive`
+
 ## Implementation notes
 
 - **Entry script**: `extras/swiftbar/happy-stacks.5s.sh` (installed into SwiftBar as `happy-stacks.<interval>.sh`)

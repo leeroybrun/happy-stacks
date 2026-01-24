@@ -453,6 +453,14 @@ render_component_repo() {
   local repo_root=""
   local rel_dir=""
   repo_root="$(swiftbar_find_git_root_upwards "$active_dir" 2>/dev/null || true)"
+  local repo_key=""
+  repo_key="$(swiftbar_repo_key_from_path "$active_dir" 2>/dev/null || true)"
+  [[ -n "$repo_key" ]] || repo_key="$component"
+  local mono_repo="0"
+  if [[ -n "$shared_repo_root" && -n "$repo_root" && "$shared_repo_root" == "$repo_root" ]]; then
+    mono_repo="1"
+  fi
+
   if [[ -n "$repo_root" && "$repo_root" != "$active_dir" && "$active_dir" == "$repo_root/"* ]]; then
     rel_dir="${active_dir#"$repo_root"/}"
     if [[ -n "$shared_repo_root" && "$shared_repo_root" == "$repo_root" ]]; then
@@ -584,9 +592,19 @@ render_component_repo() {
 
     print_sep "$p2"
     if [[ "$context" == "stack" && -n "$stack_name" ]]; then
-      print_item "$p2" "Switch stack worktree (interactive) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$component param7=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      if [[ "$mono_repo" == "1" && "$component" != "happy-server-light" ]]; then
+        # Monorepo stacks: avoid per-component worktree switching (it can create version skew/confusion).
+        # Prefer selecting a single monorepo worktree (repoKey) and letting happys derive the rest.
+        print_item "$p2" "Select monorepo worktree (interactive) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$repo_key param7=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      else
+        print_item "$p2" "Switch stack worktree (interactive) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$component param7=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+      fi
       print_item "$p2" "New worktree (interactive) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=new param6=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-      print_item "$p2" "List worktrees (terminal) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=list param6=$component dir=$HAPPY_LOCAL_DIR terminal=false"
+      if [[ "$mono_repo" == "1" && "$component" != "happy-server-light" ]]; then
+        print_item "$p2" "List worktrees (terminal) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=list param6=$repo_key dir=$HAPPY_LOCAL_DIR terminal=false"
+      else
+        print_item "$p2" "List worktrees (terminal) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=list param6=$component dir=$HAPPY_LOCAL_DIR terminal=false"
+      fi
     else
       print_item "$p2" "Use worktree (interactive) | bash=$PNPM_TERM param1=wt param2=use param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
       print_item "$p2" "New worktree (interactive) | bash=$PNPM_TERM param1=wt param2=new param3=--interactive dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
@@ -605,9 +623,13 @@ render_component_repo() {
 
     print_sep "$p2"
     if [[ "$context" == "stack" && -n "$stack_name" ]]; then
-      print_item "$p2" "Shell (active, new window) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=shell param6=$component param7=active param8=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
-      print_item "$p2" "Open in VS Code (active) | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=code param6=$component param7=active dir=$HAPPY_LOCAL_DIR terminal=false"
-      print_item "$p2" "Open in Cursor (active) | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=cursor param6=$component param7=active dir=$HAPPY_LOCAL_DIR terminal=false"
+      local open_component="$component"
+      if [[ "$mono_repo" == "1" && "$component" != "happy-server-light" ]]; then
+        open_component="$repo_key"
+      fi
+      print_item "$p2" "Shell (active, new window) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=shell param6=$open_component param7=active param8=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
+      print_item "$p2" "Open in VS Code (active) | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=code param6=$open_component param7=active dir=$HAPPY_LOCAL_DIR terminal=false"
+      print_item "$p2" "Open in Cursor (active) | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=cursor param6=$open_component param7=active dir=$HAPPY_LOCAL_DIR terminal=false"
     else
       print_item "$p2" "Shell (active, new window) | bash=$PNPM_TERM param1=wt param2=shell param3=$component param4=active param5=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
       print_item "$p2" "Open in VS Code (active) | bash=$PNPM_BIN param1=wt param2=code param3=$component param4=active dir=$HAPPY_LOCAL_DIR terminal=false"
@@ -677,10 +699,16 @@ render_component_repo() {
         # Some git worktrees can exist outside our managed tree; for those we only offer open/shell actions.
         if [[ -n "$spec" ]]; then
           if [[ "$context" == "stack" && -n "$stack_name" ]]; then
-            print_item "${p3}--" "Use in stack | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
-            print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=shell param6=$component param7=$spec param8=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
-            print_item "${p3}--" "Open in VS Code | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=code param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
-            print_item "${p3}--" "Open in Cursor | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=cursor param6=$component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+            local wt_component="$component"
+            if [[ "$mono_repo" == "1" && "$component" != "happy-server-light" ]]; then
+              wt_component="$repo_key"
+            fi
+            if [[ "$mono_repo" != "1" || "$component" == "happy-server-light" ]]; then
+              print_item "${p3}--" "Use in stack | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=use param6=$wt_component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+            fi
+            print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=stack param2=wt param3=$stack_name param4=-- param5=shell param6=$wt_component param7=$spec param8=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
+            print_item "${p3}--" "Open in VS Code | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=code param6=$wt_component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
+            print_item "${p3}--" "Open in Cursor | bash=$PNPM_BIN param1=stack param2=wt param3=$stack_name param4=-- param5=cursor param6=$wt_component param7=$spec dir=$HAPPY_LOCAL_DIR terminal=false"
           else
             print_item "${p3}--" "Use (main) | bash=$PNPM_BIN param1=wt param2=use param3=$component param4=$spec dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
             print_item "${p3}--" "Shell (new window) | bash=$PNPM_TERM param1=wt param2=shell param3=$component param4=$spec param5=--new-window dir=$HAPPY_LOCAL_DIR terminal=false"
