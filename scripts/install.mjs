@@ -2,6 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
+import { commandExists } from './utils/proc/commands.mjs';
 import { getComponentDir, getComponentRepoDir, getRootDir, isHappyMonorepoRoot } from './utils/paths/paths.mjs';
 import { getServerComponentName } from './utils/server/server.mjs';
 import { ensureCliBuilt, ensureDepsInstalled, ensureHappyCliLocalNpmLinked } from './utils/proc/pm.mjs';
@@ -13,6 +14,8 @@ import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
+import { getVerbosityLevel } from './utils/cli/verbosity.mjs';
+import { createStepPrinter } from './utils/cli/progress.mjs';
 
 /**
  * Install/setup the local stack:
@@ -167,7 +170,7 @@ async function ensureGitBranchCheckedOut({ repoDir, branch, label }) {
   }
 }
 
-async function ensureComponentPresent({ dir, label, repoUrl, allowClone }) {
+async function ensureComponentPresent({ dir, label, repoUrl, allowClone, quiet = false, runMaybeVerbose = null }) {
   if (await pathExists(dir)) {
     return;
   }
@@ -181,8 +184,20 @@ async function ensureComponentPresent({ dir, label, repoUrl, allowClone }) {
     );
   }
   await mkdir(dirname(dir), { recursive: true });
-  console.log(`[local] cloning ${label} into ${dir}...`);
-  await run('git', ['clone', repoUrl, dir]);
+  if (!quiet) {
+    // eslint-disable-next-line no-console
+    console.log(`[local] cloning ${label} into ${dir}...`);
+    await run('git', ['clone', repoUrl, dir]);
+    return;
+  }
+
+  // Quiet-by-default: avoid spamming the terminal with git output.
+  // If it fails, we re-run with full logs so the user can see the root cause.
+  if (runMaybeVerbose) {
+    await runMaybeVerbose({ label: `clone ${label.toLowerCase()}`, cmd: 'git', args: ['clone', repoUrl, dir], cwd: dirname(dir) });
+    return;
+  }
+  await run('git', ['clone', repoUrl, dir], { stdio: 'ignore' });
 }
 
 async function ensureUpstreamRemote({ repoDir, upstreamUrl }) {
@@ -251,43 +266,37 @@ async function interactiveWizard({ rootDir, defaults }) {
       defaultIndex: defaults.serverComponentName === 'both' ? 2 : defaults.serverComponentName === 'happy-server' ? 1 : 0,
     });
 
-    const allowClone = await promptSelect(rl, {
-      title: `${bold('Cloning')}\n${dim('If repos are missing under components/, should we clone them automatically?')}`,
-      options: [
-        { label: 'yes (default)', value: true },
-        { label: 'no', value: false },
-      ],
-      defaultIndex: defaults.allowClone ? 0 : 1,
-    });
+    // Setup/bootstrap is expected to be able to bring up a working workspace from scratch,
+    // so cloning missing repos is the default (and normally required for first-time users).
+    const allowClone = defaults.allowClone;
 
-    const enableAutostart = await promptSelect(rl, {
-      title: isSandboxed()
-        ? `${bold('Autostart (macOS)')}\n${dim('Sandbox mode: this is global OS state; normally disabled in sandbox.')}`
-        : `${bold('Autostart (macOS)')}\n${dim('Install a LaunchAgent so Happy starts at login?')}`,
-      options: [
-        { label: 'no (default)', value: false },
-        { label: 'yes', value: true },
-      ],
-      defaultIndex: defaults.enableAutostart ? 1 : 0,
-    });
+    const supportsAutostart = process.platform === 'darwin' || process.platform === 'linux';
+    const enableAutostart = supportsAutostart
+      ? await promptSelect(rl, {
+          title: isSandboxed()
+            ? `${bold('Autostart')}\n${dim('Sandbox mode: this is global OS state; normally disabled in sandbox.')}`
+            : `${bold('Autostart')}\n${dim('Start Happy automatically at login?')}\n${dim(
+                process.platform === 'darwin' ? 'macOS: launchd LaunchAgent' : 'Linux: systemd --user service'
+              )}`,
+          options: [
+            { label: 'yes', value: true },
+            { label: 'no (default)', value: false },
+          ],
+          defaultIndex: defaults.enableAutostart ? 0 : 1,
+        })
+      : false;
 
     const buildTauri = await promptSelect(rl, {
       title: `${bold('Desktop app (optional)')}\n${dim('Build the Tauri desktop app as part of setup? (slow; requires extra toolchain)')}`,
       options: [
-        { label: 'no (default)', value: false },
         { label: `yes ${dim('(slow)')} — build desktop app`, value: true },
+        { label: 'no (default)', value: false },
       ],
-      defaultIndex: defaults.buildTauri ? 1 : 0,
+      defaultIndex: defaults.buildTauri ? 0 : 1,
     });
 
-    const configureGit = await promptSelect(rl, {
-      title: `${bold('Git remotes')}\n${dim('Configure upstream remotes and create/update mirror branches (e.g. slopus/main)?')}`,
-      options: [
-        { label: `yes (default) — enables ${cyan('happys wt sync-all')} and mirror branches`, value: true },
-        { label: 'no', value: false },
-      ],
-      defaultIndex: 0,
-    });
+    // Keep bootstrap "just works" by default: ensure upstream remotes and mirror branches are configured.
+    const configureGit = true;
 
     return {
       repoSource,
@@ -339,6 +348,63 @@ async function main() {
   const interactive = flags.has('--interactive') && isTty();
   const allowGlobal = sandboxAllowsGlobalSideEffects();
   const sandboxed = isSandboxed();
+  const verbosity = getVerbosityLevel(process.env);
+  const quietUi = interactive && !json && verbosity === 0;
+  const steps = createStepPrinter({ enabled: quietUi });
+
+  async function runMaybeVerbose({ label, cmd, args, cwd }) {
+    if (!quietUi) {
+      await run(cmd, args, { cwd });
+      return;
+    }
+    steps.start(label);
+    try {
+      await run(cmd, args, { cwd, stdio: 'ignore' });
+      steps.stop('✓', label);
+    } catch (e) {
+      steps.stop('x', label);
+      // eslint-disable-next-line no-console
+      console.error(`[bootstrap] ${label} failed. Re-running with full logs...`);
+      await run(cmd, args, { cwd, stdio: 'inherit' });
+      throw e;
+    }
+  }
+
+  async function ensureDepsInstalledMaybeVerbose(dir, label) {
+    if (!quietUi) {
+      await ensureDepsInstalled(dir, label, { quiet: false, env: process.env });
+      return;
+    }
+    steps.start(`install deps: ${label}`);
+    try {
+      await ensureDepsInstalled(dir, label, { quiet: true, env: process.env });
+      steps.stop('✓', `install deps: ${label}`);
+    } catch (e) {
+      steps.stop('x', `install deps: ${label}`);
+      // eslint-disable-next-line no-console
+      console.error(`[bootstrap] dependency install failed for ${label}. Re-running with full logs...`);
+      await ensureDepsInstalled(dir, label, { quiet: false, env: process.env });
+      throw e;
+    }
+  }
+
+  async function ensureCliBuiltMaybeVerbose(cliDir, { buildCli }) {
+    if (!quietUi) {
+      await ensureCliBuilt(cliDir, { buildCli, quiet: false, env: process.env });
+      return;
+    }
+    steps.start('build happy-cli');
+    try {
+      await ensureCliBuilt(cliDir, { buildCli, quiet: true, env: process.env });
+      steps.stop('✓', 'build happy-cli');
+    } catch (e) {
+      steps.stop('x', 'build happy-cli');
+      // eslint-disable-next-line no-console
+      console.error('[bootstrap] happy-cli build failed. Re-running with full logs...');
+      await ensureCliBuilt(cliDir, { buildCli: true, quiet: false, env: process.env });
+      throw e;
+    }
+  }
 
   // Defaults for wizard.
   const defaultRepoSource = resolveRepoSource({ flags });
@@ -403,6 +469,8 @@ async function main() {
     label: 'UI',
     repoUrl: repos.ui,
     allowClone,
+    quiet: quietUi,
+    runMaybeVerbose,
   });
 
   // Package dirs (where we run installs/builds). Recompute after cloning UI.
@@ -423,6 +491,8 @@ async function main() {
       label: 'SERVER',
       repoUrl: repos.serverLight,
       allowClone,
+      quiet: quietUi,
+      runMaybeVerbose,
     });
   }
   if (!hasMonorepo) {
@@ -432,6 +502,8 @@ async function main() {
         label: 'SERVER_FULL',
         repoUrl: repos.serverFull,
         allowClone,
+        quiet: quietUi,
+        runMaybeVerbose,
       });
     }
     await ensureComponentPresent({
@@ -439,6 +511,8 @@ async function main() {
       label: 'CLI',
       repoUrl: repos.cli,
       allowClone,
+      quiet: quietUi,
+      runMaybeVerbose,
     });
   } else {
     if ((serverComponentName === 'both' || serverComponentName === 'happy-server') && !(await pathExists(serverFullDir))) {
@@ -467,16 +541,16 @@ async function main() {
   const skipUiDeps = flags.has('--no-ui-deps') || (process.env.HAPPY_STACKS_INSTALL_NO_UI_DEPS ?? '').trim() === '1';
   const skipCliDeps = flags.has('--no-cli-deps') || (process.env.HAPPY_STACKS_INSTALL_NO_CLI_DEPS ?? '').trim() === '1';
   if (serverComponentName === 'both' || serverComponentName === 'happy-server-light') {
-    await ensureDepsInstalled(getComponentDir(rootDir, 'happy-server-light'), 'happy-server-light');
+    await ensureDepsInstalledMaybeVerbose(getComponentDir(rootDir, 'happy-server-light'), 'happy-server-light');
   }
   if (serverComponentName === 'both' || serverComponentName === 'happy-server') {
-    await ensureDepsInstalled(serverFullDir, 'happy-server');
+    await ensureDepsInstalledMaybeVerbose(serverFullDir, 'happy-server');
   }
   if (!skipUiDeps) {
-    await ensureDepsInstalled(uiDirFinal, 'happy');
+    await ensureDepsInstalledMaybeVerbose(uiDirFinal, 'happy');
   }
   if (!skipCliDeps) {
-    await ensureDepsInstalled(cliDirFinal, 'happy-cli');
+    await ensureDepsInstalledMaybeVerbose(cliDirFinal, 'happy-cli');
   }
 
   // CLI build + link
@@ -484,8 +558,8 @@ async function main() {
   if (!skipCliBuild) {
     const buildCli = (process.env.HAPPY_LOCAL_CLI_BUILD ?? '1') !== '0';
     const npmLinkCli = (process.env.HAPPY_LOCAL_NPM_LINK ?? '1') !== '0';
-    await ensureCliBuilt(cliDirFinal, { buildCli });
-    await ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli });
+    await ensureCliBuiltMaybeVerbose(cliDirFinal, { buildCli });
+    await ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli, quiet: quietUi });
   }
 
   // Build UI (so run works without expo dev server)
@@ -499,14 +573,30 @@ async function main() {
     } else if (flags.has('--no-tauri')) {
       buildArgs.push('--no-tauri');
     }
-    await run(process.execPath, buildArgs, { cwd: rootDir });
+    if (quietUi) {
+      await runMaybeVerbose({ label: 'build web UI bundle', cmd: process.execPath, args: buildArgs, cwd: rootDir });
+    } else {
+      await run(process.execPath, buildArgs, { cwd: rootDir });
+    }
   }
 
-  // Optional autostart (macOS)
+  // Optional autostart (macOS launchd / Linux systemd --user)
   if (disableAutostart) {
     await uninstallService();
   } else if (enableAutostart) {
-    await installService();
+    if (process.platform === 'linux') {
+      const hasSystemctl = await commandExists('systemctl');
+      if (!hasSystemctl) {
+        if (!json) {
+          // eslint-disable-next-line no-console
+          console.log('[bootstrap] autostart skipped: systemd user services not available (missing systemctl)');
+        }
+      } else {
+        await installService();
+      }
+    } else {
+      await installService();
+    }
   }
 
   // Optional git remote + mirror branch configuration
@@ -527,7 +617,16 @@ async function main() {
 
     // Create/update mirror branches like slopus/main for each repo (best-effort).
     try {
-      await run(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), 'sync-all', '--json'], { cwd: rootDir });
+      if (quietUi) {
+        await runMaybeVerbose({
+          label: 'update mirror branches (sync-all)',
+          cmd: process.execPath,
+          args: [join(rootDir, 'scripts', 'worktrees.mjs'), 'sync-all', '--json'],
+          cwd: rootDir,
+        });
+      } else {
+        await run(process.execPath, [join(rootDir, 'scripts', 'worktrees.mjs'), 'sync-all', '--json'], { cwd: rootDir });
+      }
     } catch {
       // ignore (still useful even if one component fails)
     }

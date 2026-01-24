@@ -337,10 +337,10 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
           `We found ${candidateTargets.length} existing stack(s) that could reuse auth from ${cyan(seedChoice)}.`
         )}\n${dim('This can fix “auth required / no machine” without re-login.')}`,
         options: [
-          { label: 'no (default)', value: false },
           { label: `yes — seed ${candidateTargets.length} stack(s) now`, value: true },
+          { label: 'no (default)', value: false },
         ],
-        defaultIndex: 0,
+        defaultIndex: 1,
       });
     });
     if (seedNow) {
@@ -375,10 +375,10 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
       return await promptSelect(rl, {
         title: 'Do you want to print it now?',
         options: [
-          { label: 'no (default) — keep it private', value: 'skip' },
           { label: `yes — print dev key (${yellow('will display a secret')})`, value: 'print' },
+          { label: 'no (default) — keep it private', value: 'skip' },
         ],
-        defaultIndex: 0,
+        defaultIndex: 1,
       });
     });
     if (keyChoice === 'print') {
@@ -693,10 +693,10 @@ async function cmdSetup({ rootDir, argv }) {
           const v = await promptSelect(rl, {
             title: `${bold('Remote access')}\n${dim('Optional: use Tailscale Serve to get an HTTPS URL for Happy (secure, recommended for phone access).')}`,
             options: [
-              { label: 'no (default)', value: false },
               { label: `yes (${green('recommended for phone')}) — enable Tailscale Serve`, value: true },
+              { label: 'no (default)', value: false },
             ],
-            defaultIndex: tailscaleWanted ? 1 : 0,
+            defaultIndex: tailscaleWanted ? 0 : 1,
           });
           return v;
         });
@@ -728,10 +728,10 @@ async function cmdSetup({ rootDir, argv }) {
                 `${dim('Optional: start Happy automatically at login.')}` +
                 (detail ? `\n${dim(detail)}` : ''),
               options: [
-                { label: 'no (default)', value: false },
                 { label: 'yes', value: true },
+                { label: 'no (default)', value: false },
               ],
-              defaultIndex: autostartWanted ? 1 : 0,
+              defaultIndex: autostartWanted ? 0 : 1,
             });
             return v;
           });
@@ -758,10 +758,10 @@ async function cmdSetup({ rootDir, argv }) {
             const v = await promptSelect(rl, {
               title: `${bold('Menu bar (macOS)')}\n${dim('Optional: install the SwiftBar menu to control stacks quickly.')}`,
               options: [
-                { label: 'no (default)', value: false },
                 { label: 'yes', value: true },
+                { label: 'no (default)', value: false },
               ],
-              defaultIndex: menubarWanted ? 1 : 0,
+              defaultIndex: menubarWanted ? 0 : 1,
             });
             return v;
           });
@@ -798,10 +798,10 @@ async function cmdSetup({ rootDir, argv }) {
           )}\n` +
           `${dim(`If you skip this, you can always run commands via ${cyan('npx happy-stacks ...')}.`)}`,
         options: [
-          { label: `no (default) — keep using ${cyan('npx happy-stacks ...')}`, value: false },
           { label: `yes (${green('recommended')}) — enable ${cyan('happys')} in your terminal`, value: true },
+          { label: `no (default) — keep using ${cyan('npx happy-stacks ...')}`, value: false },
         ],
-        defaultIndex: installPath ? 1 : 0,
+        defaultIndex: installPath ? 0 : 1,
       });
       return v;
     });
@@ -927,7 +927,9 @@ async function cmdSetup({ rootDir, argv }) {
       label: 'bootstrap components',
       rootDir,
       rel: 'scripts/install.mjs',
-      args: ['--interactive'],
+      // Dev setup: use Expo dev server, so exporting a production web bundle is wasted work.
+      // Users can always run `happys build` later if they want `happys start` to serve a prebuilt UI.
+      args: ['--interactive', '--clone', '--no-ui-build'],
       interactiveChild: true,
     });
 
@@ -962,10 +964,10 @@ async function cmdSetup({ rootDir, argv }) {
           return await promptSelect(rl, {
             title: `${bold('Mobile (iOS)')}\n${dim('Optional: install the shared Happy Stacks dev-client app on your iPhone (install once, reuse across stacks).')}`,
             options: [
-              { label: 'no (default)', value: false },
               { label: `yes — install iOS dev-client (${yellow('requires Xcode + CocoaPods')})`, value: true },
+              { label: 'no (default)', value: false },
             ],
-            defaultIndex: 0,
+            defaultIndex: 1,
           });
         });
         if (installMobile) {
@@ -991,7 +993,7 @@ async function cmdSetup({ rootDir, argv }) {
       rel: 'scripts/install.mjs',
       // Self-hosting: always clone the Happy monorepo from upstream.
       // Server-light (sqlite) is still fork-only today and is handled by bootstrap defaults.
-      args: [`--server=${serverComponent}`, '--upstream'],
+      args: [`--server=${serverComponent}`, '--upstream', '--clone'],
     });
   }
 

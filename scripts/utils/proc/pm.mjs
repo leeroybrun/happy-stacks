@@ -258,8 +258,8 @@ export async function ensureDepsInstalled(dir, label, { quiet = false, env: envI
   await run(pm.cmd, ['install'], { cwd: dir, stdio, env });
 }
 
-export async function ensureCliBuilt(cliDir, { buildCli }) {
-  await ensureDepsInstalled(cliDir, 'happy-cli');
+export async function ensureCliBuilt(cliDir, { buildCli, quiet = false, env: envIn = process.env } = {}) {
+  await ensureDepsInstalled(cliDir, 'happy-cli', { quiet, env: envIn });
   if (!buildCli) {
     return { built: false, reason: 'disabled' };
   }
@@ -297,10 +297,12 @@ export async function ensureCliBuilt(cliDir, { buildCli }) {
     }
   }
 
-  // eslint-disable-next-line no-console
-  console.log('[local] building happy-cli...');
-  const pm = await getComponentPm(cliDir);
-  await run(pm.cmd, ['build'], { cwd: cliDir });
+  if (!quiet) {
+    // eslint-disable-next-line no-console
+    console.log('[local] building happy-cli...');
+  }
+  const pm = await getComponentPm(cliDir, envIn);
+  await run(pm.cmd, ['build'], { cwd: cliDir, env: envIn, stdio: quiet ? 'ignore' : 'inherit' });
 
   // Sanity check: happy-cli daemon entrypoint must exist after a successful build.
   // Without this, watch-based rebuilds can restart the daemon into a MODULE_NOT_FOUND crash,
@@ -341,7 +343,7 @@ function isPathInside(path, dir) {
   return p === d || p.startsWith(d.endsWith(sep) ? d : d + sep);
 }
 
-export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli }) {
+export async function ensureHappyCliLocalNpmLinked(rootDir, { npmLinkCli, quiet = false } = {}) {
   if (!npmLinkCli) {
     return;
   }
@@ -402,8 +404,10 @@ exec node "${resolveInstalledPath(rootDir, 'bin/happys.mjs')}" "$@"
   const legacyBin = join(homedir(), '.happy-stacks', 'bin');
   const newBin = join(getDefaultAutostartPaths().baseDir, 'bin');
   if (entries.some((p) => isPathInside(p, legacyBin)) && !entries.some((p) => isPathInside(p, newBin))) {
-    // eslint-disable-next-line no-console
-    console.log(`[local] note: your PATH includes ${legacyBin}; recommended path is ${newBin}`);
+    if (!quiet) {
+      // eslint-disable-next-line no-console
+      console.log(`[local] note: your PATH includes ${legacyBin}; recommended path is ${newBin}`);
+    }
   }
 
   return { ok: true, cliRoot, binDir, happyShim, happysShim };
