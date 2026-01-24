@@ -148,6 +148,9 @@ export async function listWorktreeSpecs({ rootDir, component, env = process.env 
         const nextPrefix = [...prefixParts, e.name];
         if (await pathExists(join(p, '.git'))) {
           specs.push(nextPrefix.join('/'));
+          // IMPORTANT: do not recurse into worktree roots (they contain full repos and can be huge).
+          // Worktrees are leaf nodes for our purposes.
+          continue;
         }
         await walk(p, nextPrefix);
       }

@@ -14,8 +14,8 @@ test('getComponentDir prefers happy-server for happy-server-light when unified s
 
   const env = { HAPPY_STACKS_WORKSPACE_DIR: rootDir };
   const fullDir = join(rootDir, 'components', 'happy-server');
-  await mkdir(join(fullDir, 'prisma'), { recursive: true });
-  await writeFile(join(fullDir, 'prisma', 'schema.sqlite.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
+  await mkdir(join(fullDir, 'prisma', 'sqlite'), { recursive: true });
+  await writeFile(join(fullDir, 'prisma', 'sqlite', 'schema.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
 
   assert.equal(getComponentDir(rootDir, 'happy-server-light', env), fullDir);
 });
@@ -43,4 +43,3 @@ test('getComponentDir does not alias when HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVE
   };
   assert.equal(getComponentDir(rootDir, 'happy-server-light', env), '/tmp/custom/server-light');
 });
-

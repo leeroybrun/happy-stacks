@@ -81,6 +81,16 @@ export async function startTcpForwarder(options) {
   });
 }
 
+function trySendIpc(msg) {
+  try {
+    if (typeof process.send === 'function') {
+      process.send(msg);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Gracefully stop a TCP forwarder server.
  *
@@ -132,9 +142,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   startTcpForwarder({ listenHost, listenPort, targetHost, targetPort, label })
     .then(() => {
+      trySendIpc({ type: 'ready', listenHost, listenPort, targetHost, targetPort, label });
       // Keep running until signal
     })
     .catch((err) => {
+      trySendIpc({
+        type: 'error',
+        code: err && typeof err === 'object' ? err.code : null,
+        message: err instanceof Error ? err.message : String(err ?? 'unknown error'),
+        listenHost,
+        listenPort,
+        targetHost,
+        targetPort,
+        label,
+      });
       console.error(`[${label}] failed to start: ${err.message}`);
       process.exit(1);
     });

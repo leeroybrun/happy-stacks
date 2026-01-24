@@ -40,22 +40,26 @@ export async function promptSelect(rl, { title, options, defaultIndex = 0 }) {
   return options[idx].value;
 }
 
-export async function promptWorktreeSource({ rl, rootDir, component, stackName, createRemote = 'upstream' }) {
-  const specs = await listWorktreeSpecs({ rootDir, component });
+export async function promptWorktreeSource({ rl, rootDir, component, stackName, createRemote = 'upstream', deps = {} }) {
+  const promptFn = deps.prompt ?? prompt;
+  const promptSelectFn = deps.promptSelect ?? promptSelect;
+  const listWorktreeSpecsFn = deps.listWorktreeSpecs ?? listWorktreeSpecs;
 
   const baseOptions = [{ label: `default (components/${component})`, value: 'default' }];
-  if (specs.length) {
-    baseOptions.push({ label: 'pick existing worktree', value: 'pick' });
-  }
+  baseOptions.push({ label: 'pick existing worktree', value: 'pick' });
   baseOptions.push({ label: `create new worktree (${createRemote})`, value: 'create' });
 
-  const kind = await promptSelect(rl, { title: `Select ${component}:`, options: baseOptions, defaultIndex: 0 });
+  const kind = await promptSelectFn(rl, { title: `Select ${component}:`, options: baseOptions, defaultIndex: 0 });
 
   if (kind === 'default') {
     return 'default';
   }
   if (kind === 'pick') {
-    const picked = await promptSelect(rl, {
+    const specs = await listWorktreeSpecsFn({ rootDir, component });
+    if (!specs.length) {
+      return 'default';
+    }
+    const picked = await promptSelectFn(rl, {
       title: `Available ${component} worktrees:`,
       options: specs.map((s) => ({ label: s, value: s })),
       defaultIndex: 0,
@@ -63,7 +67,7 @@ export async function promptWorktreeSource({ rl, rootDir, component, stackName, 
     return picked;
   }
 
-  const slug = await prompt(rl, `New worktree slug for ${component} (example: pr/${stackName}/${component}): `, {
+  const slug = await promptFn(rl, `New worktree slug for ${component} (example: pr/${stackName}/${component}): `, {
     defaultValue: '',
   });
   if (!slug) {

@@ -22,6 +22,8 @@ const HAPPY_MONOREPO_COMPONENT_SUBDIR = {
   happy: 'expo-app',
   'happy-cli': 'cli',
   'happy-server': 'server',
+  // Server flavors share a single server package in the monorepo.
+  'happy-server-light': 'server',
 };
 
 export function getRootDir(importMetaUrl) {
@@ -147,11 +149,15 @@ export function getComponentDir(rootDir, name, env = process.env) {
 
   // Unified server flavors:
   // If happy-server-light isn't explicitly configured, allow it to reuse the happy-server checkout
-  // when that checkout contains the sqlite schema (prisma/schema.sqlite.prisma).
+  // when that checkout contains the sqlite schema (new: prisma/sqlite/schema.prisma; legacy: prisma/schema.sqlite.prisma).
   if (n === 'happy-server-light') {
     const fullServerDir = getComponentDir(rootDir, 'happy-server', env);
     try {
-      if (fullServerDir && existsSync(join(fullServerDir, 'prisma', 'schema.sqlite.prisma'))) {
+      if (
+        fullServerDir &&
+        (existsSync(join(fullServerDir, 'prisma', 'sqlite', 'schema.prisma')) ||
+          existsSync(join(fullServerDir, 'prisma', 'schema.sqlite.prisma')))
+      ) {
         return fullServerDir;
       }
     } catch {

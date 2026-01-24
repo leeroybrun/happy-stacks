@@ -576,7 +576,7 @@ async function portOne({
   }
 }
 
-async function cmdPortRun({ argv, flags, kv, json }) {
+async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
   const target = (kv.get('--target') ?? '').trim();
   if (!target) {
     throw new Error('[monorepo] missing --target=/abs/path/to/monorepo');
@@ -591,6 +591,9 @@ async function cmdPortRun({ argv, flags, kv, json }) {
       `[monorepo] target does not look like a slopus/happy monorepo root (missing expo-app/cli/server): ${targetRepoRoot}`
     );
   }
+  // Prefer a clearer error message if the user is in the middle of conflict resolution.
+  // (A git am session often makes the worktree dirty, which would otherwise trigger a generic "not clean" error.)
+  await ensureNoGitAmInProgress(targetRepoRoot);
   await ensureCleanGitWorktree(targetRepoRoot);
 
   const ontoCurrent = flags.has('--onto-current');
@@ -657,7 +660,7 @@ async function cmdPortRun({ argv, flags, kv, json }) {
     throw new Error('[monorepo] nothing to port. Provide at least one of: --from-happy, --from-happy-cli, --from-happy-server');
   }
 
-  await ensureNoGitAmInProgress(targetRepoRoot);
+  // Already checked above (keep just one check so errors stay consistent).
 
   const results = [];
   for (const s of sources) {
@@ -718,11 +721,15 @@ async function cmdPortRun({ argv, flags, kv, json }) {
         '- to resolve interactively (recommended): re-run without `--continue-on-failure` so it stops at the first conflict, then use `git am --continue`.',
       ].join('\n');
 
-  printResult({
-    json,
-    data: { ok, targetRepoRoot, branch: branchLabel, ontoCurrent, dryRun, base: baseRefUsed, results },
-    text: json ? '' : `${summary}${failureDetails}${hints}`,
-  });
+  const data = { ok, targetRepoRoot, branch: branchLabel, ontoCurrent, dryRun, base: baseRefUsed, results };
+  if (!silent) {
+    printResult({
+      json,
+      data,
+      text: json ? '' : `${summary}${failureDetails}${hints}`,
+    });
+  }
+  return data;
 }
 
 async function cmdPortStatus({ kv, json }) {
@@ -845,8 +852,8 @@ async function cmdPortContinue({ kv, json }) {
       try {
         const resumeArgv = [...plan.resumeArgv];
         const { flags, kv } = parseArgs(resumeArgv);
-        const jsonWanted = wantsJson(resumeArgv, { flags });
-        await cmdPortRun({ argv: resumeArgv, flags, kv, json: jsonWanted });
+        const jsonWanted = json || wantsJson(resumeArgv, { flags });
+        await cmdPortRun({ argv: resumeArgv, flags, kv, json: jsonWanted, silent: json === true });
         await deletePortPlan(targetRepoRoot);
       } catch {
         // cmdPortRun prints its own conflict context; leave the plan file so the user can retry after resolving.

@@ -236,7 +236,7 @@ async function main() {
   );
 
   // Reliability before daemon start:
-  // - Ensure schema exists (server-light: db push; happy-server: migrate deploy if tables missing)
+  // - Ensure schema exists (server-light: prisma migrate deploy; happy-server: migrate deploy if tables missing)
   // - Auto-seed from main only when needed (non-main + non-interactive default, and only if missing creds or 0 accounts)
   const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const accountProbe = await getAccountCountForServerComponent({

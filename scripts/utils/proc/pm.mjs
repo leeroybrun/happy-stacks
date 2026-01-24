@@ -50,12 +50,12 @@ export async function requirePnpm() {
   );
 }
 
-async function getComponentPm(dir) {
+async function getComponentPm(dir, env = process.env) {
   const yarnLock = join(dir, 'yarn.lock');
   if (await pathExists(yarnLock)) {
     // IMPORTANT: when happy-stacks itself is pinned to pnpm via Corepack, running `yarn`
     // from the happy-stacks cwd can be blocked. Always probe yarn with cwd=componentDir.
-    if (!(await commandExists('yarn', { cwd: dir }))) {
+    if (!(await commandExists('yarn', { cwd: dir, env }))) {
       throw new Error(`[local] yarn is required for component at ${dir} (yarn.lock present). Install it via Corepack: \`corepack enable\``);
     }
     return { name: 'yarn', cmd: 'yarn' };
@@ -64,6 +64,23 @@ async function getComponentPm(dir) {
   // Default fallback if no yarn.lock: use pnpm.
   await requirePnpm();
   return { name: 'pnpm', cmd: 'pnpm' };
+}
+
+const _yarnReadyKeys = new Set();
+
+async function ensureYarnReady({ dir, env, quiet = false }) {
+  const e = env && typeof env === 'object' ? env : process.env;
+  // In stack mode we isolate HOME/cache; key by effective HOME+XDG cache so we only do this once.
+  const key = `${resolve(dir)}|${String(e.HOME ?? '')}|${String(e.XDG_CACHE_HOME ?? '')}`;
+  if (_yarnReadyKeys.has(key)) return;
+
+  // If stdin isn't a TTY (e.g. `happys tui ...` uses stdio:ignore for child stdin),
+  // Corepack prompts can deadlock. Provide a single "yes" to unblock initial downloads.
+  const isTui = (e.HAPPY_STACKS_TUI ?? e.HAPPY_LOCAL_TUI ?? '').toString().trim() === '1';
+  const autoYes = isTui || !process.stdin.isTTY;
+  const stdio = quiet ? 'ignore' : 'inherit';
+  await run('yarn', ['--version'], { cwd: dir, env: e, stdio, ...(autoYes ? { input: 'y\n' } : {}) });
+  _yarnReadyKeys.add(key);
 }
 
 export async function requireDir(label, dir) {
@@ -76,7 +93,71 @@ export async function requireDir(label, dir) {
   );
 }
 
-export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
+function resolveStackCacheBaseDirFromEnv(env) {
+  const envFile = (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString().trim();
+  if (!envFile) return null;
+  try {
+    return join(dirname(envFile), 'cache');
+  } catch {
+    return null;
+  }
+}
+
+async function applyStackCacheEnv(baseEnv) {
+  const env = { ...(baseEnv && typeof baseEnv === 'object' ? baseEnv : process.env) };
+  const envFile = (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString().trim();
+  const stackCacheBase = resolveStackCacheBaseDirFromEnv(env);
+  if (!stackCacheBase) return env;
+
+  // Prisma engines currently default to ~/.cache/prisma (via os.homedir()).
+  // In stack mode, isolate HOME for package-manager driven commands so Prisma/Yarn/NPM don't
+  // depend on global home caches (and so sandboxed runs can succeed).
+  const isolateHomeRaw = (env.HAPPY_STACKS_PM_ISOLATE_HOME ?? env.HAPPY_LOCAL_PM_ISOLATE_HOME ?? '').toString().trim();
+  const isolateHome = isolateHomeRaw ? isolateHomeRaw !== '0' : true;
+  if (isolateHome && envFile) {
+    const stackHome = join(dirname(envFile), 'home');
+    env.HOME = stackHome;
+    env.USERPROFILE = stackHome;
+    try {
+      await mkdir(stackHome, { recursive: true });
+    } catch {
+      // best-effort
+    }
+  }
+
+  if (!(env.XDG_CACHE_HOME ?? '').toString().trim()) {
+    env.XDG_CACHE_HOME = join(stackCacheBase, 'xdg');
+  }
+  if (!(env.YARN_CACHE_FOLDER ?? '').toString().trim()) {
+    env.YARN_CACHE_FOLDER = join(stackCacheBase, 'yarn');
+  }
+  if (!(env.npm_config_cache ?? '').toString().trim()) {
+    env.npm_config_cache = join(stackCacheBase, 'npm');
+  }
+  // Corepack caches downloaded package managers (like Yarn) under COREPACK_HOME.
+  // In stack mode we want this to be stable and writable so first-run downloads don't prompt/hang in TUI.
+  if (!(env.COREPACK_HOME ?? '').toString().trim()) {
+    env.COREPACK_HOME = join(stackCacheBase, 'corepack');
+  }
+  // Avoid Corepack mutating package.json by auto-adding a packageManager field.
+  // (This is safe and reduces noise when Corepack is used implicitly.)
+  if (!(env.COREPACK_ENABLE_AUTO_PIN ?? '').toString().trim()) {
+    env.COREPACK_ENABLE_AUTO_PIN = '0';
+  }
+
+  try {
+    await mkdir(env.XDG_CACHE_HOME, { recursive: true });
+    await mkdir(env.YARN_CACHE_FOLDER, { recursive: true });
+    await mkdir(env.npm_config_cache, { recursive: true });
+    await mkdir(env.COREPACK_HOME, { recursive: true });
+  } catch {
+    // best-effort
+  }
+
+  return env;
+}
+
+export async function ensureDepsInstalled(dir, label, { quiet = false, env: envIn = process.env } = {}) {
   const pkgJson = join(dir, 'package.json');
   if (!(await pathExists(pkgJson))) {
     return;
@@ -84,8 +165,12 @@ export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
 
   const nodeModules = join(dir, 'node_modules');
   const pnpmModulesMeta = join(dir, 'node_modules', '.modules.yaml');
-  const pm = await getComponentPm(dir);
   const stdio = quiet ? 'ignore' : 'inherit';
+  const env = await applyStackCacheEnv(envIn);
+  const pm = await getComponentPm(dir, env);
+  if (pm.name === 'yarn') {
+    await ensureYarnReady({ dir, env, quiet });
+  }
 
   if (await pathExists(nodeModules)) {
     const yarnLock = join(dir, 'yarn.lock');
@@ -100,7 +185,7 @@ export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
         console.log(`[local] converting ${label} dependencies back to yarn (reinstalling node_modules)...`);
       }
       await rm(nodeModules, { recursive: true, force: true });
-      await run(pm.cmd, ['install'], { cwd: dir, stdio });
+      await run(pm.cmd, ['install'], { cwd: dir, stdio, env });
     }
 
     // If dependencies changed since the last install, re-run install even if node_modules exists.
@@ -145,7 +230,7 @@ export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
           // eslint-disable-next-line no-console
           console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json/patches changed)...`);
         }
-        await run(pm.cmd, ['install'], { cwd: dir, stdio });
+        await run(pm.cmd, ['install'], { cwd: dir, stdio, env });
       }
     }
 
@@ -157,7 +242,7 @@ export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
           // eslint-disable-next-line no-console
           console.log(`[local] refreshing ${label} dependencies (pnpm-lock changed)...`);
         }
-        await run(pm.cmd, ['install'], { cwd: dir, stdio });
+        await run(pm.cmd, ['install'], { cwd: dir, stdio, env });
       }
     }
 
@@ -168,7 +253,7 @@ export async function ensureDepsInstalled(dir, label, { quiet = false } = {}) {
     // eslint-disable-next-line no-console
     console.log(`[local] installing ${label} dependencies (first run)...`);
   }
-  await run(pm.cmd, ['install'], { cwd: dir, stdio });
+  await run(pm.cmd, ['install'], { cwd: dir, stdio, env });
 }
 
 export async function ensureCliBuilt(cliDir, { buildCli }) {
@@ -329,11 +414,15 @@ export async function pmExecBin(dirOrOpts, binArg, argsArg, optsArg) {
   const bin = usesObjectStyle ? dirOrOpts.bin : binArg;
   const args = usesObjectStyle ? (dirOrOpts.args ?? []) : (argsArg ?? []);
 
-  const env = usesObjectStyle ? (dirOrOpts.env ?? process.env) : (optsArg?.env ?? process.env);
+  const envIn = usesObjectStyle ? (dirOrOpts.env ?? process.env) : (optsArg?.env ?? process.env);
+  const env = await applyStackCacheEnv(envIn);
   const quiet = usesObjectStyle ? Boolean(dirOrOpts.quiet) : Boolean(optsArg?.quiet);
   const stdio = quiet ? 'ignore' : 'inherit';
 
-  const pm = await getComponentPm(dir);
+  const pm = await getComponentPm(dir, env);
+  if (pm.name === 'yarn') {
+    await ensureYarnReady({ dir, env, quiet });
+  }
   if (pm.name === 'yarn') {
     await run(pm.cmd, ['run', bin, ...args], { cwd: dir, env, stdio });
     return;
@@ -350,11 +439,15 @@ export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = 
   const componentEnv = usesObjectStyle ? (dir.env ?? process.env) : (env ?? process.env);
   const options = usesObjectStyle ? (dir.options ?? {}) : {};
 
-  const pm = await getComponentPm(componentDir);
+  const effectiveEnv = await applyStackCacheEnv(componentEnv);
+  const pm = await getComponentPm(componentDir, effectiveEnv);
   if (pm.name === 'yarn') {
-    return spawnProc(componentLabel, pm.cmd, ['run', componentBin, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
+    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet: false });
   }
-  return spawnProc(componentLabel, pm.cmd, ['exec', componentBin, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
+  if (pm.name === 'yarn') {
+    return spawnProc(componentLabel, pm.cmd, ['run', componentBin, ...componentArgs], effectiveEnv, { cwd: componentDir, ...options });
+  }
+  return spawnProc(componentLabel, pm.cmd, ['exec', componentBin, ...componentArgs], effectiveEnv, { cwd: componentDir, ...options });
 }
 
 export async function pmSpawnScript(dir, label, script, args, { env = process.env } = {}) {
@@ -366,9 +459,13 @@ export async function pmSpawnScript(dir, label, script, args, { env = process.en
   const componentEnv = usesObjectStyle ? (dir.env ?? process.env) : (env ?? process.env);
   const options = usesObjectStyle ? (dir.options ?? {}) : {};
 
-  const pm = await getComponentPm(componentDir);
+  const effectiveEnv = await applyStackCacheEnv(componentEnv);
+  const pm = await getComponentPm(componentDir, effectiveEnv);
   if (pm.name === 'yarn') {
-    return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
+    await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet: false });
   }
-  return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], componentEnv, { cwd: componentDir, ...options });
+  if (pm.name === 'yarn') {
+    return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], effectiveEnv, { cwd: componentDir, ...options });
+  }
+  return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], effectiveEnv, { cwd: componentDir, ...options });
 }

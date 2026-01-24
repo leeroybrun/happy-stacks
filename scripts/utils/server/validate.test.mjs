@@ -27,11 +27,12 @@ async function writeSchemas({ dir, schemaPrisma, schemaSqlitePrisma }) {
     await writeFile(join(prismaDir, 'schema.prisma'), schemaPrisma + '\n', 'utf-8');
   }
   if (schemaSqlitePrisma != null) {
-    await writeFile(join(prismaDir, 'schema.sqlite.prisma'), schemaSqlitePrisma + '\n', 'utf-8');
+    await mkdir(join(prismaDir, 'sqlite'), { recursive: true });
+    await writeFile(join(prismaDir, 'sqlite', 'schema.prisma'), schemaSqlitePrisma + '\n', 'utf-8');
   }
 }
 
-test('assertServerPrismaProviderMatches accepts unified light flavor (schema.sqlite.prisma)', async () => {
+test('assertServerPrismaProviderMatches accepts unified light flavor (prisma/sqlite/schema.prisma)', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'hs-validate-'));
   try {
     await writeSchemas({ dir, schemaPrisma: PG_SCHEMA, schemaSqlitePrisma: SQLITE_SCHEMA });

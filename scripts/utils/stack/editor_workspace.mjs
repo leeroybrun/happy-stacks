@@ -2,7 +2,7 @@ import { join, resolve } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 
 import { expandHome } from '../paths/canonical_home.mjs';
-import { getComponentDir, getWorkspaceDir, resolveStackEnvPath } from '../paths/paths.mjs';
+import { coerceHappyMonorepoRootFromPath, getComponentDir, getWorkspaceDir, resolveStackEnvPath } from '../paths/paths.mjs';
 import { ensureDir } from '../fs/ops.mjs';
 import { getEnvValueAny } from '../env/values.mjs';
 import { readEnvObjectFromFile } from '../env/read.mjs';
@@ -108,8 +108,9 @@ export async function writeStackCodeWorkspace({
   }
   for (const component of selectedComponents) {
     const keys = byName.get(component) ?? [];
-    const dir = resolveComponentDirFromStackEnv({ rootDir, stackEnv, keys, component });
-    folders.push({ name: component, path: dir });
+    const componentDir = resolveComponentDirFromStackEnv({ rootDir, stackEnv, keys, component });
+    const monoRoot = coerceHappyMonorepoRootFromPath(componentDir);
+    folders.push({ name: component, path: monoRoot || componentDir });
   }
 
   // Deduplicate by path (can happen if multiple components are pointed at the same dir).
@@ -149,4 +150,3 @@ export async function writeStackCodeWorkspace({
     },
   };
 }
-

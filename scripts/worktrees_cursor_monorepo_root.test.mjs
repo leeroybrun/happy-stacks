@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,45 +18,46 @@ function runNode(args, { cwd, env }) {
   });
 }
 
-test('happys stack new defaults to monorepo package dirs when happy is a monorepo', async () => {
+test('happys wt cursor opens the monorepo root (not a subpackage dir) in monorepo worktrees', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
-  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-monorepo-defaults-'));
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-wt-cursor-mono-'));
 
   const workspaceDir = join(tmp, 'workspace');
-  const storageDir = join(tmp, 'storage');
   const homeDir = join(tmp, 'home');
   const sandboxDir = join(tmp, 'sandbox');
-  const stackName = 'exp-test';
 
-  const monoRoot = join(workspaceDir, 'components', 'happy');
+  const monoRoot = join(workspaceDir, 'components', '.worktrees', 'happy', 'slopus', 'tmp', 'mono-wt');
   await mkdir(join(monoRoot, 'expo-app'), { recursive: true });
   await mkdir(join(monoRoot, 'cli'), { recursive: true });
   await mkdir(join(monoRoot, 'server'), { recursive: true });
+  await writeFile(join(monoRoot, '.git'), 'gitdir: dummy\n', 'utf-8');
   await writeFile(join(monoRoot, 'expo-app', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(monoRoot, 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(monoRoot, 'server', 'package.json'), '{}\n', 'utf-8');
-  // Monorepo server-light support: sqlite schema lives under prisma/sqlite/.
-  await mkdir(join(monoRoot, 'server', 'prisma', 'sqlite'), { recursive: true });
-  await writeFile(join(monoRoot, 'server', 'prisma', 'sqlite', 'schema.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
 
   const env = {
     ...process.env,
     HAPPY_STACKS_HOME_DIR: homeDir,
     HAPPY_STACKS_WORKSPACE_DIR: workspaceDir,
-    HAPPY_STACKS_STORAGE_DIR: storageDir,
     HAPPY_STACKS_SANDBOX_DIR: sandboxDir,
   };
 
-  const res = await runNode([join(rootDir, 'scripts', 'stack.mjs'), 'new', stackName, '--json'], { cwd: rootDir, env });
-  assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+  const resHappy = await runNode(
+    [join(rootDir, 'scripts', 'worktrees.mjs'), 'cursor', 'happy', 'slopus/tmp/mono-wt', '--json'],
+    { cwd: rootDir, env }
+  );
+  assert.equal(resHappy.code, 0, `expected exit 0, got ${resHappy.code}\nstdout:\n${resHappy.stdout}\nstderr:\n${resHappy.stderr}`);
+  const parsedHappy = JSON.parse(resHappy.stdout);
+  assert.equal(parsedHappy.dir, monoRoot);
 
-  const envPath = join(storageDir, stackName, 'env');
-  const contents = await readFile(envPath, 'utf-8');
-  assert.ok(contents.includes(`HAPPY_STACKS_COMPONENT_DIR_HAPPY=${join(monoRoot, 'expo-app')}\n`), contents);
-  assert.ok(contents.includes(`HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI=${join(monoRoot, 'cli')}\n`), contents);
-  assert.ok(contents.includes(`HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER=${join(monoRoot, 'server')}\n`), contents);
-  assert.ok(contents.includes(`HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER_LIGHT=${join(monoRoot, 'server')}\n`), contents);
+  const resCli = await runNode(
+    [join(rootDir, 'scripts', 'worktrees.mjs'), 'cursor', 'happy-cli', 'slopus/tmp/mono-wt', '--json'],
+    { cwd: rootDir, env }
+  );
+  assert.equal(resCli.code, 0, `expected exit 0, got ${resCli.code}\nstdout:\n${resCli.stdout}\nstderr:\n${resCli.stderr}`);
+  const parsedCli = JSON.parse(resCli.stdout);
+  assert.equal(parsedCli.dir, monoRoot);
 
   await rm(tmp, { recursive: true, force: true });
 });

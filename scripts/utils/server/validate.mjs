@@ -64,7 +64,10 @@ function detectPrismaProvider(schemaText) {
 
 export function assertServerPrismaProviderMatches({ serverComponentName, serverDir }) {
   const schemaPath = join(serverDir, 'prisma', 'schema.prisma');
-  const sqliteSchemaPath = join(serverDir, 'prisma', 'schema.sqlite.prisma');
+  const sqliteSchemaPaths = [
+    join(serverDir, 'prisma', 'sqlite', 'schema.prisma'),
+    join(serverDir, 'prisma', 'schema.sqlite.prisma'),
+  ];
 
   let schemaText = '';
   try {
@@ -79,24 +82,26 @@ export function assertServerPrismaProviderMatches({ serverComponentName, serverD
 
   // Unified happy-server flavors:
   // - full: prisma/schema.prisma (postgresql)
-  // - light: prisma/schema.sqlite.prisma (sqlite)
+  // - light: prisma/sqlite/schema.prisma (sqlite) (legacy: prisma/schema.sqlite.prisma)
   if (serverComponentName === 'happy-server-light') {
-    try {
-      const sqliteSchemaText = readFileSync(sqliteSchemaPath, 'utf-8');
-      const sqliteProvider = detectPrismaProvider(sqliteSchemaText);
-      if (sqliteProvider && sqliteProvider !== 'sqlite') {
-        throw new Error(
-          `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${sqliteProvider}\" in:\n` +
-            `- ${sqliteSchemaPath}\n` +
-            `Fix: point happy-server-light at a checkout that includes sqlite support, or switch server flavor to happy-server.`
-        );
+    for (const sqliteSchemaPath of sqliteSchemaPaths) {
+      try {
+        const sqliteSchemaText = readFileSync(sqliteSchemaPath, 'utf-8');
+        const sqliteProvider = detectPrismaProvider(sqliteSchemaText);
+        if (sqliteProvider && sqliteProvider !== 'sqlite') {
+          throw new Error(
+            `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${sqliteProvider}\" in:\n` +
+              `- ${sqliteSchemaPath}\n` +
+              `Fix: point happy-server-light at a checkout that includes sqlite support, or switch server flavor to happy-server.`
+          );
+        }
+        if (sqliteProvider === 'sqlite') {
+          return;
+        }
+        // Exists, but could not parse provider: keep checking other variants and fall through to legacy behavior.
+      } catch {
+        // missing/unreadable: try other variants and then fall through to legacy behavior below
       }
-      if (sqliteProvider === 'sqlite') {
-        return;
-      }
-      // If schema.sqlite.prisma exists but we couldn't parse provider, fall through to legacy check below.
-    } catch {
-      // schema.sqlite.prisma missing or unreadable; fall through to legacy behavior.
     }
 
     if (provider !== 'sqlite') {
@@ -104,7 +109,7 @@ export function assertServerPrismaProviderMatches({ serverComponentName, serverD
         `[server] happy-server-light expects Prisma datasource provider \"sqlite\", but found \"${provider}\" in:\n` +
           `- ${schemaPath}\n` +
           `This usually means you're pointing happy-server-light at a postgres-only happy-server checkout/PR.\n` +
-          `Fix: either switch server flavor to happy-server, or use a checkout that supports the light flavor (e.g. one that contains prisma/schema.sqlite.prisma).`
+          `Fix: either switch server flavor to happy-server, or use a checkout that supports the light flavor (e.g. one that contains prisma/sqlite/schema.prisma or prisma/schema.sqlite.prisma).`
       );
     }
     return;

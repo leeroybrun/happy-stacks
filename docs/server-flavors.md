@@ -8,7 +8,7 @@ Both are forks/flavors of the same upstream server repo (`slopus/happy-server`),
 
 ### Unified codebase (recommended)
 
-When your `happy-server` checkout includes the light flavor artifacts (notably `prisma/schema.sqlite.prisma`), Happy Stacks treats it as a **single unified server codebase** that supports both:
+When your `happy-server` checkout includes the light flavor artifacts (notably `prisma/sqlite/schema.prisma` — legacy: `prisma/schema.sqlite.prisma`), Happy Stacks treats it as a **single unified server codebase** that supports both:
 
 - `happy-server` (full / Postgres+Redis+S3)
 - `happy-server-light` (light / SQLite+local files, can serve UI)
@@ -87,8 +87,7 @@ Notes:
 - **`happys start`** is “production-like”. It avoids running heavyweight schema sync loops under launchd KeepAlive.
 - **`happys dev`** is for rapid iteration:
   - for `happy-server`: Happy Stacks runs `prisma migrate deploy` by default (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`).
-  - for `happy-server-light`: the dev loop runs `prisma db push` by default (configurable via `HAPPY_STACKS_PRISMA_PUSH`).
-    - in unified mode, it targets `prisma/schema.sqlite.prisma`
+  - for `happy-server-light`: Happy Stacks runs `prisma migrate deploy` (SQLite migrations) using the unified schema under `prisma/sqlite/schema.prisma`.
 
 Important: for a given run (`happys start` / `happys dev`) you choose **one** flavor.
 

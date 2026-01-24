@@ -44,12 +44,12 @@ test('importPrismaClientFromGeneratedSqlite imports PrismaClient from generated/
   }
 });
 
-test('importPrismaClientForHappyServerLight prefers generated sqlite client when schema.sqlite.prisma exists', async () => {
+test('importPrismaClientForHappyServerLight prefers generated sqlite client when prisma/sqlite/schema.prisma exists', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'hs-prisma-import-'));
   try {
     await writeJson(join(dir, 'package.json'), { type: 'module' });
-    await mkdir(join(dir, 'prisma'), { recursive: true });
-    await writeFile(join(dir, 'prisma', 'schema.sqlite.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
+    await mkdir(join(dir, 'prisma', 'sqlite'), { recursive: true });
+    await writeFile(join(dir, 'prisma', 'sqlite', 'schema.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
 
     await mkdir(join(dir, 'generated', 'sqlite-client'), { recursive: true });
     await writeFile(join(dir, 'generated', 'sqlite-client', 'index.js'), 'export class PrismaClient {}\n', 'utf-8');
@@ -68,4 +68,3 @@ test('importPrismaClientForHappyServerLight prefers generated sqlite client when
     await rm(dir, { recursive: true, force: true });
   }
 });
-

@@ -3,16 +3,47 @@ import { ensureDepsInstalled, pmExecBin } from '../proc/pm.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from '../env/sandbox.mjs';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveServerLightPrismaClientImport, resolveServerLightPrismaDbPushArgs } from '../server/flavor_scripts.mjs';
+import { mkdir } from 'node:fs/promises';
+import { resolvePrismaClientImportForServerComponent, resolveServerLightPrismaMigrateDeployArgs, resolveServerLightPrismaSchemaArgs } from '../server/flavor_scripts.mjs';
 
 function looksLikeMissingTableError(msg) {
   const s = String(msg ?? '').toLowerCase();
   return s.includes('does not exist') || s.includes('no such table');
 }
 
+function looksLikeAlreadyExistsError(msg) {
+  const s = String(msg ?? '').toLowerCase();
+  return s.includes('already exists') || s.includes('duplicate') || s.includes('constraint failed');
+}
+
+function looksLikeMissingGeneratedSqliteClientError(err) {
+  const code = err && typeof err === 'object' ? err.code : '';
+  if (code !== 'ERR_MODULE_NOT_FOUND') return false;
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return msg.includes('/generated/sqlite-client/') || msg.includes('\\generated\\sqlite-client\\');
+}
+
+async function findSqliteBaselineMigrationDir({ serverDir }) {
+  try {
+    // Unified monorepo server-light migrations live under prisma/sqlite/migrations.
+    // For legacy schema.sqlite.prisma setups, migrations use the default prisma/migrations folder.
+    const migrationsDir = existsSync(join(serverDir, 'prisma', 'sqlite', 'schema.prisma'))
+      ? join(serverDir, 'prisma', 'sqlite', 'migrations')
+      : join(serverDir, 'prisma', 'migrations');
+    const { readdir } = await import('node:fs/promises');
+    const entries = await readdir(migrationsDir, { withFileTypes: true });
+    const dirs = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+    return dirs[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 async function probeAccountCount({ serverComponentName, serverDir, env }) {
-  const clientImport =
-    serverComponentName === 'happy-server-light' ? resolveServerLightPrismaClientImport({ serverDir }) : '@prisma/client';
+  const clientImport = resolvePrismaClientImportForServerComponent({ serverComponentName, serverDir });
   const probe = `
 	let db;
 	try {
@@ -93,24 +124,90 @@ export function resolveAuthSeedFromEnv(env) {
 }
 
 export async function ensureServerLightSchemaReady({ serverDir, env }) {
-  await ensureDepsInstalled(serverDir, 'happy-server-light');
+  await ensureDepsInstalled(serverDir, 'happy-server-light', { env });
 
-  try {
-    const accountCount = await probeAccountCount({ serverComponentName: 'happy-server-light', serverDir, env });
-    return { ok: true, pushed: false, accountCount };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!looksLikeMissingTableError(msg)) {
-      throw e;
+  const dataDir = (env?.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').toString().trim();
+  const filesDir = (env?.HAPPY_SERVER_LIGHT_FILES_DIR ?? '').toString().trim() || (dataDir ? join(dataDir, 'files') : '');
+  if (dataDir) {
+    try {
+      await mkdir(dataDir, { recursive: true });
+    } catch {
+      // best-effort
     }
-    await pmExecBin({ dir: serverDir, bin: 'prisma', args: resolveServerLightPrismaDbPushArgs({ serverDir }), env });
-    const accountCount = await probeAccountCount({ serverComponentName: 'happy-server-light', serverDir, env });
-    return { ok: true, pushed: true, accountCount };
+  }
+  if (filesDir) {
+    try {
+      await mkdir(filesDir, { recursive: true });
+    } catch {
+      // best-effort
+    }
+  }
+
+  const probe = async () => await probeAccountCount({ serverComponentName: 'happy-server-light', serverDir, env });
+  const schemaArgs = resolveServerLightPrismaSchemaArgs({ serverDir });
+
+  const isUnified = schemaArgs.length > 0;
+
+  // Unified server-light (monorepo): ensure deterministic migrations are applied (idempotent).
+  // Legacy server-light (single schema.prisma with db push): do NOT run `prisma migrate deploy`,
+  // because it commonly fails with P3005 when the DB was created by `prisma db push` and no migrations exist.
+  if (isUnified) {
+    try {
+      await pmExecBin({ dir: serverDir, bin: 'prisma', args: resolveServerLightPrismaMigrateDeployArgs({ serverDir }), env });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // If the SQLite DB was created before migrations existed (historical db push era),
+      // `migrate deploy` can fail because tables already exist. Best-effort: baseline-resolve
+      // the first migration, then retry deploy.
+      if (looksLikeAlreadyExistsError(msg)) {
+        const baseline = await findSqliteBaselineMigrationDir({ serverDir });
+        if (baseline) {
+          await pmExecBin({
+            dir: serverDir,
+            bin: 'prisma',
+            args: ['migrate', 'resolve', ...schemaArgs, '--applied', baseline],
+            env,
+          }).catch(() => {});
+          await pmExecBin({ dir: serverDir, bin: 'prisma', args: resolveServerLightPrismaMigrateDeployArgs({ serverDir }), env });
+        } else {
+          throw e;
+        }
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  // 2) Probe account count (used for auth seeding heuristics).
+  try {
+    const accountCount = await probe();
+    return { ok: true, migrated: isUnified, accountCount };
+  } catch (e) {
+    if (looksLikeMissingGeneratedSqliteClientError(e)) {
+      await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['generate', ...schemaArgs], env });
+      const accountCount = await probe();
+      return { ok: true, migrated: isUnified, accountCount };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    if (looksLikeMissingTableError(msg)) {
+      if (isUnified) {
+        // Tables still missing after migrate deploy; fail closed with a clear error.
+        throw new Error(`[server-light] sqlite schema not ready after prisma migrate deploy (missing tables).`);
+      }
+      // Legacy server-light: schema is typically applied via `prisma db push` in the component's dev/start scripts.
+      // Best-effort: don't fail the whole stack startup just because we can't probe here.
+      return { ok: true, migrated: false, accountCount: 0 };
+    }
+    if (!isUnified) {
+      // Legacy server-light: probing is best-effort (don't make stack dev fail closed here).
+      return { ok: true, migrated: false, accountCount: 0 };
+    }
+    throw e;
   }
 }
 
 export async function ensureHappyServerSchemaReady({ serverDir, env }) {
-  await ensureDepsInstalled(serverDir, 'happy-server');
+  await ensureDepsInstalled(serverDir, 'happy-server', { env });
 
   try {
     const accountCount = await probeAccountCount({ serverComponentName: 'happy-server', serverDir, env });

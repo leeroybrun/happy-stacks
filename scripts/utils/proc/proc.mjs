@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
 
 function nextLineBreakIndex(s) {
   const n = s.indexOf('\n');
@@ -80,9 +81,25 @@ export function killProcessTree(child, signal) {
 }
 
 export async function run(cmd, args, options = {}) {
-  const { timeoutMs, ...spawnOptions } = options ?? {};
+  const { timeoutMs, input, ...spawnOptions } = options ?? {};
   await new Promise((resolvePromise, rejectPromise) => {
-    const proc = spawn(cmd, args, { stdio: 'inherit', shell: false, ...spawnOptions });
+    const baseStdio = spawnOptions.stdio ?? 'inherit';
+    const stdio =
+      input != null
+        ? Array.isArray(baseStdio)
+          ? ['pipe', baseStdio[1] ?? 'inherit', baseStdio[2] ?? 'inherit']
+          : ['pipe', baseStdio, baseStdio]
+        : baseStdio;
+
+    const proc = spawn(cmd, args, { stdio, shell: false, ...spawnOptions });
+    if (input != null && proc.stdin) {
+      try {
+        proc.stdin.write(String(input));
+        proc.stdin.end();
+      } catch {
+        // ignore
+      }
+    }
     const t =
       Number.isFinite(timeoutMs) && timeoutMs > 0
         ? setTimeout(() => {
@@ -148,13 +165,46 @@ export async function runCapture(cmd, args, options = {}) {
 }
 
 export async function runCaptureResult(cmd, args, options = {}) {
-  const { timeoutMs, ...spawnOptions } = options ?? {};
+  const { timeoutMs, streamLabel, teeFile, teeLabel, ...spawnOptions } = options ?? {};
   const startedAt = Date.now();
   return await new Promise((resolvePromise) => {
     const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false, ...spawnOptions });
     let out = '';
     let err = '';
-    const t =
+    const label = String(streamLabel ?? '').trim();
+    const shouldStream = Boolean(label);
+    const outState = { buf: '' };
+    const errState = { buf: '' };
+    const prefix = shouldStream ? `[${label}] ` : '';
+
+    const teePath = String(teeFile ?? '').trim();
+    const shouldTee = Boolean(teePath);
+    const teeOutState = { buf: '' };
+    const teeErrState = { buf: '' };
+    const teePrefix = (() => {
+      const t = String(teeLabel ?? '').trim();
+      if (t) return `[${t}] `;
+      if (label) return `[${label}] `;
+      return '';
+    })();
+    const teeStream = shouldTee ? createWriteStream(teePath, { flags: 'a' }) : null;
+
+    function resolveWith(res) {
+      if (shouldStream) {
+        flushPrefixed(process.stdout, prefix, outState);
+        flushPrefixed(process.stderr, prefix, errState);
+      }
+      if (shouldTee && teeStream) {
+        flushPrefixed(teeStream, teePrefix, teeOutState);
+        flushPrefixed(teeStream, teePrefix, teeErrState);
+        try {
+          teeStream.end();
+        } catch {
+          // ignore
+        }
+      }
+      resolvePromise(res);
+    }    const t =
       Number.isFinite(timeoutMs) && timeoutMs > 0
         ? setTimeout(() => {
             try {
@@ -162,7 +212,7 @@ export async function runCaptureResult(cmd, args, options = {}) {
             } catch {
               // ignore
             }
-            resolvePromise({
+            resolveWith({
               ok: false,
               exitCode: null,
               signal: null,
@@ -175,11 +225,19 @@ export async function runCaptureResult(cmd, args, options = {}) {
             });
           }, timeoutMs)
         : null;
-    proc.stdout?.on('data', (d) => (out += d.toString()));
-    proc.stderr?.on('data', (d) => (err += d.toString()));
+    proc.stdout?.on('data', (d) => {
+      out += d.toString();
+      if (shouldStream) writeWithPrefix(process.stdout, prefix, outState, d);
+      if (shouldTee && teeStream) writeWithPrefix(teeStream, teePrefix, teeOutState, d);
+    });
+    proc.stderr?.on('data', (d) => {
+      err += d.toString();
+      if (shouldStream) writeWithPrefix(process.stderr, prefix, errState, d);
+      if (shouldTee && teeStream) writeWithPrefix(teeStream, teePrefix, teeErrState, d);
+    });
     proc.on('error', (e) => {
       if (t) clearTimeout(t);
-      resolvePromise({
+      resolveWith({
         ok: false,
         exitCode: null,
         signal: null,
@@ -193,7 +251,7 @@ export async function runCaptureResult(cmd, args, options = {}) {
     });
     proc.on('close', (code, signal) => {
       if (t) clearTimeout(t);
-      resolvePromise({
+      resolveWith({
         ok: code === 0,
         exitCode: code,
         signal: signal ?? null,

@@ -28,7 +28,6 @@ export async function runCaptureIfCommandExists(cmd, args, { cwd, env, timeoutMs
   }
 }
 
-export async function commandExists(cmd, { cwd } = {}) {
-  return Boolean(await resolveCommandPath(cmd, { cwd }));
+export async function commandExists(cmd, { cwd, env, timeoutMs } = {}) {
+  return Boolean(await resolveCommandPath(cmd, { cwd, env, timeoutMs }));
 }
-

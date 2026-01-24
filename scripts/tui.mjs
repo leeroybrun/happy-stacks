@@ -1,5 +1,6 @@
 import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
 import { printResult } from './utils/cli/cli.mjs';
@@ -114,6 +115,76 @@ function inferStackNameFromForwardedArgs(args) {
 }
 
 const readEnvObject = readEnvObjectFromFile;
+
+async function preflightCorepackYarnForStack({ envPath }) {
+  // Corepack caches (and therefore "download yarn?" prompts) are tied to XDG/HOME.
+  // In stack mode we isolate HOME/XDG caches per stack, which can cause Corepack to prompt
+  // the first time a stack runs Yarn.
+  //
+  // In `happys tui`, the child runs under a pseudo-TTY (via `script`) and the TUI consumes
+  // all keyboard input, so Corepack's interactive prompt deadlocks.
+  //
+  // Fix: pre-download Yarn in a *non-tty* subprocess using the stack's isolated HOME/XDG,
+  // so later pty runs don't prompt.
+  if (!envPath) return;
+  const baseDir = resolve(join(envPath, '..'));
+  const stackHome = join(baseDir, 'home');
+  const cacheBase = join(baseDir, 'cache');
+  const env = {
+    ...process.env,
+    HOME: stackHome,
+    USERPROFILE: stackHome,
+    XDG_CACHE_HOME: join(cacheBase, 'xdg'),
+    YARN_CACHE_FOLDER: join(cacheBase, 'yarn'),
+    npm_config_cache: join(cacheBase, 'npm'),
+    // Avoid Corepack mutating package.json automatically.
+    COREPACK_ENABLE_AUTO_PIN: '0',
+    // Best-effort: disable download prompts (may not be honored by all Corepack versions).
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+    // Treat this as non-interactive (helps some tooling).
+    CI: process.env.CI ?? '1',
+  };
+
+  await mkdir(stackHome, { recursive: true }).catch(() => {});
+  await mkdir(env.XDG_CACHE_HOME, { recursive: true }).catch(() => {});
+  await mkdir(env.YARN_CACHE_FOLDER, { recursive: true }).catch(() => {});
+  await mkdir(env.npm_config_cache, { recursive: true }).catch(() => {});
+  await mkdir(env.COREPACK_HOME, { recursive: true }).catch(() => {});
+
+  await new Promise((resolvePromise) => {
+    const proc = spawn('yarn', ['--version'], {
+      env,
+      cwd: baseDir,
+      // Non-tty stdio: Corepack typically won't prompt; if it does, we still provide "y\n".
+      stdio: ['pipe', 'ignore', 'ignore'],
+      shell: false,
+    });
+    try {
+      proc.stdin?.write('y\n');
+      proc.stdin?.end();
+    } catch {
+      // ignore
+    }
+
+    const t = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+      resolvePromise();
+    }, 60_000);
+
+    proc.on('exit', () => {
+      clearTimeout(t);
+      resolvePromise();
+    });
+    proc.on('error', () => {
+      clearTimeout(t);
+      resolvePromise();
+    });
+  });
+}
 
 function getEnvVal(env, key, legacyKey) {
   return getEnvValueAny(env, [key, legacyKey]) || '';
@@ -294,6 +365,7 @@ async function main() {
   const forwarded = argv;
 
   const stackName = inferStackNameFromForwardedArgs(forwarded);
+  const { envPath: stackEnvPath } = resolveStackEnvPath(stackName);
 
   const panes = [
     mkPane('orch', 'orchestration', { visible: true, kind: 'log' }),
@@ -334,24 +406,38 @@ async function main() {
     pushLine(panes[paneIndexById.get('orch')], `[${nowTs()}] ${msg}`);
   };
 
+  // Preflight Yarn/Corepack for this stack before spawning the pty child.
+  // This prevents Corepack "download yarn? [Y/n]" prompts from deadlocking the TUI.
+  await preflightCorepackYarnForStack({ envPath: stackEnvPath });
+
   let layout = 'columns'; // single | split | columns
   let focused = paneIndexById.get('local'); // default focus
   let paused = false;
   let renderScheduled = false;
 
   const wantsPty = process.platform !== 'win32' && (await commandExists('script', { cwd: rootDir }));
+  // In TUI mode, we intentionally do not forward keyboard input to the child process (stdin is ignored),
+  // so any interactive prompts inside the child would deadlock.
+  // Mark the child env so dependency installers can auto-approve safe prompts (Corepack yarn downloads).
+  const childEnv = {
+    ...process.env,
+    HAPPY_STACKS_TUI: '1',
+    HAPPY_LOCAL_TUI: '1',
+    // Avoid Corepack mutating package.json automatically.
+    COREPACK_ENABLE_AUTO_PIN: '0',
+  };
   const child = wantsPty
     ? // Use a pseudo-terminal so tools like Expo print QR/status output that they hide in non-TTY mode.
       // `script` is available by default on macOS (and common on Linux).
       spawn('script', ['-q', '/dev/null', process.execPath, happysBin, ...forwarded], {
         cwd: rootDir,
-        env: { ...process.env },
+        env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
       })
     : spawn(process.execPath, [happysBin, ...forwarded], {
         cwd: rootDir,
-        env: { ...process.env },
+        env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
       });

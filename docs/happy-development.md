@@ -375,7 +375,7 @@ In interactive TTY runs, `happys dev` / `happys start` may auto-open the UI in y
 - **Dependency install**: ensures component deps are installed when needed.
 - **Schema readiness**:
   - `happy-server` (Postgres): applies `prisma migrate deploy` (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`)
-  - `happy-server-light` (SQLite): upstream dev normally runs `prisma db push` (toggle via `HAPPY_STACKS_PRISMA_PUSH`)
+  - `happy-server-light` (SQLite): applies `prisma migrate deploy` using the SQLite migration history in the unified server repo
 - **Auth seeding for new stacks** (non-main + non-interactive default):
   - Uses the configured seed stack via `HAPPY_STACKS_AUTH_SEED_FROM` (default: `main`) when the stack looks uninitialized.
   - Recommended for development: create + log into a dedicated seed stack once (usually `dev-auth`) and set:
@@ -628,7 +628,6 @@ Happy Stacks uses `HAPPY_STACKS_*` as the canonical prefix; most settings also a
 - **Full server infra** (happy-server):
   - `HAPPY_STACKS_MANAGED_INFRA=0` (disable Docker-managed Postgres/Redis/Minio; provide URLs yourself)
 - **Prisma behavior**:
-  - `HAPPY_STACKS_PRISMA_PUSH=0` (server-light: avoid `prisma db push` in dev mode)
   - `HAPPY_STACKS_PRISMA_MIGRATE=0` (full server: disable `prisma migrate deploy`)
 - **happy-cli build behavior**:
   - `HAPPY_STACKS_CLI_BUILD_MODE=auto|always|never`

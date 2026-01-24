@@ -102,7 +102,23 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
 
   // Absolute paths and <owner>/<branch...> specs.
   const resolved = resolveComponentSpecToDir({ rootDir, component, spec: raw });
-  if (resolved) return resolved;
+  if (resolved) {
+    // If this is a happy monorepo group component, allow resolving worktree specs that live under
+    // `.worktrees/happy/...` even when the current default checkout is still split-repo.
+    try {
+      if (!existsSync(resolved) && isHappyMonorepoGroupComponent(component)) {
+        const monoResolved = resolveComponentSpecToDir({ rootDir, component: 'happy', spec: raw });
+        if (monoResolved && existsSync(monoResolved)) {
+          const monoRoot = coerceHappyMonorepoRootFromPath(monoResolved);
+          const sub = happyMonorepoSubdirForComponent(component);
+          if (monoRoot && sub) return join(monoRoot, sub);
+        }
+      }
+    } catch {
+      // ignore and fall back to resolved
+    }
+    return resolved;
+  }
 
   // Fallback: treat raw as a literal path.
   if (isAbsolute(raw)) {
@@ -803,8 +819,7 @@ async function cmdUse({ rootDir, args, flags }) {
     throw new Error('[wt] usage: happys wt use <component> <owner/branch|path|default>');
   }
 
-  const updateComponents =
-    isHappyMonorepoGroupComponent(component) && isActiveHappyMonorepo(rootDir, component) ? HAPPY_MONOREPO_GROUP_COMPONENTS : [component];
+  let updateComponents = [component];
 
   // Safety: main stack should not be repointed to arbitrary worktrees by default.
   // This is the most common “oops, the main stack now runs my PR checkout” footgun (especially for agents).
@@ -834,6 +849,10 @@ async function cmdUse({ rootDir, args, flags }) {
       : null;
 
   if (spec === 'default' || spec === 'main') {
+    // If the active checkout is a monorepo, reset the whole monorepo group together.
+    if (isHappyMonorepoGroupComponent(component) && isActiveHappyMonorepo(rootDir, component)) {
+      updateComponents = HAPPY_MONOREPO_GROUP_COMPONENTS;
+    }
     const updates = updateComponents.map((c) => ({ key: componentDirEnvKey(c), value: '' }));
     // Clear override by setting it to empty (env.local keeps a record of last use, but override becomes inactive).
     await (envPath ? ensureEnvFileUpdated({ envPath, updates }) : ensureEnvLocalUpdated({ rootDir, updates }));
@@ -848,9 +867,14 @@ async function cmdUse({ rootDir, args, flags }) {
   }
 
   let writeDir = resolvedDir;
-  if (updateComponents.length > 1) {
+  if (isHappyMonorepoGroupComponent(component)) {
     const monoRoot = coerceHappyMonorepoRootFromPath(resolvedDir);
-    if (!monoRoot) {
+    if (monoRoot) {
+      updateComponents = HAPPY_MONOREPO_GROUP_COMPONENTS;
+      writeDir = monoRoot;
+    } else if (isActiveHappyMonorepo(rootDir, component)) {
+      // If the active checkout is a monorepo, refuse switching to a non-monorepo target for group components.
+      updateComponents = HAPPY_MONOREPO_GROUP_COMPONENTS;
       throw new Error(
         `[wt] invalid target for happy monorepo component '${component}':\n` +
           `- expected a path inside the happy monorepo (contains expo-app/cli/server)\n` +
@@ -858,7 +882,6 @@ async function cmdUse({ rootDir, args, flags }) {
           `Fix: pick a worktree under ${join(worktreesRoot, 'happy')}/ or pass an absolute path to a monorepo checkout.`
       );
     }
-    writeDir = monoRoot;
   }
 
   if (!(await pathExists(writeDir))) {
@@ -1628,6 +1651,13 @@ async function openTerminalAuto({ dir, shell }) {
   return { kind: 'current' };
 }
 
+function resolveMonorepoEditorDir({ component, dir, preferPackageDir = false }) {
+  if (!isHappyMonorepoGroupComponent(component)) return dir;
+  if (preferPackageDir) return dir;
+  const monoRoot = coerceHappyMonorepoRootFromPath(dir);
+  return monoRoot || dir;
+}
+
 async function cmdShell({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
@@ -1636,10 +1666,11 @@ async function cmdShell({ rootDir, argv }) {
   const spec = positionals[2] ?? '';
   if (!component) {
     throw new Error(
-      '[wt] usage: happys wt shell <component> [worktreeSpec|active|default|main|path] [--shell=/bin/zsh] [--terminal=auto|current|ghostty|iterm|terminal] [--new-window] [--json]'
+      '[wt] usage: happys wt shell <component> [worktreeSpec|active|default|main|path] [--package] [--shell=/bin/zsh] [--terminal=auto|current|ghostty|iterm|terminal] [--new-window] [--json]'
     );
   }
-  const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  const packageDir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  const dir = resolveMonorepoEditorDir({ component, dir: packageDir, preferPackageDir: flags.has('--package') });
   if (!(await pathExists(dir))) {
     throw new Error(`[wt] target does not exist: ${dir}`);
   }
@@ -1685,9 +1716,10 @@ async function cmdCode({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: happys wt code <component> [worktreeSpec|active|default|main|path] [--json]');
+    throw new Error('[wt] usage: happys wt code <component> [worktreeSpec|active|default|main|path] [--package] [--json]');
   }
-  const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  const packageDir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  const dir = resolveMonorepoEditorDir({ component, dir: packageDir, preferPackageDir: flags.has('--package') });
   if (!(await pathExists(dir))) {
     throw new Error(`[wt] target does not exist: ${dir}`);
   }
@@ -1709,9 +1741,10 @@ async function cmdCursor({ rootDir, argv }) {
   const component = positionals[1];
   const spec = positionals[2] ?? '';
   if (!component) {
-    throw new Error('[wt] usage: happys wt cursor <component> [worktreeSpec|active|default|main|path] [--json]');
+    throw new Error('[wt] usage: happys wt cursor <component> [worktreeSpec|active|default|main|path] [--package] [--json]');
   }
-  const dir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  const packageDir = resolveComponentWorktreeDir({ rootDir, component, spec });
+  const dir = resolveMonorepoEditorDir({ component, dir: packageDir, preferPackageDir: flags.has('--package') });
   if (!(await pathExists(dir))) {
     throw new Error(`[wt] target does not exist: ${dir}`);
   }

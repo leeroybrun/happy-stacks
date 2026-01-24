@@ -33,6 +33,7 @@ test('getComponentDir derives monorepo component package dirs from components/ha
   assert.equal(getComponentDir(rootDir, 'happy', env), join(monoRoot, 'expo-app'));
   assert.equal(getComponentDir(rootDir, 'happy-cli', env), join(monoRoot, 'cli'));
   assert.equal(getComponentDir(rootDir, 'happy-server', env), join(monoRoot, 'server'));
+  assert.equal(getComponentDir(rootDir, 'happy-server-light', env), join(monoRoot, 'server'));
 });
 
 test('getComponentRepoDir returns the shared monorepo root for monorepo components', async (t) => {
@@ -43,6 +44,7 @@ test('getComponentRepoDir returns the shared monorepo root for monorepo componen
   assert.equal(getComponentRepoDir(rootDir, 'happy', env), monoRoot);
   assert.equal(getComponentRepoDir(rootDir, 'happy-cli', env), monoRoot);
   assert.equal(getComponentRepoDir(rootDir, 'happy-server', env), monoRoot);
+  assert.equal(getComponentRepoDir(rootDir, 'happy-server-light', env), monoRoot);
 });
 
 test('getComponentDir normalizes monorepo env overrides that point inside the repo', async (t) => {

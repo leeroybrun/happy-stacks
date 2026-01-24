@@ -18,26 +18,27 @@ function runNode(args, { cwd, env }) {
   });
 }
 
-test('happys stack new defaults to monorepo package dirs when happy is a monorepo', async () => {
+test('happys stack new derives monorepo server-light dirs from --happy spec', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
-  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-monorepo-defaults-'));
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-monorepo-spec-'));
 
   const workspaceDir = join(tmp, 'workspace');
   const storageDir = join(tmp, 'storage');
   const homeDir = join(tmp, 'home');
   const sandboxDir = join(tmp, 'sandbox');
-  const stackName = 'exp-test';
+  const stackName = 'exp-mono-spec';
 
-  const monoRoot = join(workspaceDir, 'components', 'happy');
+  // Create a monorepo worktree somewhere other than components/happy to simulate a new stack
+  // created from a --happy spec when the default checkout isn't a monorepo.
+  const monoRoot = join(workspaceDir, 'components', '.worktrees', 'happy', 'slopus', 'tmp', 'leeroy-wip');
   await mkdir(join(monoRoot, 'expo-app'), { recursive: true });
   await mkdir(join(monoRoot, 'cli'), { recursive: true });
-  await mkdir(join(monoRoot, 'server'), { recursive: true });
+  await mkdir(join(monoRoot, 'server', 'prisma', 'sqlite'), { recursive: true });
   await writeFile(join(monoRoot, 'expo-app', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(monoRoot, 'cli', 'package.json'), '{}\n', 'utf-8');
   await writeFile(join(monoRoot, 'server', 'package.json'), '{}\n', 'utf-8');
-  // Monorepo server-light support: sqlite schema lives under prisma/sqlite/.
-  await mkdir(join(monoRoot, 'server', 'prisma', 'sqlite'), { recursive: true });
+  await writeFile(join(monoRoot, 'server', 'prisma', 'schema.prisma'), 'datasource db { provider = "postgresql" }\n', 'utf-8');
   await writeFile(join(monoRoot, 'server', 'prisma', 'sqlite', 'schema.prisma'), 'datasource db { provider = "sqlite" }\n', 'utf-8');
 
   const env = {
@@ -48,7 +49,10 @@ test('happys stack new defaults to monorepo package dirs when happy is a monorep
     HAPPY_STACKS_SANDBOX_DIR: sandboxDir,
   };
 
-  const res = await runNode([join(rootDir, 'scripts', 'stack.mjs'), 'new', stackName, '--json'], { cwd: rootDir, env });
+  const res = await runNode(
+    [join(rootDir, 'scripts', 'stack.mjs'), 'new', stackName, `--happy=${monoRoot}`, '--server=happy-server-light', '--no-copy-auth', '--json'],
+    { cwd: rootDir, env },
+  );
   assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
 
   const envPath = join(storageDir, stackName, 'env');

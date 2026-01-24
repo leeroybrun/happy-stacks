@@ -16,7 +16,7 @@ import { dirname } from 'node:path';
 import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { ensureDepsInstalled, pmExecBin } from './utils/proc/pm.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
-import { resolveServerLightPrismaDbPushArgs } from './utils/server/flavor_scripts.mjs';
+import { resolvePrismaClientImportForServerComponent, resolveServerLightPrismaMigrateDeployArgs } from './utils/server/flavor_scripts.mjs';
 import { clearDevAuthKey, readDevAuthKey, writeDevAuthKey } from './utils/auth/dev_key.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo/expo.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
@@ -228,6 +228,15 @@ async function seedAccountsFromSourceDbToTargetDb({
   const sourceCwd = resolveServerComponentDir({ rootDir, serverComponent: fromServerComponent });
   const targetCwd = resolveServerComponentDir({ rootDir, serverComponent: targetServerComponent });
 
+  const sourceClientImport = resolvePrismaClientImportForServerComponent({
+    serverComponentName: fromServerComponent,
+    serverDir: sourceCwd,
+  });
+  const targetClientImport = resolvePrismaClientImportForServerComponent({
+    serverComponentName: targetServerComponent,
+    serverDir: targetCwd,
+  });
+
   const listScript = `
 process.on('uncaughtException', (e) => {
   console.error(e instanceof Error ? e.message : String(e));
@@ -237,7 +246,11 @@ process.on('unhandledRejection', (e) => {
   console.error(e instanceof Error ? e.message : String(e));
   process.exit(1);
 });
-import { PrismaClient } from '@prisma/client';
+const mod = await import(${JSON.stringify(sourceClientImport)});
+const PrismaClient = mod?.PrismaClient ?? mod?.default?.PrismaClient;
+if (!PrismaClient) {
+  throw new Error('Failed to load PrismaClient for DB seed (source).');
+}
 const db = new PrismaClient();
 try {
   const accounts = await db.account.findMany({ select: { id: true, publicKey: true } });
@@ -256,7 +269,11 @@ process.on('unhandledRejection', (e) => {
   console.error(e instanceof Error ? e.message : String(e));
   process.exit(1);
 });
-import { PrismaClient } from '@prisma/client';
+const mod = await import(${JSON.stringify(targetClientImport)});
+const PrismaClient = mod?.PrismaClient ?? mod?.default?.PrismaClient;
+if (!PrismaClient) {
+  throw new Error('Failed to load PrismaClient for DB seed (target).');
+}
 import fs from 'node:fs';
 const FORCE = ${force ? 'true' : 'false'};
 const raw = fs.readFileSync(0, 'utf8').trim();
@@ -634,7 +651,7 @@ async function cmdCopyFrom({ argv, json }) {
           await pmExecBin({
             dir: serverDirForPrisma,
             bin: 'prisma',
-            args: resolveServerLightPrismaDbPushArgs({ serverDir: serverDirForPrisma }),
+            args: resolveServerLightPrismaMigrateDeployArgs({ serverDir: serverDirForPrisma }),
             env: { ...process.env, DATABASE_URL: targetDatabaseUrl },
             quiet: json,
           }).catch(() => {});

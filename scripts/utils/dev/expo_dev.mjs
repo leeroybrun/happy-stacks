@@ -1,6 +1,7 @@
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import net from 'node:net';
 import {
   ensureExpoIsolationEnv,
   getExpoStatePaths,
@@ -14,7 +15,7 @@ import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
 import { expoSpawn } from '../expo/command.mjs';
 import { resolveMobileExpoConfig } from '../mobile/config.mjs';
 import { resolveMobileReachableServerUrl } from '../server/mobile_api_url.mjs';
-import { getTailscaleIpv4 } from '../tailscale/ip.mjs';
+import { getTailscaleStatus } from '../tailscale/ip.mjs';
 import { pickLanIpv4 } from '../net/lan_ip.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,9 +54,36 @@ export function resolveExpoTailscaleEnabled({ env = process.env, expoTailscale =
  * @returns {Promise<{ ok: boolean, pid?: number, tailscaleIp?: string, lanIp?: string, error?: string }>}
  */
 export async function startExpoTailscaleForwarder({ metroPort, baseEnv, stackName, children }) {
-  const tailscaleIp = await getTailscaleIpv4();
-  if (!tailscaleIp) {
-    return { ok: false, error: 'Tailscale not available or no IPv4 address' };
+  const ts = await getTailscaleStatus();
+  if (!ts.available || !ts.ip) {
+    // Common case: Tailscale app installed but toggle is off / not connected.
+    // This must never fail stack startup; just skip with a clear message.
+    return { ok: false, error: ts.error || 'Tailscale is not connected' };
+  }
+  const tailscaleIp = ts.ip;
+
+  // Some platforms / Tailscale variants report an IP but do not allow binding to it (EADDRNOTAVAIL).
+  // If we can't bind *at all*, don't spawn the forwarder process (it will just error noisily).
+  const canBind = await new Promise((resolve) => {
+    const srv = net.createServer();
+    const done = (ok, err) => {
+      try {
+        srv.close(() => resolve({ ok, err }));
+      } catch {
+        resolve({ ok, err });
+      }
+    };
+    srv.once('error', (err) => done(false, err));
+    srv.listen(0, tailscaleIp, () => done(true, null));
+  });
+  if (!canBind.ok) {
+    const code = canBind.err && typeof canBind.err === 'object' ? canBind.err.code : '';
+    const msg = canBind.err instanceof Error ? canBind.err.message : String(canBind.err ?? '');
+    const hint =
+      code === 'EADDRNOTAVAIL'
+        ? `Tailscale IP ${tailscaleIp} is not bindable on this machine (EADDRNOTAVAIL).`
+        : `Tailscale IP ${tailscaleIp} is not bindable (${code || 'error'}).`;
+    return { ok: false, error: `${hint}${msg ? ` ${msg}` : ''}`.trim() };
   }
 
   // Determine where Expo binds (LAN IP when host=lan, localhost otherwise)
@@ -87,11 +115,37 @@ export async function startExpoTailscaleForwarder({ metroPort, baseEnv, stackNam
   const outPrefix = `[${label}] `;
   forwarderProc.stdout?.on('data', (d) => process.stdout.write(outPrefix + d.toString()));
   forwarderProc.stderr?.on('data', (d) => process.stderr.write(outPrefix + d.toString()));
-  forwarderProc.on('exit', (code, sig) => {
-    if (code !== 0 && code !== null) {
-      process.stderr.write(`[${label}] exited (code=${code}, sig=${sig})\n`);
-    }
+
+  // Wait until the forwarder actually starts listening (or fails) before declaring success.
+  const ready = await new Promise((resolve) => {
+    const t = setTimeout(() => resolve({ ok: false, error: 'forwarder startup timed out' }), 2000);
+    const done = (res) => {
+      clearTimeout(t);
+      resolve(res);
+    };
+    forwarderProc.once('message', (m) => {
+      if (m && typeof m === 'object' && m.type === 'ready') {
+        done({ ok: true });
+      } else if (m && typeof m === 'object' && m.type === 'error') {
+        done({ ok: false, error: m.message ? String(m.message) : 'failed to start' });
+      }
+    });
+    forwarderProc.once('exit', (code, sig) => {
+      done({ ok: false, error: `exited (code=${code}, sig=${sig})` });
+    });
+    forwarderProc.once('error', (e) => {
+      done({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    });
   });
+
+  if (!ready.ok) {
+    try {
+      forwarderProc.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+    return { ok: false, error: ready.error || 'failed to start forwarder' };
+  }
 
   children.push(forwarderProc);
 

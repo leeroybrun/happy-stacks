@@ -18,14 +18,24 @@ function hasScript(scripts, name) {
 }
 
 export function isUnifiedHappyServerLight({ serverDir }) {
-  return existsSync(join(serverDir, 'prisma', 'schema.sqlite.prisma'));
+  return (
+    existsSync(join(serverDir, 'prisma', 'sqlite', 'schema.prisma')) ||
+    existsSync(join(serverDir, 'prisma', 'schema.sqlite.prisma'))
+  );
 }
 
-export function resolveServerLightPrismaDbPushArgs({ serverDir }) {
-  if (isUnifiedHappyServerLight({ serverDir })) {
-    return ['db', 'push', '--schema', 'prisma/schema.sqlite.prisma'];
+export function resolveServerLightPrismaSchemaArgs({ serverDir }) {
+  if (existsSync(join(serverDir, 'prisma', 'sqlite', 'schema.prisma'))) {
+    return ['--schema', 'prisma/sqlite/schema.prisma'];
   }
-  return ['db', 'push'];
+  if (existsSync(join(serverDir, 'prisma', 'schema.sqlite.prisma'))) {
+    return ['--schema', 'prisma/schema.sqlite.prisma'];
+  }
+  return [];
+}
+
+export function resolveServerLightPrismaMigrateDeployArgs({ serverDir }) {
+  return ['migrate', 'deploy', ...resolveServerLightPrismaSchemaArgs({ serverDir })];
 }
 
 export function resolveServerLightPrismaClientImport({ serverDir }) {
@@ -34,6 +44,14 @@ export function resolveServerLightPrismaClientImport({ serverDir }) {
   }
   const clientPath = join(serverDir, 'generated', 'sqlite-client', 'index.js');
   return pathToFileURL(clientPath).href;
+}
+
+export function resolvePrismaClientImportForServerComponent({ serverComponentName, serverComponent, serverDir }) {
+  const name = serverComponentName ?? serverComponent;
+  if (name === 'happy-server-light') {
+    return resolveServerLightPrismaClientImport({ serverDir });
+  }
+  return '@prisma/client';
 }
 
 export function resolveServerDevScript({ serverComponentName, serverDir, prismaPush }) {
@@ -46,13 +64,16 @@ export function resolveServerDevScript({ serverComponentName, serverDir, prismaP
   if (serverComponentName === 'happy-server-light') {
     const unified = isUnifiedHappyServerLight({ serverDir });
     if (unified) {
-      if (prismaPush) {
-        return hasScript(scripts, 'dev:light') ? 'dev:light' : 'dev';
+      // Server-light now relies on deterministic migrations (not db push).
+      // Prefer the dedicated dev script that runs migrate deploy before starting.
+      if (hasScript(scripts, 'dev:light')) {
+        return 'dev:light';
       }
+      // Fallback: no dev script, run the light start script.
       return hasScript(scripts, 'start:light') ? 'start:light' : 'start';
     }
 
-    // Legacy behavior: happy-server-light uses `dev` by default for the upstream db push loop.
+    // Legacy behavior: prefer `dev` for older happy-server-light checkouts.
     if (prismaPush) {
       return hasScript(scripts, 'dev') ? 'dev' : 'start';
     }
