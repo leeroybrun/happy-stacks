@@ -31,7 +31,9 @@ jobs:
               run: pnpm install --frozen-lockfile
 
             - name: Build
-              run: pnpm run build
+              # CI does not have component repos under components/ (and we don't want to clone/build them here).
+              # This still validates that the build command wiring works.
+              run: pnpm run build -- --no-ui
 
             - name: CLI smoke (help)
               run: |

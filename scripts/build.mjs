@@ -61,9 +61,6 @@ async function main() {
   // but still require a "build" step.
   const skipUi = flags.has('--no-ui');
 
-  const uiDir = getComponentDir(rootDir, 'happy');
-  await requireDir('happy', uiDir);
-
   const serverPort = resolveServerPortFromEnv({ env: process.env, defaultPort: 3005 });
 
   // For Tauri builds we embed an explicit API base URL (tauri:// origins cannot use window.location.origin).
@@ -87,6 +84,9 @@ async function main() {
     }
     return;
   }
+
+  const uiDir = getComponentDir(rootDir, 'happy');
+  await requireDir('happy', uiDir);
 
   await ensureDepsInstalled(uiDir, 'happy');
 
