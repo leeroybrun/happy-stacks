@@ -12,7 +12,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
-import { bold, cyan, dim } from './utils/ui/ansi.mjs';
+import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
 
 /**
  * Install/setup the local stack:
@@ -177,7 +177,7 @@ async function interactiveWizard({ rootDir, defaults }) {
     const repoSource = await promptSelect(rl, {
       title: `${bold('Repo source')}\n${dim('Where should Happy Stacks clone the component repos from?')}`,
       options: [
-        { label: `${cyan('forks')} (default, recommended)`, value: 'forks' },
+        { label: `${cyan('forks')} (${green('recommended')}) — works best with Happy Stacks features`, value: 'forks' },
         { label: `${cyan('upstream')} (slopus/*)`, value: 'upstream' },
       ],
       defaultIndex: defaults.repoSource === 'upstream' ? 1 : 0,
@@ -193,8 +193,8 @@ async function interactiveWizard({ rootDir, defaults }) {
     const serverMode = await promptSelect(rl, {
       title: `${bold('Server components')}\n${dim('Choose which server repo(s) to clone and install deps for.')}`,
       options: [
-        { label: `${cyan('happy-server-light')} only (default)`, value: 'happy-server-light' },
-        { label: `${cyan('happy-server')} only (full server)`, value: 'happy-server' },
+        { label: `${cyan('happy-server-light')} only (${green('recommended')})`, value: 'happy-server-light' },
+        { label: `${cyan('happy-server')} only — full server (Docker-managed infra)`, value: 'happy-server' },
         { label: `both (${cyan('server-light')} + ${cyan('full server')})`, value: 'both' },
       ],
       defaultIndex: defaults.serverComponentName === 'both' ? 2 : defaults.serverComponentName === 'happy-server' ? 1 : 0,
@@ -224,7 +224,7 @@ async function interactiveWizard({ rootDir, defaults }) {
       title: `${bold('Desktop app (optional)')}\n${dim('Build the Tauri desktop app as part of setup? (slow; requires extra toolchain)')}`,
       options: [
         { label: 'no (default)', value: false },
-        { label: 'yes', value: true },
+        { label: `yes ${dim('(slow)')} — build desktop app`, value: true },
       ],
       defaultIndex: defaults.buildTauri ? 1 : 0,
     });
@@ -232,7 +232,7 @@ async function interactiveWizard({ rootDir, defaults }) {
     const configureGit = await promptSelect(rl, {
       title: `${bold('Git remotes')}\n${dim('Configure upstream remotes and create/update mirror branches (e.g. slopus/main)?')}`,
       options: [
-        { label: 'yes (default)', value: true },
+        { label: `yes (default) — enables ${cyan('happys wt sync-all')} and mirror branches`, value: true },
         { label: 'no', value: false },
       ],
       defaultIndex: 0,

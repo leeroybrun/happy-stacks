@@ -33,6 +33,14 @@ export function yellow(s) {
   return wrap('33', s);
 }
 
+export function blue(s) {
+  return wrap('34', s);
+}
+
+export function magenta(s) {
+  return wrap('35', s);
+}
+
 export function cyan(s) {
   return wrap('36', s);
 }

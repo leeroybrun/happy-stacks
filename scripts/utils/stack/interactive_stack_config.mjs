@@ -1,8 +1,9 @@
 import { join, resolve } from 'node:path';
 
-import { prompt, promptWorktreeSource } from '../cli/wizard.mjs';
+import { prompt, promptSelect, promptWorktreeSource } from '../cli/wizard.mjs';
 import { coerceHappyMonorepoRootFromPath, getComponentsDir } from '../paths/paths.mjs';
 import { resolveComponentSpecToDir } from '../git/worktrees.mjs';
+import { bold, cyan, dim, green } from '../ui/ansi.mjs';
 
 function wantsNo(raw) {
   const v = String(raw ?? '').trim().toLowerCase();
@@ -23,12 +24,19 @@ function resolveHappySpecDir({ rootDir, spec }) {
 
 export async function interactiveNew({ rootDir, rl, defaults, deps = {} }) {
   const promptFn = deps.prompt ?? prompt;
+  const promptSelectFn = deps.promptSelect ?? promptSelect;
   const promptWorktreeSourceFn = deps.promptWorktreeSource ?? promptWorktreeSource;
 
   const out = { ...defaults };
 
   if (!out.stackName) {
-    out.stackName = (await rl.question('Stack name: ')).trim();
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Create a stack'));
+    // eslint-disable-next-line no-console
+    console.log(dim('Stacks are isolated local environments (ports + dirs + DB + CLI home).'));
+    out.stackName = (await rl.question(`${dim('Stack name')}: `)).trim();
   }
   if (!out.stackName) {
     throw new Error('[stack] stack name is required');
@@ -38,17 +46,35 @@ export async function interactiveNew({ rootDir, rl, defaults, deps = {} }) {
   }
 
   if (!out.serverComponent) {
-    const server = (await rl.question('Server component [happy-server-light|happy-server] (default: happy-server-light): ')).trim();
-    out.serverComponent = server || 'happy-server-light';
+    out.serverComponent = await promptSelectFn(rl, {
+      title: `${bold('Server flavor')}\n${dim('Pick the backend this stack should run. You can switch later with `stack srv`.')}`,
+      options: [
+        { label: `happy-server-light (${green('recommended')}) — simplest local install (SQLite)`, value: 'happy-server-light' },
+        { label: `happy-server — full server (Postgres/Redis/Minio via Docker)`, value: 'happy-server' },
+      ],
+      defaultIndex: 0,
+    });
   }
 
   if (!out.port) {
-    const want = (await rl.question('Port (empty = ephemeral): ')).trim();
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Ports'));
+    // eslint-disable-next-line no-console
+    console.log(dim('Tip: leaving this empty uses an ephemeral port (recommended for non-main stacks).'));
+    const want = (await rl.question(`${dim('Port')} (empty = ephemeral): `)).trim();
     out.port = want ? Number(want) : null;
   }
 
   if (!out.createRemote) {
-    out.createRemote = await promptFn(rl, 'Git remote for creating new worktrees (default: upstream): ', { defaultValue: 'upstream' });
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Worktrees'));
+    // eslint-disable-next-line no-console
+    console.log(dim(`New worktrees are typically based on ${cyan('upstream')} (clean PR history).`));
+    out.createRemote = await promptFn(rl, `${dim('Git remote for new worktrees')} (default: upstream): `, { defaultValue: 'upstream' });
   }
 
   if (out.components.happy == null) {
@@ -67,10 +93,16 @@ export async function interactiveNew({ rootDir, rl, defaults, deps = {} }) {
   let deriveMonorepoGroup = false;
 
   if (canDeriveMonorepoGroup) {
-    const ans = await promptFn(rl, 'Detected happy monorepo checkout. Derive happy-cli + happy-server from it? [Y/n]: ', {
-      defaultValue: 'y',
+    deriveMonorepoGroup = await promptSelectFn(rl, {
+      title: `${bold('Monorepo mode detected')}\n${dim(
+        `This ${cyan('happy')} checkout contains ${cyan('expo-app/')}, ${cyan('cli/')}, and ${cyan('server/')}.`
+      )}\n${dim('Recommended: derive CLI + server from the same monorepo checkout to avoid version skew.')}`,
+      options: [
+        { label: `yes (${green('recommended')}) — derive happy-cli + happy-server from this checkout`, value: true },
+        { label: `no — pick CLI/server worktrees separately`, value: false },
+      ],
+      defaultIndex: 0,
     });
-    deriveMonorepoGroup = !wantsNo(ans);
   }
 
   if (deriveMonorepoGroup) {
@@ -111,23 +143,36 @@ export async function interactiveNew({ rootDir, rl, defaults, deps = {} }) {
 
 export async function interactiveEdit({ rootDir, rl, stackName, existingEnv, defaults, deps = {} }) {
   const promptFn = deps.prompt ?? prompt;
+  const promptSelectFn = deps.promptSelect ?? promptSelect;
   const promptWorktreeSourceFn = deps.promptWorktreeSource ?? promptWorktreeSource;
 
   const out = { ...defaults, stackName };
 
   const currentServer = existingEnv.HAPPY_STACKS_SERVER_COMPONENT ?? existingEnv.HAPPY_LOCAL_SERVER_COMPONENT ?? '';
-  const server = await promptFn(rl, `Server component [happy-server-light|happy-server] (default: ${currentServer || 'happy-server-light'}): `, {
-    defaultValue: currentServer || 'happy-server-light',
+  out.serverComponent = await promptSelectFn(rl, {
+    title: `${bold('Server flavor')}\n${dim('Pick the backend this stack should run. You can switch again later.')}`,
+    options: [
+      { label: `happy-server-light (${green('recommended')}) — simplest local install (SQLite)`, value: 'happy-server-light' },
+      { label: `happy-server — full server (Postgres/Redis/Minio via Docker)`, value: 'happy-server' },
+    ],
+    defaultIndex: (currentServer || 'happy-server-light') === 'happy-server' ? 1 : 0,
   });
-  out.serverComponent = server || 'happy-server-light';
 
   const currentPort = existingEnv.HAPPY_STACKS_SERVER_PORT ?? existingEnv.HAPPY_LOCAL_SERVER_PORT ?? '';
-  const wantPort = await promptFn(rl, `Port (empty = keep ${currentPort || 'ephemeral'}; type 'ephemeral' to unpin): `, { defaultValue: '' });
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(bold('Ports'));
+  const wantPort = await promptFn(rl, `${dim(`Port`)} (empty = keep ${currentPort || 'ephemeral'}; type 'ephemeral' to unpin): `, { defaultValue: '' });
   const wantTrimmed = wantPort.trim().toLowerCase();
   out.port = wantTrimmed === 'ephemeral' ? null : wantPort ? Number(wantPort) : currentPort ? Number(currentPort) : null;
 
   const currentRemote = existingEnv.HAPPY_STACKS_STACK_REMOTE ?? existingEnv.HAPPY_LOCAL_STACK_REMOTE ?? '';
-  out.createRemote = await promptFn(rl, `Git remote for creating new worktrees (default: ${currentRemote || 'upstream'}): `, {
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(bold('Worktrees'));
+  out.createRemote = await promptFn(rl, `${dim('Git remote for new worktrees')} (default: ${currentRemote || 'upstream'}): `, {
     defaultValue: currentRemote || 'upstream',
   });
 
@@ -144,10 +189,14 @@ export async function interactiveEdit({ rootDir, rl, stackName, existingEnv, def
   const canDeriveMonorepoGroup = Boolean(happyMonoRoot) || happyIsCreate;
   let deriveMonorepoGroup = false;
   if (canDeriveMonorepoGroup) {
-    const ans = await promptFn(rl, 'Detected happy monorepo checkout. Derive happy-cli + happy-server from it? [Y/n]: ', {
-      defaultValue: 'y',
+    deriveMonorepoGroup = await promptSelectFn(rl, {
+      title: `${bold('Monorepo mode detected')}\n${dim('Recommended: derive CLI + server from the same monorepo checkout to avoid version skew.')}`,
+      options: [
+        { label: `yes (${green('recommended')}) — derive happy-cli + happy-server`, value: true },
+        { label: `no — pick CLI/server worktrees separately`, value: false },
+      ],
+      defaultIndex: 0,
     });
-    deriveMonorepoGroup = !wantsNo(ans);
   }
 
   if (deriveMonorepoGroup) {

@@ -90,7 +90,14 @@ If you want to **develop Happy** (worktrees, multiple stacks, upstream PR workfl
 npx happy-stacks setup --profile=dev
 ```
 
-During setup, you’ll be asked where to store your **workspace** (the folder that will contain `components/` and `components/.worktrees/`).
+During setup, you’ll be guided through:
+
+- where to store your **workspace** (the folder that will contain `components/` and `components/.worktrees/`)
+- bootstrapping/cloning the component repos
+- **recommended**: setting up a dedicated `dev-auth` seed stack (authenticate once, then new stacks can reuse it)
+- **recommended**: creating a dedicated dev stack (keep `main` stable)
+- optional: installing the iOS dev-client app (for phone testing)
+
 You can also set it non-interactively:
 
 ```bash

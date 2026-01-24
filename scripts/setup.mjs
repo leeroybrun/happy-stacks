@@ -12,7 +12,6 @@ import { run, runCapture } from './utils/proc/proc.mjs';
 import { waitForHappyHealthOk } from './utils/server/server.mjs';
 import { tailscaleServeEnable, tailscaleServeHttpsUrlForInternalServerUrl } from './tailscale.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
-import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { installService } from './service.mjs';
 import { getDevAuthKeyPath } from './utils/auth/dev_key.mjs';
@@ -21,13 +20,13 @@ import { boolFromFlags, boolFromFlagsOrKv } from './utils/cli/flags.mjs';
 import { normalizeProfile, normalizeServerComponent } from './utils/cli/normalize.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
 import { commandExists } from './utils/proc/commands.mjs';
-import { readEnvValueFromFile } from './utils/env/read.mjs';
 import { readServerPortFromEnvFile, resolveServerPortFromEnv } from './utils/server/port.mjs';
-import { guidedStackWebSignupThenLogin } from './utils/auth/guided_stack_web_login.mjs';
+import { guidedStackAuthLoginNow } from './utils/auth/stack_guided_login.mjs';
 import { getVerbosityLevel } from './utils/cli/verbosity.mjs';
 import { runCommandLogged } from './utils/cli/progress.mjs';
-import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
+import { bold, cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
+import { listAllStackNames } from './utils/stack/stacks.mjs';
 
 function resolveWorkspaceDirDefault() {
   const explicit = (process.env.HAPPY_STACKS_WORKSPACE_DIR ?? process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? '').toString().trim();
@@ -41,25 +40,6 @@ function normalizeWorkspaceDirInput(raw, { homeDir }) {
   if (!expanded) return '';
   // If relative, treat it as relative to the home dir (same rule as init.mjs).
   return expanded.startsWith('/') ? expanded : join(homeDir, expanded);
-}
-
-async function resolveMainWebappUrlForAuth({ rootDir, port }) {
-  try {
-    const raw = await runCapture(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), 'login', '--print', '--json'], {
-      cwd: rootDir,
-      env: {
-        ...process.env,
-        HAPPY_STACKS_SERVER_PORT: String(port),
-        HAPPY_LOCAL_SERVER_PORT: String(port),
-      },
-    });
-    const parsed = JSON.parse(String(raw ?? '').trim());
-    const cmd = typeof parsed?.cmd === 'string' ? parsed.cmd : '';
-    const m = cmd.match(/HAPPY_WEBAPP_URL="([^"]+)"/);
-    return m?.[1] ? String(m[1]) : '';
-  } catch {
-    return '';
-  }
 }
 
 async function resolveMainServerPort() {
@@ -164,93 +144,98 @@ function detectAuthSources() {
 
 async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
   if (!interactive) return;
+  if (profile !== 'dev') return;
 
   const sources = detectAuthSources();
+  const autoSeedEnabled =
+    (process.env.HAPPY_STACKS_AUTO_AUTH_SEED ?? process.env.HAPPY_LOCAL_AUTO_AUTH_SEED ?? '').toString().trim() === '1';
+  const seedFrom = (process.env.HAPPY_STACKS_AUTH_SEED_FROM ?? process.env.HAPPY_LOCAL_AUTH_SEED_FROM ?? '').toString().trim();
+  const linkMode =
+    (process.env.HAPPY_STACKS_AUTH_LINK ?? process.env.HAPPY_LOCAL_AUTH_LINK ?? '').toString().trim() === '1' ||
+    (process.env.HAPPY_STACKS_AUTH_MODE ?? process.env.HAPPY_LOCAL_AUTH_MODE ?? '').toString().trim().toLowerCase() === 'link';
 
-  // 1) Dev key reuse (preferred: reuse if present).
-  if (sources.hasDevKey) {
+  // If we already have dev-auth seeded and configured, don't ask redundant questions.
+  // (User can always re-run setup or use stack/auth commands to change this.)
+  const alreadyConfiguredDevAuth = autoSeedEnabled && seedFrom === 'dev-auth' && sources.hasDevAuthAccessKey;
+  if (alreadyConfiguredDevAuth) {
     // eslint-disable-next-line no-console
-    console.log(`[setup] dev-key: detected (${sources.devKeyPath})`);
-    const choice = await withRl(async (rl) => {
-      return await promptSelect(rl, {
-        title:
-          'A dev key is already configured on this machine. Reuse it? (recommended for restoring the UI account)',
-        options: [
-          { label: 'yes (default) — keep using the existing dev key', value: 'reuse' },
-          { label: 'print it now (will display a secret key)', value: 'print' },
-          { label: 'skip', value: 'skip' },
-        ],
-        defaultIndex: 0,
-      });
-    });
-    if (choice === 'print') {
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Authentication (development)'));
+    // eslint-disable-next-line no-console
+    console.log(`${green('✓')} dev-auth auth seeding is already configured`);
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Seed from:')} ${cyan('dev-auth')}`);
+    // eslint-disable-next-line no-console
+    console.log(`${dim('Mode:')} ${linkMode ? 'symlink' : 'copy'}`);
+    if (sources.hasDevKey) {
       // eslint-disable-next-line no-console
-      console.log('[setup] dev-key: printing (sensitive)');
-      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['dev-key', '--print'] });
+      console.log(`${dim('Dev key:')} configured`);
     }
-  } else if (profile === 'dev') {
-    // No dev key: offer to create a dedicated seed stack, which guides generating/saving one.
-    const create = await withRl(async (rl) => {
-      return await promptSelect(rl, {
-        title: 'No dev key found. Create one now via a dedicated dev-auth seed stack?',
-        options: [
-          { label: 'yes (recommended)', value: true },
-          { label: 'no', value: false },
-        ],
-        defaultIndex: 0,
-      });
-    });
-    if (create) {
-      await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth'] });
-    }
+    // If a user wants to change or recreate:
+    // eslint-disable-next-line no-console
+    console.log(dim(`Tip: to recreate the seed stack, run: ${yellow('happys stack create-dev-auth-seed')}`));
+    return;
   }
 
-  // 2) Default auth seeding source for NEW stacks (ordering requested):
-  // - prefer dev-auth if we have a dev key (or dev-auth is already set up)
-  // - else prefer main happy-stacks (if authenticated)
-  // - else prefer legacy ~/.happy (if present)
-  const opts = [];
-  if (sources.hasDevKey && sources.hasDevAuthAccessKey) {
-    opts.push({ label: 'use dev-auth seed stack (recommended)', value: 'dev-auth' });
-  }
-  if (!sources.hasDevAuthAccessKey && sources.hasDevKey && existsSync(resolveStackEnvPath('dev-auth').envPath)) {
-    opts.push({ label: 'use dev-auth seed stack (exists but not authenticated yet)', value: 'dev-auth' });
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(bold('Authentication (development)'));
+  // eslint-disable-next-line no-console
+  console.log(
+    dim(
+      `Recommended: set up a dedicated ${cyan('dev-auth')} seed stack so you authenticate once, then new stacks “just work”.`
+    )
+  );
+
+  const options = [];
+  if (sources.hasDevAuthAccessKey) {
+    options.push({
+      label: `${green('✓')} use ${cyan('dev-auth')} seed stack (${green('recommended')}) — already authenticated`,
+      value: 'use-dev-auth',
+    });
+  } else {
+    options.push({
+      label: `create ${cyan('dev-auth')} seed stack (${green('recommended')}) — login once, reuse across stacks`,
+      value: 'create-dev-auth',
+    });
   }
   if (sources.hasMainAccessKey) {
-    opts.push({ label: 'use Happy Stacks main (copy/symlink from main stack)', value: 'main' });
+    options.push({ label: `use ${cyan('main')} as seed — fast, but shares identity with main`, value: 'main' });
   }
   if (sources.hasLegacyAccessKey) {
-    opts.push({ label: 'use legacy ~/.happy (best-effort)', value: 'legacy' });
+    options.push({ label: `use legacy ${cyan('~/.happy')} as seed — best-effort`, value: 'legacy' });
   }
-  opts.push({ label: 'disable auto-seeding (I will login per stack)', value: 'off' });
+  options.push({ label: `skip for now — you can do this later`, value: 'skip' });
 
-  const defaultSeed = opts[0]?.value ?? 'off';
-  const seedChoice = await withRl(async (rl) => {
+  const choice = await withRl(async (rl) => {
     return await promptSelect(rl, {
-      title: 'Default auth source for new stacks (so PR stacks can work without re-login)?',
-      options: opts,
-      defaultIndex: Math.max(0, opts.findIndex((o) => o.value === defaultSeed)),
+      title: bold('Choose an auth strategy'),
+      options,
+      defaultIndex: 0,
     });
   });
 
-  if (seedChoice === 'off') {
-    await ensureEnvLocalUpdated({
-      rootDir,
-      updates: [
-        { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '0' },
-        { key: 'HAPPY_LOCAL_AUTO_AUTH_SEED', value: '0' },
-      ],
-    });
+  if (choice === 'skip') {
+    // eslint-disable-next-line no-console
+    console.log(dim(`Tip: run ${yellow('happys stack create-dev-auth-seed')} anytime to set this up.`));
     return;
+  }
+
+  const seedChoice = choice === 'create-dev-auth' || choice === 'use-dev-auth' ? 'dev-auth' : String(choice);
+  if (choice === 'create-dev-auth') {
+    // Guided wizard: creates stack, starts temporary UI/server, saves dev key (optional), logs in CLI.
+    await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth'] });
   }
 
   // Symlink vs copy for seeded stacks (preferred: symlink so credentials stay up to date).
   const linkChoice = await withRl(async (rl) => {
     return await promptSelect(rl, {
-      title: 'When seeding auth into stacks, reuse credentials via symlink or copy?',
+      title: `${bold('Auth seeding mode')}\n${dim('When seeding credentials into stacks, should we symlink or copy?')}`,
       options: [
-        { label: 'reuse (recommended) — symlink so it stays up to date', value: 'link' },
-        { label: 'copy — more isolated per stack', value: 'copy' },
+        { label: `symlink (${green('recommended')}) — stays up to date`, value: 'link' },
+        { label: `copy — more isolated per stack`, value: 'copy' },
       ],
       defaultIndex: 0,
     });
@@ -261,12 +246,74 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
     updates: [
       { key: 'HAPPY_STACKS_AUTO_AUTH_SEED', value: '1' },
       { key: 'HAPPY_LOCAL_AUTO_AUTH_SEED', value: '1' },
-      { key: 'HAPPY_STACKS_AUTH_SEED_FROM', value: String(seedChoice) },
-      { key: 'HAPPY_LOCAL_AUTH_SEED_FROM', value: String(seedChoice) },
+      { key: 'HAPPY_STACKS_AUTH_SEED_FROM', value: seedChoice },
+      { key: 'HAPPY_LOCAL_AUTH_SEED_FROM', value: seedChoice },
       { key: 'HAPPY_STACKS_AUTH_LINK', value: linkChoice === 'link' ? '1' : '0' },
       { key: 'HAPPY_LOCAL_AUTH_LINK', value: linkChoice === 'link' ? '1' : '0' },
     ],
   });
+
+  // Optional: seed existing stacks now (useful if the user already has stacks).
+  const allStacks = await listAllStackNames().catch(() => ['main']);
+  const candidateTargets = allStacks.filter((s) => s !== 'main' && s !== seedChoice);
+  if (candidateTargets.length) {
+    const seedNow = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title: `${bold('Seed existing stacks?')}\n${dim(
+          `We found ${candidateTargets.length} existing stack(s) that could reuse auth from ${cyan(seedChoice)}.`
+        )}\n${dim('This can fix “auth required / no machine” without re-login.')}`,
+        options: [
+          { label: 'no (default)', value: false },
+          { label: `yes — seed ${candidateTargets.length} stack(s) now`, value: true },
+        ],
+        defaultIndex: 0,
+      });
+    });
+    if (seedNow) {
+      const except = ['main'];
+      if (seedChoice !== 'main') except.push(seedChoice);
+      const args = [
+        'copy-from',
+        seedChoice,
+        '--all',
+        `--except=${except.join(',')}`,
+        ...(linkChoice === 'link' ? ['--link'] : []),
+      ];
+      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args });
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(dim('No existing stacks detected that need seeding (nothing to do).'));
+  }
+
+  // Dev key UX (for phone/Playwright restores). Keep it explicit because it’s sensitive.
+  const sourcesAfter = detectAuthSources();
+  if (sourcesAfter.hasDevKey) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Dev key (optional, sensitive)'));
+    // eslint-disable-next-line no-console
+    console.log(dim('This lets you restore the UI account quickly (and can help automation).'));
+    // eslint-disable-next-line no-console
+    console.log(dim(`Stored at: ${sourcesAfter.devKeyPath}`));
+    const keyChoice = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title: 'Do you want to print it now?',
+        options: [
+          { label: 'no (default) — keep it private', value: 'skip' },
+          { label: `yes — print dev key (${yellow('will display a secret')})`, value: 'print' },
+        ],
+        defaultIndex: 0,
+      });
+    });
+    if (keyChoice === 'print') {
+      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['dev-key', '--print'] });
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(dim(`Tip: to store a dev key later, run: ${yellow('happys auth dev-key --set "<key>"')}`));
+  }
 }
 
 async function cmdSetup({ rootDir, argv }) {
@@ -340,8 +387,16 @@ async function cmdSetup({ rootDir, argv }) {
   const verbosity = getVerbosityLevel(process.env);
   const quietUi = interactive && verbosity === 0 && !json;
 
-  async function runNodeScriptMaybeQuiet({ label, rel, args = [], env = process.env }) {
-    if (!quietUi) {
+  function isInteractiveChildCommand({ rel, args }) {
+    // If a child command needs to prompt the user, it must inherit stdin/stdout.
+    // Otherwise setup's quiet mode will break the wizard (stdin is intentionally disabled).
+    void rel;
+    return args.some((a) => String(a).trim() === '--interactive');
+  }
+
+  async function runNodeScriptMaybeQuiet({ label, rel, args = [], env = process.env, interactiveChild = null }) {
+    const childIsInteractive = interactiveChild ?? isInteractiveChildCommand({ rel, args });
+    if (!quietUi || childIsInteractive) {
       await run(process.execPath, [join(rootDir, rel), ...args], { cwd: rootDir, env });
       return;
     }
@@ -390,7 +445,9 @@ async function cmdSetup({ rootDir, argv }) {
             `- ${cyan('workspace')}: choose where components + worktrees live`,
             `- ${cyan('init')}: set up Happy Stacks home + shims`,
             `- ${cyan('bootstrap')}: clone/install components + dev tooling`,
-            `- ${cyan('stacks')}: (optional) create an isolated dev stack`,
+            `- ${cyan('auth')}: (recommended) set up a ${cyan('dev-auth')} seed stack (login once, reuse everywhere)`,
+            `- ${cyan('stacks')}: (recommended) create an isolated dev stack (keep main stable)`,
+            `- ${cyan('mobile')}: (optional) install the iOS dev-client (for phone testing)`,
           ],
       '',
     ].flat();
@@ -411,10 +468,10 @@ async function cmdSetup({ rootDir, argv }) {
   if (profile === 'selfhost' && interactive && !serverFromArg) {
     serverComponent = await withRl(async (rl) => {
       const picked = await promptSelect(rl, {
-        title: bold('Server flavor'),
+        title: `${bold('Server flavor')}\n${dim('Pick the backend you want to run locally. You can switch later.')}`,
         options: [
-          { label: 'happy-server-light (recommended; simplest local install)', value: 'happy-server-light' },
-          { label: 'happy-server (full server; managed infra via Docker)', value: 'happy-server' },
+          { label: `happy-server-light (${green('recommended')}) — simplest local install (SQLite)`, value: 'happy-server-light' },
+          { label: `happy-server — full server (Postgres/Redis/Minio via Docker)`, value: 'happy-server' },
         ],
         defaultIndex: serverComponent === 'happy-server' ? 1 : 0,
       });
@@ -474,10 +531,10 @@ async function cmdSetup({ rootDir, argv }) {
     if (profile === 'selfhost') {
       tailscaleWanted = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: bold('Remote access'),
+          title: `${bold('Remote access')}\n${dim('Optional: use Tailscale Serve to get an HTTPS URL for Happy (secure, recommended for phone access).')}`,
           options: [
             { label: 'no (default)', value: false },
-            { label: 'yes', value: true },
+            { label: `yes (${green('recommended for phone')}) — enable Tailscale Serve`, value: true },
           ],
           defaultIndex: tailscaleWanted ? 1 : 0,
         });
@@ -487,7 +544,7 @@ async function cmdSetup({ rootDir, argv }) {
       if (supportsAutostart) {
         autostartWanted = await withRl(async (rl) => {
           const v = await promptSelect(rl, {
-            title: bold('Autostart'),
+            title: `${bold('Autostart')}\n${dim('Optional: start Happy automatically at login (launchd/systemd user service).')}`,
             options: [
               { label: 'no (default)', value: false },
               { label: 'yes', value: true },
@@ -503,7 +560,7 @@ async function cmdSetup({ rootDir, argv }) {
       if (supportsMenubar) {
         menubarWanted = await withRl(async (rl) => {
           const v = await promptSelect(rl, {
-            title: bold('Menu bar (macOS)'),
+            title: `${bold('Menu bar (macOS)')}\n${dim('Optional: install the SwiftBar menu to control stacks quickly.')}`,
             options: [
               { label: 'no (default)', value: false },
               { label: 'yes', value: true },
@@ -518,7 +575,7 @@ async function cmdSetup({ rootDir, argv }) {
 
       startNow = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: bold('Start now'),
+          title: `${bold('Start now')}\n${dim('Recommended: start Happy immediately so you can verify it works.')}`,
           options: [
             { label: 'yes (default)', value: true },
             { label: 'no', value: false },
@@ -530,9 +587,9 @@ async function cmdSetup({ rootDir, argv }) {
 
       authWanted = await withRl(async (rl) => {
         const v = await promptSelect(rl, {
-          title: bold('Authentication'),
+          title: `${bold('Authentication')}\n${dim('Recommended: login now so the daemon can register this machine and you can use Happy from other devices.')}`,
           options: [
-            { label: 'yes (default) — enables Happy UI + mobile access', value: true },
+            { label: `yes (${green('recommended')}) — login now`, value: true },
             { label: 'no — I will authenticate later', value: false },
           ],
           defaultIndex: authWanted ? 0 : 1,
@@ -545,23 +602,8 @@ async function cmdSetup({ rootDir, argv }) {
         startNow = true;
       }
     } else if (profile === 'dev') {
-      // In dev profile, we don't assume you want to run anything immediately.
-      // If you choose to auth now, we’ll also start Happy in the background so login can complete.
-      const authNow = await withRl(async (rl) => {
-        const v = await promptSelect(rl, {
-          title: bold('Authentication (optional)'),
-          options: [
-            { label: 'no (default) — I will do this later', value: false },
-            { label: 'yes — start Happy in background and login', value: true },
-          ],
-          defaultIndex: 0,
-        });
-        return v;
-      });
-      authWanted = authNow;
-      if (authNow) {
-        startNow = true;
-      }
+      // Dev profile: auth is handled later (after bootstrap) so we can offer the recommended
+      // dev-auth seed stack flow (and optional mobile dev-client install).
     }
 
     installPath = await withRl(async (rl) => {
@@ -569,7 +611,7 @@ async function cmdSetup({ rootDir, argv }) {
         title: bold('Shell PATH'),
         options: [
           { label: `no (default) — you can run via npx / full path`, value: false },
-          { label: `yes — add ${join(getCanonicalHomeDir(), 'bin')} to your PATH`, value: true },
+          { label: `yes — add ${cyan(join(getCanonicalHomeDir(), 'bin'))} to your PATH`, value: true },
         ],
         defaultIndex: installPath ? 1 : 0,
       });
@@ -601,6 +643,23 @@ async function cmdSetup({ rootDir, argv }) {
     return;
   }
 
+  if (interactive && process.stdout.isTTY) {
+    const summary = [
+      '',
+      bold('Ready to set up'),
+      `${dim('Profile:')} ${cyan(profile)}`,
+      ...(profile === 'dev' && workspaceDirWanted ? [`${dim('Workspace:')} ${cyan(workspaceDirWanted)}`] : []),
+      ...(profile === 'selfhost' ? [`${dim('Server:')} ${cyan(serverComponent)}`] : []),
+      '',
+      bold('Press Enter to begin') + dim(' (or Ctrl+C to cancel).'),
+    ].join('\n');
+    // eslint-disable-next-line no-console
+    console.log(summary);
+    await withRl(async (rl) => {
+      await prompt(rl, '', { defaultValue: '' });
+    });
+  }
+
   // 1) Ensure plumbing exists (runtime + shims + pointer env). Avoid auto-bootstrap here; setup drives bootstrap explicitly.
   await runNodeScriptMaybeQuiet({
     label: 'init happy-stacks home',
@@ -625,26 +684,65 @@ async function cmdSetup({ rootDir, argv }) {
   // 3) Bootstrap components. Selfhost defaults to upstream; dev defaults to existing bootstrap wizard (forks by default).
   if (profile === 'dev') {
     // Developer setup: keep the existing bootstrap wizard.
-    await runNodeScriptMaybeQuiet({ label: 'bootstrap components', rootDir, rel: 'scripts/install.mjs', args: ['--interactive'] });
+    await runNodeScriptMaybeQuiet({
+      label: 'bootstrap components',
+      rootDir,
+      rel: 'scripts/install.mjs',
+      args: ['--interactive'],
+      interactiveChild: true,
+    });
 
-    // Optional: offer to create a dedicated dev stack (keeps main stable).
     if (interactive) {
+      // Recommended: dev-auth seed stack setup (login once, reuse across stacks).
+      await maybeConfigureAuthDefaults({ rootDir, profile, interactive });
+
+      // Recommended: create an isolated dev stack (keeps main stable).
       const createStack = await withRl(async (rl) => {
         return await promptSelect(rl, {
-          title: bold('Stacks'),
+          title: `${bold('Stacks')}\n${dim('Recommended: keep main stable by doing dev work in a dedicated stack.')}`,
           options: [
-            { label: 'no (default)', value: false },
-            { label: 'yes', value: true },
+            { label: `yes (${green('recommended')}) — create a new development stack`, value: true },
+            { label: `no — I will use ${cyan('main')} for now`, value: false },
           ],
           defaultIndex: 0,
         });
       });
       if (createStack) {
-        await runNodeScriptMaybeQuiet({ label: 'create dev stack', rootDir, rel: 'scripts/stack.mjs', args: ['new', '--interactive'] });
+        await runNodeScriptMaybeQuiet({
+          label: 'create dev stack',
+          rootDir,
+          rel: 'scripts/stack.mjs',
+          args: ['new', '--interactive'],
+          interactiveChild: true,
+        });
       }
 
-      // Guided maintainer-friendly auth defaults (dev key → main → legacy).
-      await maybeConfigureAuthDefaults({ rootDir, profile, interactive });
+      // Optional: mobile dev-client install (macOS only).
+      if (process.platform === 'darwin') {
+        const installMobile = await withRl(async (rl) => {
+          return await promptSelect(rl, {
+            title: `${bold('Mobile (iOS)')}\n${dim('Optional: install the shared Happy Stacks dev-client app on your iPhone (install once, reuse across stacks).')}`,
+            options: [
+              { label: 'no (default)', value: false },
+              { label: `yes — install iOS dev-client (${yellow('requires Xcode + CocoaPods')})`, value: true },
+            ],
+            defaultIndex: 0,
+          });
+        });
+        if (installMobile) {
+          await runNodeScriptMaybeQuiet({
+            label: 'install iOS dev-client',
+            rootDir,
+            rel: 'scripts/mobile_dev_client.mjs',
+            args: ['--install'],
+          });
+          // eslint-disable-next-line no-console
+          console.log(dim(`Tip: run any stack with ${yellow('--mobile')} to get a QR code / deep link for your phone.`));
+        }
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(dim(`Tip: iOS dev-client install is macOS-only. You can still use the web UI on mobile via Tailscale.`));
+      }
     }
   } else {
     // Selfhost setup: run non-interactively and keep it simple.
@@ -725,27 +823,22 @@ async function cmdSetup({ rootDir, argv }) {
 
     // 8) Optional: auth login (runs interactive browser flow via happy-cli).
     if (authWanted) {
-      const ctx = profile === 'selfhost' ? 'selfhost' : 'dev';
       const cliHomeDir = mainCliHomeDirForEnvPath(resolveStackEnvPath('main').envPath);
       const accessKey = join(cliHomeDir, 'access.key');
       if (existsSync(accessKey)) {
         // eslint-disable-next-line no-console
         console.log('[setup] auth: already configured (access.key exists)');
       } else {
+        const env = {
+          ...process.env,
+          HAPPY_STACKS_SERVER_PORT: String(port),
+          HAPPY_LOCAL_SERVER_PORT: String(port),
+        };
         if (interactive) {
-          const webappUrl = await resolveMainWebappUrlForAuth({ rootDir, port });
-          await guidedStackWebSignupThenLogin({ webappUrl, stackName: 'main' });
+          await guidedStackAuthLoginNow({ rootDir, stackName: 'main', env });
+        } else {
+          await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['auth', 'main', '--', 'login'], env });
         }
-        await runNodeScript({
-          rootDir,
-          rel: 'scripts/auth.mjs',
-          args: ['login', `--context=${ctx}`, '--quiet'],
-          env: {
-            ...process.env,
-            HAPPY_STACKS_SERVER_PORT: String(port),
-            HAPPY_LOCAL_SERVER_PORT: String(port),
-          },
-        });
 
         if (!existsSync(accessKey)) {
           // eslint-disable-next-line no-console
@@ -764,7 +857,7 @@ async function cmdSetup({ rootDir, argv }) {
     // eslint-disable-next-line no-console
     console.log(`[setup] open: ${openTarget}`);
   }
-  if (authWanted && !startNow) {
+  if (profile === 'selfhost' && authWanted && !startNow) {
     // eslint-disable-next-line no-console
     console.log('[setup] auth: skipped because Happy was not started. When ready:');
     // eslint-disable-next-line no-console

@@ -8,20 +8,7 @@ export function normalizeAuthLoginContext(raw) {
   return 'generic';
 }
 
-function supportsAnsi() {
-  if (!process.stdout.isTTY) return false;
-  if (process.env.NO_COLOR) return false;
-  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
-  return true;
-}
-
-function bold(s) {
-  return supportsAnsi() ? `\x1b[1m${s}\x1b[0m` : String(s);
-}
-
-function dim(s) {
-  return supportsAnsi() ? `\x1b[2m${s}\x1b[0m` : String(s);
-}
+import { bold, cyan, dim, green, yellow } from '../ui/ansi.mjs';
 
 export function printAuthLoginInstructions({
   stackName,
@@ -45,51 +32,57 @@ export function printAuthLoginInstructions({
   // eslint-disable-next-line no-console
   console.log('');
   // eslint-disable-next-line no-console
-  console.log(bold('Happy login'));
+  console.log(bold(`${cyan('Happy')} login`));
   if (subtitle) {
     // eslint-disable-next-line no-console
     console.log(dim(subtitle));
   }
   // eslint-disable-next-line no-console
-  console.log('Steps:');
+  console.log('');
   // eslint-disable-next-line no-console
-  console.log('  1) A browser window will open');
+  console.log(bold('What will happen:'));
   // eslint-disable-next-line no-console
-  console.log('  2) Sign in (or create an account if this is your first time)');
+  console.log(`- ${cyan('browser')}: we’ll open the Happy web app`);
   // eslint-disable-next-line no-console
-  console.log('  3) Approve this terminal/machine connection');
+  console.log(`- ${cyan('account')}: you’ll sign in (or create an account)`);
   // eslint-disable-next-line no-console
-  console.log('  4) Return here — the CLI will finish automatically');
+  console.log(`- ${cyan('connect')}: you’ll approve this terminal/machine connection`);
+  // eslint-disable-next-line no-console
+  console.log(`- ${cyan('finish')}: the CLI will complete automatically`);
 
   if (webappUrl) {
     // eslint-disable-next-line no-console
     console.log('');
     // eslint-disable-next-line no-console
-    console.log(`Web app:   ${webappUrl}${webappUrlSource ? ` (${webappUrlSource})` : ''}`);
+    console.log(`${dim('Web app:')}   ${cyan(webappUrl)}${webappUrlSource ? dim(` (${webappUrlSource})`) : ''}`);
   }
   if (internalServerUrl) {
     // eslint-disable-next-line no-console
-    console.log(`Internal:  ${internalServerUrl}`);
+    console.log(`${dim('Internal:')}  ${internalServerUrl}`);
   }
   if (publicServerUrl) {
     // eslint-disable-next-line no-console
-    console.log(`Public:    ${publicServerUrl}`);
+    console.log(`${dim('Public:')}    ${publicServerUrl}`);
   }
 
   if (ctx === 'selfhost') {
     // eslint-disable-next-line no-console
     console.log('');
     // eslint-disable-next-line no-console
-    console.log(dim('Note: this is required so the daemon can register this machine and sync sessions across devices.'));
+    console.log(dim('Why this matters: login lets the daemon register this machine and enables sync across devices.'));
   }
 
   // eslint-disable-next-line no-console
   console.log('');
   // eslint-disable-next-line no-console
-  console.log('Tips:');
+  console.log(bold('Tips:'));
   // eslint-disable-next-line no-console
-  console.log('- If the browser page does not load, make sure Happy is running and reachable.');
+  console.log(`- If the page does not load, make sure the stack is running and reachable.`);
   // eslint-disable-next-line no-console
-  console.log(`- Re-run anytime: ${rerunCmd || 'happys auth login'}`);
+  console.log(`- If you see a blank page, wait for the first build (Expo/Metro) to finish.`);
+  // eslint-disable-next-line no-console
+  console.log(`- Re-run anytime: ${yellow(rerunCmd || 'happys auth login')}`);
+  // eslint-disable-next-line no-console
+  console.log(`${green('✓')} You can safely close the browser when it finishes.`);
 }
 

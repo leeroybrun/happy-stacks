@@ -43,6 +43,7 @@ import { requireDir } from './utils/proc/pm.mjs';
 import { waitForHttpOk } from './utils/server/server.mjs';
 import { resolveLocalhostHost, preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
 import { openUrlInBrowser } from './utils/ui/browser.mjs';
+import { bold, cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 import { copyFileIfMissing, linkFileIfMissing, writeSecretFileIfMissing } from './utils/auth/files.mjs';
 import { getLegacyHappyBaseDir, isLegacyAuthSourceName } from './utils/auth/sources.mjs';
 import { resolveAuthSeedFromEnv } from './utils/stack/startup.mjs';
@@ -2165,14 +2166,14 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
   if (interactive) {
     await withRl(async (rl) => {
       let savedDevKey = false;
-      const wantLoginRaw = (await prompt(
-        rl,
-        `Run guided login now? (starts the seed server temporarily for this stack) (Y/n): `,
-        { defaultValue: 'y' }
-      ))
-        .trim()
-        .toLowerCase();
-      const wantLogin = wantLoginRaw === 'y' || wantLoginRaw === 'yes' || wantLoginRaw === '';
+      const wantLogin = await promptSelect(rl, {
+        title: `${bold('dev-auth seed stack')}\n${dim('Recommended: do the guided login now so the seed is ready immediately.')}`,
+        options: [
+          { label: `yes (${green('recommended')}) — start temporary server + UI and log in`, value: true },
+          { label: `no — I will do this later`, value: false },
+        ],
+        defaultIndex: 0,
+      });
 
       if (wantLogin) {
         console.log('');
@@ -2261,7 +2262,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               const uiRoot = uiRootLocalhost ? await preferStackLocalhostUrl(uiRootLocalhost, { stackName: name }) : null;
               const uiSettings = uiRoot ? `${uiRoot}/settings/account` : null;
 
-              console.log('[stack] step 1/3: create a dev-auth account in the UI (this generates the dev key)');
+              console.log(`[stack] step 1/3: create a ${cyan('dev-auth')} account in the UI (this generates the dev key)`);
               if (uiRoot) {
                 console.log(`[stack] waiting for UI to be ready...`);
                 // Prefer localhost for readiness checks (faster/more reliable), even though we
@@ -2277,7 +2278,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
               await prompt(rl, `Press Enter once you've created the account in the UI... `);
 
               console.log('');
-              console.log('[stack] step 2/3: save the dev key locally (for agents / Playwright)');
+              console.log(`[stack] step 2/3: save the dev key locally ${dim('(optional; helps UI restore + automation)')}`);
               const keyInput = (await prompt(
                 rl,
                 `Paste the Secret Key now (from Settings → Account → Secret Key). Leave empty to skip: `
@@ -2287,12 +2288,12 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 savedDevKey = true;
                 console.log(`[stack] dev key saved: ${res.path}`);
               } else {
-                console.log(`[stack] dev key not saved; you can do it later with: happys auth dev-key --set="<key>"`);
+                console.log(`[stack] dev key not saved; you can do it later with: ${yellow('happys auth dev-key --set="<key>"')}`);
               }
 
               console.log('');
-              console.log('[stack] step 3/3: authenticate the CLI against this stack (web auth)');
-              console.log(`[stack] launching: happys stack auth ${name} login`);
+              console.log(`[stack] step 3/3: authenticate the CLI against this stack ${dim('(web auth)')}`);
+              console.log(`[stack] launching: ${yellow(`happys stack auth ${name} login`)}`);
               await run(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), 'login', '--no-force'], {
                 cwd: rootDir,
                 env,
@@ -2323,17 +2324,17 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         console.log('');
         console.log('[stack] login step complete.');
       } else {
-        console.log(`[stack] skipping guided login. You can do it later with: happys stack auth ${name} login`);
+        console.log(`[stack] skipping guided login. You can do it later with: ${yellow(`happys stack auth ${name} login`)}`);
       }
 
-      const wantEnvRaw = (await prompt(
-        rl,
-        `Set this as the default auth seed (writes ${getHomeEnvLocalPath()})? (Y/n): `,
-        { defaultValue: 'y' }
-      ))
-        .trim()
-        .toLowerCase();
-      const wantEnv = wantEnvRaw === 'y' || wantEnvRaw === 'yes' || wantEnvRaw === '';
+      const wantEnv = await promptSelect(rl, {
+        title: `${bold('Default auth seed')}\n${dim(`Recommended: set ${cyan(name)} as the default seed for new stacks (writes ${getHomeEnvLocalPath()}).`)}`,
+        options: [
+          { label: `yes (${green('recommended')}) — enable auto-seeding for new stacks`, value: true },
+          { label: `no — I will configure this later`, value: false },
+        ],
+        defaultIndex: 0,
+      });
       if (wantEnv) {
         const envLocalPath = getHomeEnvLocalPath();
         await ensureEnvFileUpdated({
@@ -2349,8 +2350,15 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
       }
 
       if (!savedDevKey) {
-        const wantKey = (await prompt(rl, `Save the dev auth key for Playwright/UI logins now? (y/N): `)).trim().toLowerCase();
-        if (wantKey === 'y' || wantKey === 'yes') {
+        const wantKey = await promptSelect(rl, {
+          title: `${bold('Dev key (optional, sensitive)')}\n${dim('Save a dev key locally so you can restore the UI account quickly (and support automation).')}`,
+          options: [
+            { label: 'no (default)', value: false },
+            { label: `yes — save a dev key now`, value: true },
+          ],
+          defaultIndex: 0,
+        });
+        if (wantKey) {
           console.log(`[stack] paste the secret key (base64url OR backup-format like XXXXX-XXXXX-...):`);
           const input = (await prompt(rl, `dev key: `)).trim();
           if (input) {
@@ -2364,7 +2372,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
             console.log('[stack] dev key not provided; skipping');
           }
         } else {
-          console.log(`[stack] tip: you can set it later with: happys auth dev-key --set="<key>"`);
+          console.log(`[stack] tip: you can set it later with: ${yellow('happys auth dev-key --set="<key>"')}`);
         }
       }
     });

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { ansiEnabled, cyan, dim, green, red, yellow } from '../ui/ansi.mjs';
  
 function isTty() {
   return Boolean(process.stdout.isTTY && process.stderr.isTTY);
@@ -11,6 +12,20 @@ function spinnerFrames() {
   return ['|', '/', '-', '\\'];
 }
  
+function colorResult(result) {
+  if (!ansiEnabled()) return String(result);
+  const r = String(result);
+  if (r === '✓') return green(r);
+  if (r === 'x' || r === '✗') return red(r);
+  if (r === '!') return yellow(r);
+  return r;
+}
+
+function colorSpinner(frame) {
+  if (!ansiEnabled()) return String(frame);
+  return cyan(String(frame));
+}
+
 export function createStepPrinter({ enabled = true } = {}) {
   const tty = enabled && isTty();
   const frames = spinnerFrames();
@@ -22,14 +37,14 @@ export function createStepPrinter({ enabled = true } = {}) {
  
   const start = (label) => {
     if (!tty) {
-      write(`- [..] ${label}\n`);
+      write(`- [${dim('..')}] ${label}\n`);
       return;
     }
-    currentLine = `- [${frames[idx % frames.length]}] ${label}`;
+    currentLine = `- [${colorSpinner(frames[idx % frames.length])}] ${label}`;
     write(currentLine);
     timer = setInterval(() => {
       idx++;
-      const next = `- [${frames[idx % frames.length]}] ${label}`;
+      const next = `- [${colorSpinner(frames[idx % frames.length])}] ${label}`;
       const pad = currentLine.length > next.length ? ' '.repeat(currentLine.length - next.length) : '';
       currentLine = next;
       write(`\r${next}${pad}`);
@@ -40,10 +55,10 @@ export function createStepPrinter({ enabled = true } = {}) {
     if (timer) clearInterval(timer);
     timer = null;
     if (!tty) {
-      write(`- [${result}] ${label}\n`);
+      write(`- [${colorResult(result)}] ${label}\n`);
       return;
     }
-    const out = `- [${result}] ${label}`;
+    const out = `- [${colorResult(result)}] ${label}`;
     const pad = currentLine.length > out.length ? ' '.repeat(currentLine.length - out.length) : '';
     currentLine = '';
     write(`\r${out}${pad}\n`);

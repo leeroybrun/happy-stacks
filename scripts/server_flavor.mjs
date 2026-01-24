@@ -5,10 +5,11 @@ import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { isTty, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
+import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
 
 const FLAVORS = [
-  { label: 'happy-server-light (recommended default, serves UI)', value: 'happy-server-light' },
-  { label: 'happy-server (full server, no UI serving)', value: 'happy-server' },
+  { label: `happy-server-light (${green('recommended')}) — simplest local install (serves UI)`, value: 'happy-server-light' },
+  { label: `happy-server — full server (Docker-managed infra)`, value: 'happy-server' },
 ];
 
 function normalizeFlavor(raw) {
@@ -53,7 +54,11 @@ async function cmdUseInteractive({ rootDir, argv }) {
   const json = wantsJson(argv, { flags });
 
   await withRl(async (rl) => {
-    const flavor = await promptSelect(rl, { title: 'Select server flavor:', options: FLAVORS, defaultIndex: 0 });
+    const flavor = await promptSelect(rl, {
+      title: `${bold('Server flavor')}\n${dim('Pick the backend you want to run by default. You can change per-stack too.')}`,
+      options: FLAVORS,
+      defaultIndex: 0,
+    });
     const envPath = resolveUserConfigEnvPath({ cliRootDir: rootDir });
     await ensureEnvFileUpdated({
       envPath,

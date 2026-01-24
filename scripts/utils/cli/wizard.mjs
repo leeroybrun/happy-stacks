@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { listWorktreeSpecs } from '../git/worktrees.mjs';
+import { bold, cyan, dim, green } from '../ui/ansi.mjs';
 
 export function isTty() {
   if (process.env.HAPPY_STACKS_TEST_TTY === '1') {
@@ -45,9 +46,9 @@ export async function promptWorktreeSource({ rl, rootDir, component, stackName, 
   const promptSelectFn = deps.promptSelect ?? promptSelect;
   const listWorktreeSpecsFn = deps.listWorktreeSpecs ?? listWorktreeSpecs;
 
-  const baseOptions = [{ label: `default (components/${component})`, value: 'default' }];
-  baseOptions.push({ label: 'pick existing worktree', value: 'pick' });
-  baseOptions.push({ label: `create new worktree (${createRemote})`, value: 'create' });
+  const baseOptions = [{ label: `default (${dim(`components/${component}`)})`, value: 'default' }];
+  baseOptions.push({ label: `pick existing worktree`, value: 'pick' });
+  baseOptions.push({ label: `create new worktree (${cyan(createRemote)}; ${green('recommended for PRs')})`, value: 'create' });
 
   const kind = await promptSelectFn(rl, { title: `Select ${component}:`, options: baseOptions, defaultIndex: 0 });
 
@@ -60,14 +61,20 @@ export async function promptWorktreeSource({ rl, rootDir, component, stackName, 
       return 'default';
     }
     const picked = await promptSelectFn(rl, {
-      title: `Available ${component} worktrees:`,
+      title: `${bold(`Available ${cyan(component)} worktrees`)}\n${dim('Tip: use `happys wt new ... --use` to create more worktrees.')}`,
       options: specs.map((s) => ({ label: s, value: s })),
       defaultIndex: 0,
     });
     return picked;
   }
 
-  const slug = await promptFn(rl, `New worktree slug for ${component} (example: pr/${stackName}/${component}): `, {
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(bold(`Create a new ${cyan(component)} worktree`));
+  // eslint-disable-next-line no-console
+  console.log(dim(`This will create a worktree under components/.worktrees/${component}/... based on ${createRemote}.`));
+  const slug = await promptFn(rl, `New worktree slug (example: pr/${stackName}/${component}): `, {
     defaultValue: '',
   });
   if (!slug) {

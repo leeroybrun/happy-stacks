@@ -21,6 +21,8 @@ see the “Using Happy from your phone” section in the main README.
 
 ## Shared dev-client app (install once)
 
+If you ran `happys setup --profile=dev`, the setup wizard can optionally offer to install the dev-client for you.
+
 Install the dedicated Happy Stacks dev-client app on your iPhone (USB).
 
 This command **runs a prebuild** (generates `ios/` + runs CocoaPods) and then installs a Debug build

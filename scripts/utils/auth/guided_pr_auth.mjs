@@ -1,5 +1,6 @@
 import { isTty, promptSelect, withRl } from '../cli/wizard.mjs';
 import { detectSeedableAuthSources } from './sources.mjs';
+import { bold, cyan, dim, green } from '../ui/ansi.mjs';
 
 /**
  * Decide how a PR review stack should authenticate.
@@ -40,11 +41,17 @@ export async function decidePrAuthPlan({
   const choice = await withRl(async (rl) => {
     const opts = [];
     if (sources.length) {
-      opts.push({ label: `reuse existing Happy Stacks auth (${sources.join(' / ')})`, value: 'seed' });
+      opts.push({
+        label: `reuse existing auth (${cyan(sources.join(' / '))})`,
+        value: 'seed',
+      });
     }
-    opts.push({ label: defaultLoginNow ? 'login now (recommended)' : 'login later', value: 'login' });
+    opts.push({
+      label: defaultLoginNow ? `login now (${green('recommended')})` : 'login later',
+      value: 'login',
+    });
     return await promptSelect(rl, {
-      title: 'Authentication for this PR stack:',
+      title: `${bold('Authentication for this PR stack')}\n${dim('Choose whether to reuse existing credentials or do a fresh guided login.')}`,
       options: opts,
       defaultIndex: 0,
     });
@@ -55,7 +62,7 @@ export async function decidePrAuthPlan({
     if (sources.length > 1) {
       from = await withRl(async (rl) => {
         return await promptSelect(rl, {
-          title: 'Which existing auth should we reuse?',
+          title: `${bold('Which auth should we reuse?')}\n${dim('Pick the stack whose credentials should be shared into this PR stack.')}`,
           options: sources.map((s) => ({ label: s, value: s })),
           defaultIndex: 0,
         });
@@ -63,9 +70,9 @@ export async function decidePrAuthPlan({
     }
     const link = await withRl(async (rl) => {
       return await promptSelect(rl, {
-        title: 'When reusing, symlink or copy credentials?',
+        title: `${bold('Reuse mode')}\n${dim('Symlink stays up to date; copy is more isolated.')}`,
         options: [
-          { label: 'symlink (recommended) — stays up to date', value: true },
+          { label: `symlink (${green('recommended')}) — stays up to date`, value: true },
           { label: 'copy — more isolated per stack', value: false },
         ],
         defaultIndex: 0,

@@ -1,29 +1,7 @@
 import { prompt, withRl } from '../cli/wizard.mjs';
 import { openUrlInBrowser } from '../ui/browser.mjs';
 import { preferStackLocalhostUrl } from '../paths/localhost_host.mjs';
-
-function supportsAnsi() {
-  if (!process.stdout.isTTY) return false;
-  if (process.env.NO_COLOR) return false;
-  if ((process.env.TERM ?? '').toLowerCase() === 'dumb') return false;
-  return true;
-}
-
-function bold(s) {
-  return supportsAnsi() ? `\x1b[1m${s}\x1b[0m` : String(s);
-}
-
-function dim(s) {
-  return supportsAnsi() ? `\x1b[2m${s}\x1b[0m` : String(s);
-}
-
-function cyan(s) {
-  return supportsAnsi() ? `\x1b[36m${s}\x1b[0m` : String(s);
-}
-
-function green(s) {
-  return supportsAnsi() ? `\x1b[32m${s}\x1b[0m` : String(s);
-}
+import { bold, cyan, dim, green, yellow } from '../ui/ansi.mjs';
 
 export async function guidedStackWebSignupThenLogin({ webappUrl, stackName }) {
   const url = await preferStackLocalhostUrl(webappUrl, { stackName });
@@ -31,7 +9,7 @@ export async function guidedStackWebSignupThenLogin({ webappUrl, stackName }) {
   // eslint-disable-next-line no-console
   console.log('');
   // eslint-disable-next-line no-console
-  console.log(bold('Happy login'));
+  console.log(bold(`${cyan('Happy')} login`));
 
   // Step 1/2
   // eslint-disable-next-line no-console
@@ -53,7 +31,7 @@ export async function guidedStackWebSignupThenLogin({ webappUrl, stackName }) {
     await openUrlInBrowser(url);
   }
   // eslint-disable-next-line no-console
-  console.log(green('✓ Browser opened'));
+  console.log(`${green('✓')} Browser opened`);
 
   // Step 2/2
   // eslint-disable-next-line no-console
@@ -68,6 +46,10 @@ export async function guidedStackWebSignupThenLogin({ webappUrl, stackName }) {
   console.log('');
   // eslint-disable-next-line no-console
   console.log(`After you’ve created/logged in in the browser, ${bold('press Enter')} to continue.`);
+  // eslint-disable-next-line no-console
+  console.log(dim(`Tip: if the page is blank, wait for the first build to finish, then retry.`));
+  // eslint-disable-next-line no-console
+  console.log(dim(`Tip: you can always re-run later with: ${yellow(`happys stack auth ${stackName || 'main'} login`)}`));
   await withRl(async (rl) => {
     await prompt(rl, '', { defaultValue: '' });
   });

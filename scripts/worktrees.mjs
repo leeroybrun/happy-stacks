@@ -31,6 +31,7 @@ import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from '.
 import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { parseDotenv } from './utils/env/dotenv.mjs';
+import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 const HAPPY_MONOREPO_GROUP_COMPONENTS = ['happy', 'happy-cli', 'happy-server'];
@@ -912,25 +913,39 @@ async function cmdUse({ rootDir, args, flags }) {
 
 async function cmdUseInteractive({ rootDir }) {
   await withRl(async (rl) => {
-    const component = await prompt(rl, 'Component [happy|happy-cli|happy-server-light|happy-server]: ', { defaultValue: '' });
-    if (!component) {
-      throw new Error('[wt] component is required');
-    }
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Switch active worktree'));
+
+    const componentChoice = await promptSelect(rl, {
+      title: `${bold('Component')}\n${dim('Which component should `happys` run from?')}`,
+      options: [
+        ...DEFAULT_COMPONENTS.map((c) => ({ label: cyan(c), value: c })),
+        { label: dim('other (type manually)'), value: '__other__' },
+      ],
+      defaultIndex: 0,
+    });
+    const component =
+      componentChoice === '__other__'
+        ? await prompt(rl, `${dim('Component name')}: `, { defaultValue: '' })
+        : String(componentChoice);
+    if (!component) throw new Error('[wt] component is required');
 
     const specs = await listWorktreeSpecs({ rootDir, component });
 
-    const kindOptions = [{ label: 'default', value: 'default' }];
+    const kindOptions = [{ label: `default (${dim('components/<component>')})`, value: 'default' }];
     if (specs.length) {
-      kindOptions.push({ label: 'pick existing worktree', value: 'pick' });
+      kindOptions.push({ label: `pick existing worktree (${green('recommended')})`, value: 'pick' });
     }
     const choice = await promptSelect(rl, {
-      title: `Active choices for ${component}:`,
+      title: `${bold('Target')}\n${dim(`Pick which ${cyan(component)} checkout should become active.`)}`,
       options: kindOptions,
       defaultIndex: 0,
     });
     if (choice === 'pick') {
       const picked = await promptSelect(rl, {
-        title: `Available ${component} worktrees:`,
+        title: `${bold(`Available ${cyan(component)} worktrees`)}`,
         options: specs.map((s) => ({ label: s, value: s })),
         defaultIndex: 0,
       });
@@ -1900,17 +1915,34 @@ async function cmdUpdateAll({ rootDir, argv }) {
 async function cmdNewInteractive({ rootDir, argv }) {
   const { flags, kv } = parseArgs(argv);
   await withRl(async (rl) => {
-    const component = await prompt(rl, 'Component [happy|happy-cli|happy-server-light|happy-server]: ', { defaultValue: '' });
-    if (!component) {
-      throw new Error('[wt] component is required');
-    }
-    const slug = await prompt(rl, 'Branch slug (example: pr/my-feature): ', { defaultValue: '' });
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(bold('Create a worktree'));
+    // eslint-disable-next-line no-console
+    console.log(dim('Recommended: base worktrees on upstream to keep PR history clean.'));
+
+    const componentChoice = await promptSelect(rl, {
+      title: bold('Component'),
+      options: [
+        ...DEFAULT_COMPONENTS.map((c) => ({ label: cyan(c), value: c })),
+        { label: dim('other (type manually)'), value: '__other__' },
+      ],
+      defaultIndex: 0,
+    });
+    const component =
+      componentChoice === '__other__'
+        ? await prompt(rl, `${dim('Component name')}: `, { defaultValue: '' })
+        : String(componentChoice);
+    if (!component) throw new Error('[wt] component is required');
+
+    const slug = await prompt(rl, `${dim('Branch slug')} (example: pr/my-feature): `, { defaultValue: '' });
     if (!slug) {
       throw new Error('[wt] slug is required');
     }
 
     // Default remote is upstream; allow override.
-    const remote = await prompt(rl, 'Remote name (default: upstream): ', { defaultValue: 'upstream' });
+    const remote = await prompt(rl, `${dim('Remote name')} (default: upstream): `, { defaultValue: 'upstream' });
 
     const args = ['new', component, slug, `--remote=${remote}`];
     if (kv.get('--base')?.trim()) {
@@ -2065,11 +2097,11 @@ async function cmdArchive({ rootDir, argv }) {
     }
     const action = await withRl(async (rl) => {
       return await promptSelect(rl, {
-        title: `Worktree is still referenced by stack(s): ${names}`,
+        title: `${bold('Worktree is still referenced')}\n${dim(`This worktree is pinned by stack(s): ${cyan(names)}`)}`,
         options: [
-          { label: 'abort (recommended)', value: 'abort' },
-          { label: 'detach those stacks from this worktree', value: 'detach' },
-          { label: 'archive the linked stacks (also archives this worktree)', value: 'archive-stacks' },
+          { label: `abort (${green('recommended')})`, value: 'abort' },
+          { label: `detach those stacks from this worktree`, value: 'detach' },
+          { label: `archive the linked stacks (also archives this worktree)`, value: 'archive-stacks' },
         ],
         defaultIndex: 0,
       });

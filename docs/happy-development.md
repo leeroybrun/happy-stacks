@@ -22,6 +22,16 @@ If you’re new to the project, start here:
 
 ## Core concepts (the mental model)
 
+## Setup (recommended)
+
+If you’re starting fresh, use the guided dev setup:
+
+```bash
+npx happy-stacks setup --profile=dev
+```
+
+This will guide you through workspace setup, bootstrapping components, and the recommended developer auth flow (`dev-auth` seed stack + optional mobile dev-client install).
+
 ### Components
 
 Happy Stacks is a launcher/orchestrator repo. The actual product code lives in component repos under:
