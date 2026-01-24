@@ -19,6 +19,7 @@ SwiftBar runs a script on an interval and renders its output as native macOS men
 - **Details**
   - PID, CPU %, RAM MB, uptime (where available)
   - Useful URLs and file paths
+  - Stack details include aggregate CPU/RAM (server+daemon+autostart) when running
   - Open logs in Console.app
 - **Refresh control**
   - Manual refresh
@@ -30,6 +31,7 @@ SwiftBar runs a script on an interval and renders its output as native macOS men
  - **Components (git/worktrees)**
   - Available under a top-level **Components** submenu (to keep the main menu clean)
   - Shows repo/worktree status for each component under `components/`
+  - Monorepo-aware: component dirs can point at subdirectories (e.g. `.../expo-app`, `.../cli`, `.../server`) and still show git/worktree info
   - Each component includes a **Worktrees** submenu listing all worktrees, with actions to switch/open
   - Quick actions: `wt status/sync/update`, PR worktree prompt, open shells/editors (`wt shell/code/cursor`)
   - Shows **origin** and **upstream** comparisons for the component repo’s main branch (based on your last `git fetch`)

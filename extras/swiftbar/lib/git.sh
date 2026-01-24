@@ -5,7 +5,16 @@
 
 is_git_repo() {
   local dir="$1"
-  [[ -n "$dir" && -d "$dir" && ( -d "$dir/.git" || -f "$dir/.git" ) ]]
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  # Fast-path: repo root/worktree checkout.
+  if [[ -d "$dir/.git" || -f "$dir/.git" ]]; then
+    return 0
+  fi
+  # Monorepo packages (and other nested dirs) are still "inside" a git repo even if they don't contain .git.
+  command -v git >/dev/null 2>&1 || return 1
+  local inside
+  inside="$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null || true)"
+  [[ "$inside" == "true" ]]
 }
 
 git_cache_dir() {

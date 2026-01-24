@@ -377,13 +377,14 @@ render_component_tailscale() {
 render_component_repo() {
   # Git/worktree component view (unified UI).
   # Usage:
-  #   render_component_repo <prefix> <component> <context> <stack_name> <env_file>
+  #   render_component_repo <prefix> <component> <context> <stack_name> <env_file> <shared_repo_root?>
   # context: main|stack
   local prefix="$1"
   local component="$2"
   local context="$3"
   local stack_name="$4"
   local env_file="$5"
+  local shared_repo_root="${6:-}"
 
   local t0 t1
   t0="$(swiftbar_now_ms 2>/dev/null || echo 0)"
@@ -449,7 +450,22 @@ render_component_repo() {
   print_item "$prefix" "${component} | sfimage=$sf color=$color"
 
   local p2="${prefix}--"
-  print_item "$p2" "Dir: $(shorten_path "$active_dir" 52)"
+  local repo_root=""
+  local rel_dir=""
+  repo_root="$(swiftbar_find_git_root_upwards "$active_dir" 2>/dev/null || true)"
+  if [[ -n "$repo_root" && "$repo_root" != "$active_dir" && "$active_dir" == "$repo_root/"* ]]; then
+    rel_dir="${active_dir#"$repo_root"/}"
+    if [[ -n "$shared_repo_root" && "$shared_repo_root" == "$repo_root" ]]; then
+      print_item "$p2" "Dir: $(shorten_text "$rel_dir" 52)"
+    else
+      print_item "$p2" "Repo: $(shorten_path "$repo_root" 52)"
+      print_item "$p2" "Dir: $(shorten_text "$rel_dir" 52)"
+    fi
+  else
+    print_item "$p2" "Dir: $(shorten_path "$active_dir" 52)"
+    repo_root=""
+    rel_dir=""
+  fi
   if [[ "$detail" != "ok" ]]; then
     if [[ "$git_mode" == "cached" ]]; then
       print_item "$p2" "Status: git cache missing (or not a git repo)"
@@ -542,7 +558,12 @@ render_component_repo() {
 
   # Quick actions
   print_sep "$p2"
-  print_item "$p2" "Open folder | bash=/usr/bin/open param1='$active_dir' terminal=false"
+  if [[ -n "$repo_root" ]]; then
+    print_item "$p2" "Open package folder | bash=/usr/bin/open param1='$active_dir' terminal=false"
+    print_item "$p2" "Open repo root | bash=/usr/bin/open param1='$repo_root' terminal=false"
+  else
+    print_item "$p2" "Open folder | bash=/usr/bin/open param1='$active_dir' terminal=false"
+  fi
 
   if [[ -n "$PNPM_BIN" ]]; then
     local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
@@ -606,27 +627,33 @@ render_component_repo() {
     if [[ -z "$tsv" ]]; then
       print_item "$p3" "No worktrees found | color=$GRAY"
     else
-      # Worktrees live alongside the component checkout at: <componentsRoot>/.worktrees/<component>/...
-      local components_root default_path root
-      components_root="$(dirname "$active_dir")"
-      default_path="$components_root/$component"
-      root="$components_root/.worktrees/$component/"
+      # Map worktree paths back to happy-stacks specs (default or components/.worktrees/...).
+      # In monorepos, multiple "components" share one repoKey; worktrees live under that repoKey.
+      local repo_key
+      repo_key="$(swiftbar_repo_key_from_path "$active_dir" 2>/dev/null || true)"
+      local components_dir root
+      root=""
+      if [[ -n "$repo_key" && "$active_dir" == *"/components/"* ]]; then
+        components_dir="${active_dir%%/components/*}/components"
+        root="$components_dir/.worktrees/$repo_key/"
+      fi
       local shown=0
       while IFS=$'\t' read -r wt_path wt_branchref; do
         [[ -n "$wt_path" ]] || continue
         shown=$((shown + 1))
         if [[ $shown -gt 30 ]]; then
-          print_item "$p3" "More… (open folder) | bash=/usr/bin/open param1='$root' terminal=false"
+          if [[ -n "$root" ]]; then
+            print_item "$p3" "More… (open folder) | bash=/usr/bin/open param1='$root' terminal=false"
+          fi
           break
         fi
 
         local label=""
         local spec=""
-        if [[ "$wt_path" == "$default_path" ]]; then
-          spec="default"
-          label="default"
-        elif [[ "$wt_path" == "$root"* ]]; then
-          spec="${wt_path#"$root"}"
+        if [[ -n "$repo_key" ]]; then
+          spec="$(swiftbar_worktree_spec_from_path "$wt_path" "$repo_key" 2>/dev/null || true)"
+        fi
+        if [[ -n "$spec" ]]; then
           label="$spec"
         else
           label="$(shorten_path "$wt_path" 52)"
@@ -635,7 +662,12 @@ render_component_repo() {
         if [[ -n "$wt_branchref" && "$wt_branchref" == refs/heads/* ]]; then
           label="$label ($(basename "$wt_branchref"))"
         fi
-        if [[ "$wt_path" == "$active_dir" ]]; then
+        # Active worktree: for monorepo packages, active_dir is under the worktree root.
+        local wt_component_dir="$wt_path"
+        if [[ -n "$rel_dir" ]]; then
+          wt_component_dir="$wt_path/$rel_dir"
+        fi
+        if [[ "$wt_component_dir" == "$active_dir" ]]; then
           label="(active) $label"
         fi
 
@@ -712,8 +744,22 @@ render_components_menu() {
 
   # Always render the known components using the resolved component dirs (env file → env.local/.env → fallback),
   # instead of assuming they live under `~/.happy-stacks/workspace/components`.
+  local shared_repo_root=""
+  if [[ -n "$env_file" && -f "$env_file" ]]; then
+    local dir_h dir_c dir_s
+    dir_h="$(resolve_component_dir_from_env_file "$env_file" "happy")"
+    dir_c="$(resolve_component_dir_from_env_file "$env_file" "happy-cli")"
+    dir_s="$(resolve_component_dir_from_env_file "$env_file" "happy-server")"
+    local root_h root_c root_s
+    root_h="$(swiftbar_find_git_root_upwards "$dir_h" 2>/dev/null || true)"
+    root_c="$(swiftbar_find_git_root_upwards "$dir_c" 2>/dev/null || true)"
+    root_s="$(swiftbar_find_git_root_upwards "$dir_s" 2>/dev/null || true)"
+    if [[ -n "$root_h" && "$root_h" == "$root_c" && "$root_h" == "$root_s" ]]; then
+      shared_repo_root="$root_h"
+    fi
+  fi
   for c in happy happy-cli happy-server-light happy-server; do
-    render_component_repo "$p2" "$c" "$context" "$stack_name" "$env_file"
+    render_component_repo "$p2" "$c" "$context" "$stack_name" "$env_file" "$shared_repo_root"
     print_sep "$p2"
   done
 
@@ -817,6 +863,9 @@ render_stack_info() {
   local label="$7"
   local env_file="$8"       # optional
   local tailscale_url="$9"  # optional
+  local server_metrics="${10:-}"
+  local daemon_metrics="${11:-}"
+  local autostart_metrics="${12:-}"
 
   # Avoid low-contrast gray in the main list; keep it readable in both light/dark.
   print_item "$prefix" "Stack details | sfimage=server.rack"
@@ -837,6 +886,34 @@ render_stack_info() {
   print_item "$p2" "Label: ${label}"
   [[ -n "$env_file" ]] && print_item "$p2" "Env: $(shorten_path "$env_file" 52)"
   [[ -n "$tailscale_url" ]] && print_item "$p2" "Tailscale: $(shorten_text "$tailscale_url" 52)"
+
+  # Monorepo hint: if happy + happy-cli + happy-server all share the same git root, show it once here.
+  if [[ -n "$env_file" && -f "$env_file" ]]; then
+    local dir_h dir_c dir_s
+    dir_h="$(resolve_component_dir_from_env_file "$env_file" "happy")"
+    dir_c="$(resolve_component_dir_from_env_file "$env_file" "happy-cli")"
+    dir_s="$(resolve_component_dir_from_env_file "$env_file" "happy-server")"
+    local root_h root_c root_s
+    root_h="$(swiftbar_find_git_root_upwards "$dir_h" 2>/dev/null || true)"
+    root_c="$(swiftbar_find_git_root_upwards "$dir_c" 2>/dev/null || true)"
+    root_s="$(swiftbar_find_git_root_upwards "$dir_s" 2>/dev/null || true)"
+    if [[ -n "$root_h" && "$root_h" == "$root_c" && "$root_h" == "$root_s" ]]; then
+      print_item "$p2" "Happy monorepo: $(shorten_path "$root_h" 52) | color=$GRAY"
+    fi
+  fi
+
+  # Aggregate metrics (best-effort): sum the per-component process snapshots.
+  # NOTE: CPU may exceed 100% on multi-core machines.
+  local totals cpu_total mem_total
+  totals="$(swiftbar_sum_metrics_cpu_mem "$server_metrics" "$daemon_metrics" "$autostart_metrics" 2>/dev/null || true)"
+  cpu_total="$(echo "$totals" | cut -d'|' -f1)"
+  mem_total="$(echo "$totals" | cut -d'|' -f2)"
+  if [[ -n "$cpu_total" && -n "$mem_total" ]]; then
+    # Only show when we have at least one metric (avoid "0.0|0" noise on stopped stacks).
+    if [[ "$cpu_total" != "0.0" || "$mem_total" != "0" ]]; then
+      print_item "$p2" "Usage (server+daemon+autostart): CPU ${cpu_total}%, RAM ${mem_total}MB | color=$GRAY"
+    fi
+  fi
 
   print_sep "$p2"
   print_item "$p2" "Open repo | bash=/usr/bin/open param1='$HAPPY_LOCAL_DIR' terminal=false"

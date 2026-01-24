@@ -17,6 +17,102 @@ shorten_path() {
   shorten_text "$pretty" "$max"
 }
 
+swiftbar_sum_metrics_cpu_mem() {
+  # Usage: swiftbar_sum_metrics_cpu_mem <metrics...>
+  # Each metrics is "cpu|mem_mb|etime" (as produced by get_process_metrics), or empty/"-".
+  #
+  # Output: "cpu_total|mem_total" where cpu_total has 1 decimal.
+  # Notes:
+  # - CPU is summed as a float and can exceed 100 on multi-core machines.
+  # - Memory is summed as integer MB.
+  printf '%s\n' "$@" | awk -F'|' '
+    {
+      cpu=$1; mem=$2;
+      if (cpu ~ /^[0-9]+(\.[0-9]+)?$/) cpuSum += cpu;
+      if (mem ~ /^[0-9]+$/) memSum += mem;
+    }
+    END {
+      # Always print 1 decimal for CPU to keep it stable/readable.
+      printf "%.1f|%.0f\n", cpuSum + 0.0, memSum + 0.0;
+    }
+  '
+}
+
+swiftbar_worktree_spec_from_path() {
+  # Usage: swiftbar_worktree_spec_from_path <worktree_path> <repo_key>
+  #
+  # Returns:
+  # - "default" for managed default checkouts at: */components/<repo_key>
+  # - "<owner>/<branch...>" for managed worktrees at: */components/.worktrees/<repo_key>/<owner>/<branch...>
+  # - "" otherwise (unmanaged path; menu should offer open-only actions)
+  local wt_path="$1"
+  local repo_key="$2"
+  [[ -n "$wt_path" && -n "$repo_key" ]] || { echo ""; return; }
+
+  if [[ "$wt_path" == *"/components/${repo_key}" || "$wt_path" == *"/components/${repo_key}/"* ]]; then
+    echo "default"
+    return
+  fi
+  if [[ "$wt_path" == *"/components/.worktrees/${repo_key}/"* ]]; then
+    local rest="${wt_path#*"/components/.worktrees/${repo_key}/"}"
+    echo "$rest"
+    return
+  fi
+  echo ""
+}
+
+swiftbar_find_git_root_upwards() {
+  # Usage: swiftbar_find_git_root_upwards <path>
+  # Returns the nearest ancestor directory (including itself) that contains a .git dir/file.
+  #
+  # This is a fast filesystem-based check used during menu render, mainly to:
+  # - avoid repeating a monorepo root path for package dirs (expo-app/cli/server)
+  # - derive the "repo root" for "open repo root" actions
+  local start="$1"
+  [[ -n "$start" ]] || { echo ""; return; }
+  [[ -d "$start" ]] || { echo ""; return; }
+
+  local cur="$start"
+  local i=0
+  while [[ -n "$cur" && "$cur" != "/" && $i -lt 25 ]]; do
+    if [[ -d "$cur/.git" || -f "$cur/.git" ]]; then
+      echo "$cur"
+      return
+    fi
+    cur="$(dirname "$cur")"
+    i=$((i + 1))
+  done
+  if [[ "$cur" == "/" && ( -d "/.git" || -f "/.git" ) ]]; then
+    echo "/"
+    return
+  fi
+  echo ""
+}
+
+swiftbar_repo_key_from_path() {
+  # Usage: swiftbar_repo_key_from_path <path>
+  #
+  # Heuristic for happy-stacks layouts:
+  # - Worktrees: */components/.worktrees/<repoKey>/...
+  # - Defaults:  */components/<repoKey>/...
+  #
+  # Returns "" when it can't be derived (unmanaged path).
+  local p="$1"
+  [[ -n "$p" ]] || { echo ""; return; }
+
+  if [[ "$p" == *"/components/.worktrees/"* ]]; then
+    local rest="${p#*"/components/.worktrees/"}"
+    echo "${rest%%/*}"
+    return
+  fi
+  if [[ "$p" == *"/components/"* ]]; then
+    local rest="${p#*"/components/"}"
+    echo "${rest%%/*}"
+    return
+  fi
+  echo ""
+}
+
 swiftbar_is_sandboxed() {
   [[ -n "${HAPPY_STACKS_SANDBOX_DIR:-}" ]]
 }
