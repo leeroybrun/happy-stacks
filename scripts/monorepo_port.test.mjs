@@ -1544,7 +1544,8 @@ test('monorepo port preflight reports conflicts without modifying the target rep
   );
   const parsed = JSON.parse(out.trim());
   assert.equal(parsed.ok, false);
-  assert.ok(parsed.failedPatches >= 1);
+  assert.ok(parsed.firstConflict);
+  assert.ok(parsed.firstConflict.currentPatch);
 
   // Target should remain untouched (preflight runs in a temporary detached worktree).
   const targetHeadAfter = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: target, env })).trim();

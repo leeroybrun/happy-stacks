@@ -208,6 +208,22 @@ function noteLine(s) {
 }
 
 function summarizePreflightFailures(preflight) {
+  const fc = preflight?.firstConflict ?? null;
+  if (fc?.currentPatch?.subject) {
+    const files = Array.isArray(fc.currentPatch.files) ? fc.currentPatch.files : [];
+    const conflictFiles = Array.isArray(fc.conflictedFiles) ? fc.conflictedFiles : [];
+    const lines = [];
+    lines.push(`- first failing patch: ${cyan(fc.currentPatch.subject)}`);
+    if (files.length) {
+      lines.push(`  - patch files: ${files.slice(0, 6).join(', ')}${files.length > 6 ? dim(', ...') : ''}`);
+    }
+    if (conflictFiles.length) {
+      lines.push(`  - conflicted files: ${conflictFiles.slice(0, 6).join(', ')}${conflictFiles.length > 6 ? dim(', ...') : ''}`);
+    }
+    return lines;
+  }
+
+  // Fallback (older shape): summarize per-source failures if present.
   const results = Array.isArray(preflight?.results) ? preflight.results : [];
   const lines = [];
   for (const r of results) {
@@ -223,9 +239,6 @@ function summarizePreflightFailures(preflight) {
 
     lines.push(`- ${cyan(label)}: first failing patch`);
     lines.push(`  - ${subj || first.patch}${kind}${paths ? ` → ${paths}` : ''}`);
-    if (failed.length > 1) {
-      lines.push(`  - ${dim(`note: ${failed.length - 1} subsequent patch(es) also failed in preflight; they may be cascading until this first one is resolved`)}`);
-    }
   }
   return lines;
 }
@@ -1006,12 +1019,11 @@ async function runPortPreflightData({ targetRepoRoot, baseRef, threeWay, sources
     throw new Error('[monorepo] preflight: nothing to port. Provide at least one source.');
   }
 
-  const data = await withTempDetachedWorktree({ repoRoot: targetRepoRoot, ref: baseRef, label: 'monorepo-preflight' }, async (worktreeDir) => {
+  return await withTempDetachedWorktree({ repoRoot: targetRepoRoot, ref: baseRef, label: 'monorepo-preflight' }, async (worktreeDir) => {
     const preflightArgv = [
       'port',
       `--target=${worktreeDir}`,
       '--onto-current',
-      '--continue-on-failure',
       '--json',
       ...(threeWay ? ['--3way'] : []),
       ...srcs.flatMap((s) => [
@@ -1021,22 +1033,37 @@ async function runPortPreflightData({ targetRepoRoot, baseRef, threeWay, sources
       ]),
     ];
     const parsed = parseArgs(preflightArgv);
-    // Run silently; we only care about the returned JSON data.
-    return await cmdPortRun({ argv: preflightArgv, flags: parsed.flags, kv: parsed.kv, json: true, silent: true });
+    try {
+      // Run silently; we only care about the returned JSON data.
+      const data = await cmdPortRun({ argv: preflightArgv, flags: parsed.flags, kv: parsed.kv, json: true, silent: true });
+      return {
+        ok: true,
+        targetRepoRoot,
+        base: baseRef,
+        threeWay: Boolean(threeWay),
+        failedPatches: 0,
+        sourcesWithFailures: 0,
+        results: data?.results ?? [],
+        firstConflict: null,
+      };
+    } catch (e) {
+      const { inProgress, currentPatch, conflictedFiles } = await readGitAmStatus(worktreeDir);
+      if (!inProgress) throw e;
+      return {
+        ok: false,
+        targetRepoRoot,
+        base: baseRef,
+        threeWay: Boolean(threeWay),
+        failedPatches: 1,
+        sourcesWithFailures: 1,
+        results: [],
+        firstConflict: {
+          currentPatch,
+          conflictedFiles,
+        },
+      };
+    }
   });
-
-  const failedPatches = (data?.results ?? []).reduce((sum, r) => sum + Number(r.failedPatches ?? 0), 0);
-  const ok = failedPatches === 0;
-  const sourcesWithFailures = (data?.results ?? []).filter((r) => Number(r?.failedPatches ?? 0) > 0).length;
-  return {
-    ok,
-    targetRepoRoot,
-    base: baseRef,
-    threeWay: Boolean(threeWay),
-    failedPatches,
-    sourcesWithFailures,
-    results: data?.results ?? [],
-  };
 }
 
 async function cmdPortPreflight({ argv, flags, kv, json }) {
