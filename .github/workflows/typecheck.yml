@@ -45,7 +45,7 @@ jobs:
                   node ./bin/happys.mjs init --help
                   node ./bin/happys.mjs self status --no-check
                   node ./bin/happys.mjs where --json
-                  node ./scripts/utils/smoke_help.mjs
+                  node ./scripts/utils/cli/smoke_help.mjs
 
             - name: npm pack smoke
               run: |
