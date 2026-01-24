@@ -113,6 +113,8 @@ Notes:
   - `happy` → `.../expo-app`
   - `happy-cli` → `.../cli`
   - `happy-server` → `.../server`
+ - Editor helpers open the **monorepo root** by default:
+   - `happys wt cursor happy slopus/tmp/monorepo-port` (use `--package` to open just `expo-app/`, `cli/`, or `server/`).
 
 ### 3) Create a target branch
 

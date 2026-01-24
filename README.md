@@ -369,6 +369,7 @@ Details: `[docs/tauri.md](docs/tauri.md)`.
   - `happys stack dev <name>` / `happys stack start <name>`
   - `happys stack edit <name> --interactive`
   - `happys stack wt <name> -- use --interactive`
+  - `happys stack happy <name> -- <happy-cli args...>`
   - `happys stack review <name> [component...] [--reviewers=coderabbit,codex] [--base-ref=<ref>]`
   - `happys stack migrate`
 - **Reviews (local diff review)**:

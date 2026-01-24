@@ -23,8 +23,23 @@ components/.worktrees/<component>/<owner>/<branch...>
 Examples:
 
 - `components/.worktrees/happy/slopus/pr/session-rename-upstream`
-- `components/.worktrees/happy-cli/slopus/ci/typecheck-gha-upstream`
+- `components/.worktrees/happy-cli/slopus/ci/typecheck-gha-upstream` (split-repo mode)
 - `components/.worktrees/happy/leeroybrun/local/my-fork-only-patch`
+
+## Monorepo note (Happy UI/CLI/server in one repo)
+
+When `happy`, `happy-cli`, and `happy-server` are checked out from the `slopus/happy` monorepo, they are **one git repo**.
+In that mode, Happy Stacks stores worktrees under a single repo key:
+
+```
+components/.worktrees/happy/<owner>/<branch...>
+```
+
+and maps “logical components” to subdirectories:
+
+- `happy` → `expo-app/`
+- `happy-cli` → `cli/`
+- `happy-server` → `server/`
 
 ## Branch naming convention
 
@@ -277,6 +292,10 @@ Works with stacks too:
 happys stack wt pr123 -- shell happy active
 ```
 
+Monorepo note:
+- for monorepo worktrees, `wt shell` defaults to opening the **monorepo root**.
+- to open the package dir instead, pass `--package` (e.g. `happys wt shell happy slopus/pr/123 --package`).
+
 ## Open in editors (`wt code` / `wt cursor`)
 
 ```bash
@@ -287,6 +306,8 @@ happys wt cursor happy slopus/pr/123
 Notes:
 - `wt code` requires VS Code’s `code` CLI on PATH.
 - `wt cursor` uses the `cursor` CLI if available; on macOS it falls back to `open -a Cursor`.
+- for monorepo worktrees, these commands open the **monorepo root** by default (so you see `expo-app/`, `cli/`, `server/` together).
+- to open just the package dir, pass `--package`.
 
 ### `wt push`
 

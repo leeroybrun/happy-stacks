@@ -4,7 +4,13 @@ Happy Stacks supports two server “flavors”. You can switch between them glob
 
 ## What’s the difference?
 
-Both are forks/flavors of the same upstream server repo (`slopus/happy-server`), but optimized for different use cases.
+Historically, both flavors lived in the same upstream server repo (`slopus/happy-server`), but optimized for different use cases.
+
+With the new `slopus/happy` monorepo, the server code can also come from the monorepo `server/` package. In monorepo branches where
+the server includes the SQLite schema (`server/prisma/sqlite/schema.prisma`, legacy: `server/prisma/schema.sqlite.prisma`),
+Happy Stacks treats `happy-server-light` and `happy-server` as **two flavors of the same checkout** (different backends, same repo).
+
+Long-term, the intent is one server package with multiple backends (“flavors”), not separate repos.
 
 ### Unified codebase (recommended)
 
@@ -87,7 +93,9 @@ Notes:
 - **`happys start`** is “production-like”. It avoids running heavyweight schema sync loops under launchd KeepAlive.
 - **`happys dev`** is for rapid iteration:
   - for `happy-server`: Happy Stacks runs `prisma migrate deploy` by default (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`).
-  - for `happy-server-light`: Happy Stacks runs `prisma migrate deploy` (SQLite migrations) using the unified schema under `prisma/sqlite/schema.prisma`.
+  - for `happy-server-light`:
+    - **unified** server-light (recommended): Happy Stacks runs `prisma migrate deploy` (SQLite migrations) using the unified schema under `prisma/sqlite/schema.prisma` (legacy: `prisma/schema.sqlite.prisma`).
+    - **legacy** server-light: Happy Stacks does **not** run `prisma migrate deploy` (it commonly fails with `P3005` when the DB was created via `prisma db push` and no migrations exist). The legacy server-light dev/start scripts handle schema via `prisma db push`.
 
 Important: for a given run (`happys start` / `happys dev`) you choose **one** flavor.
 

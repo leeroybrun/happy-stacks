@@ -31,7 +31,21 @@ Happy Stacks is a launcher/orchestrator repo. The actual product code lives in c
 - `components/happy-server-light`
 - `components/happy-server`
 
-Each component is its own Git repo.
+Split-repo mode: each component is its own Git repo.
+
+Monorepo mode (new `slopus/happy` layout): `happy`, `happy-cli`, and `happy-server` can be a **single git repo**:
+
+- `components/happy` is the monorepo root
+- UI lives under `expo-app/`
+- CLI lives under `cli/`
+- server lives under `server/`
+
+In monorepo mode, Happy Stacks can derive `happy-cli` + `happy-server` from the selected `happy` checkout to prevent version skew.
+`happy-server-light` can be either:
+- **integrated** into the monorepo `server/` package (when the server includes the SQLite schema at `server/prisma/sqlite/schema.prisma`, or legacy `server/prisma/schema.sqlite.prisma`), or
+- still a **separate** component checkout (older layouts / non-monorepo setups).
+
+Long-term, the goal is a single server package with multiple backends (“flavors”) rather than separate repos.
 
 ### Worktrees (where you do development)
 
@@ -90,6 +104,7 @@ See: `docs/server-flavors.md`.
   - Work inside `components/.worktrees/...`, not `components/<component>`.
 - **Test/validate stack‑scoped**
   - Prefer `happys stack <stack> ...` commands (typecheck/lint/build/test/dev/start).
+  - To run `happy-cli` against a specific stack: `happys stack happy <stack> -- <happy args...>` (stack shorthand: `happys <stack> happy ...`).
 - **Do not “kill all daemons”**
   - Multiple stack daemons are expected. Stop stacks explicitly (`happys stack stop …` or `happys stop …`).
 - **Main stack safety**
@@ -251,7 +266,7 @@ Notes:
 - This keeps the upstream PR history clean and makes fork PRs reproducible.
 - The same pattern applies to `happy-cli` and server repos too.
 
-### Server repos: shipping the same change to both fork flavors
+### Server repos: shipping the same change to both fork flavors (split-repo workflow)
 
 Server development has one extra twist: **our fork uses a single GitHub repo with two “main” branches**.
 
@@ -262,8 +277,9 @@ Server development has one extra twist: **our fork uses a single GitHub repo wit
 
 Local checkouts:
 
-- `components/happy-server` and `components/happy-server-light` are **separate local repos** (separate clones) so branch names do not automatically exist in both.
-- In these server repos, the fork remote name is often `fork` (not `origin`), but **`happys wt` normalizes `origin` ↔ `fork`** automatically.
+- **Split-repo mode (legacy):** `components/happy-server` and `components/happy-server-light` are separate clones, so branch names do not automatically exist in both.
+- **Unified monorepo mode (recommended):** server flavors share a single codebase under `components/happy/.../server/` and Happy Stacks can point both `happy-server` and `happy-server-light` component dirs at that same monorepo checkout when the SQLite artifacts exist (see `docs/server-flavors.md`).
+- In the split server repos, the fork remote name is often `fork` (not `origin`), but **`happys wt` normalizes `origin` ↔ `fork`** automatically.
 
 #### Goal: one upstream PR, two fork PRs (one per target branch)
 
@@ -375,7 +391,9 @@ In interactive TTY runs, `happys dev` / `happys start` may auto-open the UI in y
 - **Dependency install**: ensures component deps are installed when needed.
 - **Schema readiness**:
   - `happy-server` (Postgres): applies `prisma migrate deploy` (configurable via `HAPPY_STACKS_PRISMA_MIGRATE`)
-  - `happy-server-light` (SQLite): applies `prisma migrate deploy` using the SQLite migration history in the unified server repo
+  - `happy-server-light` (SQLite):
+    - **unified** server-light (recommended): applies `prisma migrate deploy` using the SQLite migration history in the unified server repo (`prisma/sqlite/schema.prisma` — legacy: `prisma/schema.sqlite.prisma`)
+    - **legacy** server-light: does **not** run `prisma migrate deploy` (it often fails with `P3005` when the DB was created via `prisma db push` and no migrations exist). The legacy server-light dev/start scripts handle schema via `prisma db push`.
 - **Auth seeding for new stacks** (non-main + non-interactive default):
   - Uses the configured seed stack via `HAPPY_STACKS_AUTH_SEED_FROM` (default: `main`) when the stack looks uninitialized.
   - Recommended for development: create + log into a dedicated seed stack once (usually `dev-auth`) and set:
@@ -729,4 +747,3 @@ happys stack audit --fix-workspace --fix-paths --fix-ports
 ```bash
 happys stack doctor <stack>
 ```
-

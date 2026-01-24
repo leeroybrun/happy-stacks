@@ -87,7 +87,10 @@ happys stack new --interactive
 The wizard lets you:
 
 - pick the server type (`happy-server-light` or `happy-server`)
-- pick or create worktrees for `happy`, `happy-cli`, and the chosen server component
+- pick or create a worktree for `happy`
+- when the selected `happy` checkout is a **monorepo** (`expo-app/`, `cli/`, `server/`), you can choose to **derive** `happy-cli` + `happy-server` from it (keeps UI/CLI/server versions in sync)
+  - if the monorepo server includes the SQLite schema, `happy-server-light` is also derived from the same `server/` checkout automatically
+- if you don’t derive, you can pick/create worktrees for `happy-cli` and the chosen server component as before
 - choose which Git remote to base newly-created worktrees on (defaults to `upstream`)
 
 When creating `--server=happy-server` stacks, happy-stacks will also reserve additional ports and persist
@@ -156,6 +159,21 @@ happys stack wt exp1 -- use happy-cli default
 
 This updates the stack env file (`~/.happy/stacks/<name>/env`), not repo `env.local` (legacy path still supported).
 
+## Run happy-cli against a specific stack (`stack happy`)
+
+If you want to run a `happy` CLI command against a specific stack (instead of whatever your current shell env points at), use:
+
+```bash
+happys stack happy exp1 -- status
+happys stack happy exp1 -- daemon status
+```
+
+Stack shorthand also works:
+
+```bash
+happys exp1 happy status
+```
+
 ## Stack wrappers you can use
 
 These commands run with the stack env file applied:
@@ -165,6 +183,7 @@ These commands run with the stack env file applied:
 - `happys stack build <name>`
 - `happys stack doctor <name>`
 - `happys stack mobile <name>`
+- `happys stack happy <name> [-- ...]`
 - `happys stack srv <name> -- status|use ...`
 - `happys stack wt <name> -- <wt args...>`
 - `happys stack tailscale:status|enable|disable|url <name>`
@@ -172,8 +191,9 @@ These commands run with the stack env file applied:
 
 Global/non-stack commands:
 
-- `happys bootstrap` (sets up shared component repos)
-- `happys cli:link` (installs `happy` shim under `~/.happy-stacks/bin/`)
+- `happys setup` (recommended; installs shims/runtime and bootstraps components)
+- (advanced) `happys init` (plumbing: shims/runtime/pointer env)
+- (advanced) `happys bootstrap` (clone/install components and deps)
 
 ## Services (autostart)
 
@@ -217,6 +237,9 @@ So `--happy=slopus/pr/foo` maps to:
 ```
 components/.worktrees/happy/slopus/pr/foo
 ```
+
+Monorepo note: when `happy` is a `slopus/happy` monorepo checkout, `happy-cli` and `happy-server` share the same git repo/worktree
+root under `components/.worktrees/happy/...` (then map to `cli/` and `server/` subdirectories).
 
 You can also pass an absolute path.
 

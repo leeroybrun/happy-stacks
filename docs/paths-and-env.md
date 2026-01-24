@@ -36,6 +36,8 @@ happys where
 - **Components dir**
   - Computed as: `<workspaceDir>/components`
   - Contains `happy`, `happy-cli`, `happy-server-light`, `happy-server`, plus `.worktrees/`.
+  - Monorepo note: if `components/happy` is a `slopus/happy` monorepo checkout, `happy-cli` and `happy-server` can be derived from it (mapping to `cli/` and `server/`), even if you don’t have separate `components/happy-cli` / `components/happy-server` checkouts.
+  - Monorepo worktrees are stored under `components/.worktrees/happy/...` (one repo key).
 
 - **Stacks storage dir**
   - Default: `~/.happy/stacks`
@@ -138,4 +140,3 @@ To explicitly allow them for testing, set:
 
 - `docs/stacks.md` (stacks lifecycle + commands)
 - `docs/worktrees-and-forks.md` (worktrees layout + upstream/fork workflows)
-
