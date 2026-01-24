@@ -18,6 +18,7 @@ import { readEnvObjectFromFile } from './utils/env/read.mjs';
 import { clipboardAvailable, copyTextToClipboard } from './utils/ui/clipboard.mjs';
 import { detectInstalledLlmTools } from './utils/llm/tools.mjs';
 import { launchLlmAssistant } from './utils/llm/assist.mjs';
+import { buildHappyStacksRunnerShellSnippet } from './utils/llm/happys_runner.mjs';
 
 function usage() {
   return [
@@ -505,30 +506,32 @@ function readPinnedComponentDirFromEnvObject(envObj, component) {
 }
 
 function buildLlmPromptForImport() {
+  const hs = buildHappyStacksRunnerShellSnippet();
   return [
     'You are an assistant helping the user migrate legacy Happy split repos into Happy Stacks.',
     '',
+    hs,
     'Goals:',
     '- Import legacy split repos (happy / happy-cli / happy-server) into a stack in Happy Stacks.',
     '- Optionally migrate commits into the slopus/happy monorepo layout (expo-app/cli/server).',
     '',
     'How to proceed:',
     '1) Run the guided import wizard:',
-    '   - `happys import`',
+    '   - `hs import`',
     '',
     'Non-interactive (LLM-friendly) variant:',
     '- Inspect candidate repos/worktrees/branches (JSON):',
-    '   - `happys import inspect --happy=<path|url> --happy-cli=<path|url> --happy-server=<path|url> --yes --json`',
+    '   - `hs import inspect --happy=<path|url> --happy-cli=<path|url> --happy-server=<path|url> --yes --json`',
     '- Apply pins to a stack (no prompts):',
-    '   - `happys import apply --stack=<name> --server=happy-server-light --happy=<path|url> --happy-ref=<ref> --happy-cli=<path|url> --happy-cli-ref=<ref> --happy-server=<path|url> --happy-server-ref=<ref> --yes`',
+    '   - `hs import apply --stack=<name> --server=happy-server-light --happy=<path|url> --happy-ref=<ref> --happy-cli=<path|url> --happy-cli-ref=<ref> --happy-server=<path|url> --happy-server-ref=<ref> --yes`',
     '2) If you want to migrate an existing imported stack later:',
-    '   - `happys import migrate --stack=<stack>`',
+    '   - `hs import migrate --stack=<stack>`',
     '',
     'Conflict handling (monorepo port):',
-    '- Prefer guided mode: `happys monorepo port guide --target=<monorepo-root>`',
+    '- Prefer guided mode: `hs monorepo port guide --target=<monorepo-root>`',
     '- For machine-readable state, use:',
-    '   - `happys monorepo port status --target=<monorepo-root> --json`',
-    '   - `happys monorepo port continue --target=<monorepo-root>`',
+    '   - `hs monorepo port status --target=<monorepo-root> --json`',
+    '   - `hs monorepo port continue --target=<monorepo-root>`',
     '',
     'Important:',
     '- A “stack” is an isolated runtime (ports + data + env) under ~/.happy/stacks/<name>.',
@@ -538,9 +541,11 @@ function buildLlmPromptForImport() {
 }
 
 function buildLlmPromptForMigrate({ stackName }) {
+  const hs = buildHappyStacksRunnerShellSnippet();
   return [
     'You are an assistant helping the user migrate an existing Happy Stacks stack to the monorepo.',
     '',
+    hs,
     `Target stack: ${stackName || '<stack>'}`,
     '',
     'Goal:',
@@ -548,17 +553,17 @@ function buildLlmPromptForMigrate({ stackName }) {
     '- Create a new monorepo stack by default (keep the legacy stack intact).',
     '',
     'Command:',
-    `- happys import migrate --stack=${stackName || '<stack>'}`,
+    `- hs import migrate --stack=${stackName || '<stack>'}`,
     '',
     'Conflict handling:',
-    '- This uses `happys monorepo port guide` which pauses on conflicts.',
-    '- To inspect machine-readably: `happys monorepo port status --target=<monorepo-root> --json`',
+    '- This uses `hs monorepo port guide` which pauses on conflicts.',
+    '- To inspect machine-readably: `hs monorepo port status --target=<monorepo-root> --json`',
   ].join('\n');
 }
 
 function buildMonorepoMigrationPrompt({ targetMonorepoRoot, branch, sources }) {
   const args = [
-    `happys monorepo port --target=${targetMonorepoRoot} --branch=${branch} --3way`,
+    `hs monorepo port --target=${targetMonorepoRoot} --branch=${branch} --3way`,
     sources.happy ? `--from-happy=${sources.happy}` : '',
     sources['happy-cli'] ? `--from-happy-cli=${sources['happy-cli']}` : '',
     sources['happy-server'] ? `--from-happy-server=${sources['happy-server']}` : '',
@@ -569,6 +574,7 @@ function buildMonorepoMigrationPrompt({ targetMonorepoRoot, branch, sources }) {
   return [
     'You are an assistant helping the user migrate split-repo commits into the Happy monorepo layout.',
     '',
+    buildHappyStacksRunnerShellSnippet(),
     `Target monorepo worktree: ${targetMonorepoRoot}`,
     `Port branch: ${branch}`,
     '',
@@ -580,10 +586,10 @@ function buildMonorepoMigrationPrompt({ targetMonorepoRoot, branch, sources }) {
     args,
     '',
     'If it stops with conflicts:',
-    `- Inspect: happys monorepo port status --target=${targetMonorepoRoot} --json`,
+    `- Inspect: hs monorepo port status --target=${targetMonorepoRoot} --json`,
     `- Resolve conflicted files (keep changes scoped to expo-app/, cli/, server/)`,
     `- Stage:  git -C ${targetMonorepoRoot} add <files>`,
-    `- Continue: happys monorepo port continue --target=${targetMonorepoRoot}`,
+    `- Continue: hs monorepo port continue --target=${targetMonorepoRoot}`,
     '',
     'Repeat status/resolve/continue until ok.',
   ].join('\n');

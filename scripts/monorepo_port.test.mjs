@@ -275,6 +275,76 @@ test('monorepo port can clone the target monorepo into a new directory', async (
   assert.equal(content, 'v2\n');
 });
 
+test('monorepo port guide auto-clones target when --target does not exist', async (t) => {
+  const root = await withTempRoot(t);
+  const seedMono = join(root, 'seed-mono');
+  const target = join(root, 'target-guide-autoclone'); // does not exist yet
+  const sourceCli = join(root, 'source-cli');
+  const env = gitEnv();
+
+  // Seed monorepo repo that will be cloned into `target`
+  await initMonorepoStub({ dir: seedMono, env, seed: { 'cli/hello.txt': 'v1\n' } });
+
+  // Source CLI repo with one change commit (v1 -> v2)
+  const base = await initSplitRepoStub({ dir: sourceCli, env, name: 'cli', seed: { 'hello.txt': 'v1\n' } });
+  await writeFile(join(sourceCli, 'hello.txt'), 'v2\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env });
+  await run('git', ['commit', '-q', '-m', 'feat: update hello'], { cwd: sourceCli, env });
+
+  // Guide requires a TTY, but with all args provided it should not prompt.
+  // We spawn so the guide sees a TTY (required), but still feed no input.
+  const child = spawn(
+    process.execPath,
+    [
+      join(process.cwd(), 'scripts', 'monorepo.mjs'),
+      'port',
+      'guide',
+      `--target=${target}`,
+      `--target-repo=${seedMono}`,
+      '--branch=port/test-guide-autoclone',
+      '--3way',
+      `--from-happy-cli=${sourceCli}`,
+      `--from-happy-cli-base=${base}`,
+      '--json',
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...env, HAPPY_STACKS_TEST_TTY: '1', HAPPY_STACKS_DISABLE_LLM_AUTOEXEC: '1' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }
+  );
+  t.after(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  });
+  let out = '';
+  let err = '';
+  let exitCode = null;
+  child.stdout?.on('data', (d) => (out += d.toString()));
+  child.stderr?.on('data', (d) => (err += d.toString()));
+  child.on('exit', (code) => {
+    exitCode = code;
+  });
+
+  const waitForExit = async (timeoutMs) => {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (exitCode != null) return;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`timeout waiting for guide to exit\nstdout:\n${out}\nstderr:\n${err}`);
+  };
+  await waitForExit(20_000);
+  assert.equal(exitCode, 0, `expected guide to exit 0\nstdout:\n${out}\nstderr:\n${err}`);
+
+  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  assert.equal(content, 'v2\n');
+});
+
 test('monorepo port accepts source repo URLs by cloning them into a temp checkout', async (t) => {
   const root = await withTempRoot(t);
   const target = join(root, 'target-mono');
@@ -711,6 +781,72 @@ test('monorepo port continue runs git am --continue after conflicts are resolved
   const out = await runCapture(
     process.execPath,
     [join(process.cwd(), 'scripts', 'monorepo.mjs'), 'port', 'continue', `--target=${target}`, '--json'],
+    { cwd: process.cwd(), env: gitEnv() }
+  );
+  const parsed = JSON.parse(out.trim());
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.inProgress, false);
+
+  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  assert.equal(content, 'value=source\n');
+});
+
+test('monorepo port continue --stage stages conflicted files before continuing', async (t) => {
+  const root = await withTempRoot(t);
+  const target = join(root, 'target-mono');
+  const sourceCli = join(root, 'source-cli');
+
+  // Target monorepo stub with cli/hello.txt="value=target".
+  await mkdir(target, { recursive: true });
+  await run('git', ['init', '-q'], { cwd: target, env: gitEnv() });
+  await run('git', ['checkout', '-q', '-b', 'main'], { cwd: target, env: gitEnv() });
+  await mkdir(join(target, 'expo-app'), { recursive: true });
+  await mkdir(join(target, 'cli'), { recursive: true });
+  await mkdir(join(target, 'server'), { recursive: true });
+  await writeFile(join(target, 'expo-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'server', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'cli', 'hello.txt'), 'value=target\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: target, env: gitEnv() });
+  await run('git', ['commit', '-q', '-m', 'chore: init monorepo'], { cwd: target, env: gitEnv() });
+
+  // Source CLI repo with base="value=base" and a commit changing to "value=source".
+  await mkdir(sourceCli, { recursive: true });
+  await run('git', ['init', '-q'], { cwd: sourceCli, env: gitEnv() });
+  await run('git', ['checkout', '-q', '-b', 'main'], { cwd: sourceCli, env: gitEnv() });
+  await writeFile(join(sourceCli, 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(sourceCli, 'hello.txt'), 'value=base\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env: gitEnv() });
+  await run('git', ['commit', '-q', '-m', 'chore: init cli'], { cwd: sourceCli, env: gitEnv() });
+  const base = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: sourceCli, env: gitEnv() })).trim();
+  await writeFile(join(sourceCli, 'hello.txt'), 'value=source\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env: gitEnv() });
+  await run('git', ['commit', '-q', '-m', 'feat: update hello'], { cwd: sourceCli, env: gitEnv() });
+
+  // Start a port that will stop with an am conflict.
+  await assert.rejects(
+    async () =>
+      await runCapture(
+        process.execPath,
+        [
+          join(process.cwd(), 'scripts', 'monorepo.mjs'),
+          'port',
+          `--target=${target}`,
+          `--branch=port/test-continue-stage`,
+          `--from-happy-cli=${sourceCli}`,
+          `--from-happy-cli-base=${base}`,
+          '--3way',
+        ],
+        { cwd: process.cwd(), env: gitEnv() }
+      )
+  );
+
+  // Resolve the conflict by choosing "value=source", but DO NOT stage it.
+  await writeFile(join(target, 'cli', 'hello.txt'), 'value=source\n', 'utf-8');
+
+  const out = await runCapture(
+    process.execPath,
+    [join(process.cwd(), 'scripts', 'monorepo.mjs'), 'port', 'continue', `--target=${target}`, '--stage', '--json'],
     { cwd: process.cwd(), env: gitEnv() }
   );
   const parsed = JSON.parse(out.trim());

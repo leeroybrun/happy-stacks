@@ -36,7 +36,25 @@ export async function promptSelect(rl, { title, options, defaultIndex = 0 }) {
     console.log(`  ${i + 1}) ${options[i].label}`);
   }
   const answer = (await rl.question(`Pick [1-${options.length}] (default: ${defaultIndex + 1}): `)).trim();
-  const n = answer ? Number(answer) : defaultIndex + 1;
+  const token = answer.match(/\d+/)?.[0] ?? '';
+  let n = defaultIndex + 1;
+  if (token) {
+    const parsed = Number(token);
+    if (Number.isFinite(parsed)) {
+      // Heuristic: in some nested-readline situations (or odd terminals), single-digit input can get duplicated
+      // (e.g. "2" becomes "22"). If that happens and all digits are identical, treat it as the intended single digit.
+      if (
+        token.length > 1 &&
+        token.split('').every((c) => c === token[0]) &&
+        Number(token[0]) >= 1 &&
+        Number(token[0]) <= options.length
+      ) {
+        n = Number(token[0]);
+      } else {
+        n = parsed;
+      }
+    }
+  }
   const idx = Math.max(1, Math.min(options.length, Number.isFinite(n) ? n : defaultIndex + 1)) - 1;
   return options[idx].value;
 }

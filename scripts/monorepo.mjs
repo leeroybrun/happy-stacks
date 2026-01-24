@@ -14,6 +14,7 @@ import { bold, cyan, dim, green, red, yellow } from './utils/ui/ansi.mjs';
 import { clipboardAvailable, copyTextToClipboard } from './utils/ui/clipboard.mjs';
 import { detectInstalledLlmTools } from './utils/llm/tools.mjs';
 import { launchLlmAssistant } from './utils/llm/assist.mjs';
+import { buildHappyStacksRunnerShellSnippet } from './utils/llm/happys_runner.mjs';
 
 function usage() {
   return [
@@ -258,7 +259,7 @@ async function ensureClonedHappyMonorepo({ targetPath, repoUrl }) {
   return dest;
 }
 
-async function resolveOrCloneTargetRepoRoot({ targetInput, targetArg, flags, kv }) {
+async function resolveOrCloneTargetRepoRoot({ targetInput, targetArg, flags, kv, progress } = {}) {
   const hint = String(targetInput ?? '').trim();
   if (!hint) throw new Error('[monorepo] missing target');
 
@@ -284,7 +285,9 @@ async function resolveOrCloneTargetRepoRoot({ targetInput, targetArg, flags, kv 
       throw new Error('[monorepo] --clone-target requires an explicit --target=<dir>');
     }
     const targetRepo = String(kv?.get?.('--target-repo') ?? '').trim();
+    const spin = progress?.spinner?.(`Cloning target monorepo into ${hint}`);
     const cloned = await ensureClonedHappyMonorepo({ targetPath: hint, repoUrl: targetRepo || 'https://github.com/slopus/happy.git' });
+    spin?.succeed?.(`Cloned target monorepo (${hint})`);
     const clonedRoot = await resolveGitRoot(cloned);
     if (!clonedRoot || !isHappyMonorepoRoot(clonedRoot)) {
       throw new Error(`[monorepo] cloned target does not look like a slopus/happy monorepo root: ${cloned}`);
@@ -296,7 +299,7 @@ async function resolveOrCloneTargetRepoRoot({ targetInput, targetArg, flags, kv 
   throw new Error(`[monorepo] target is not a git repo: ${hint}`);
 }
 
-async function ensureRepoSpecCheckedOut({ targetRepoRoot, label, spec, desiredRef = '' }) {
+async function ensureRepoSpecCheckedOut({ targetRepoRoot, label, spec, desiredRef = '', progress } = {}) {
   const raw = String(spec ?? '').trim();
   if (!raw) return '';
 
@@ -324,12 +327,16 @@ async function ensureRepoSpecCheckedOut({ targetRepoRoot, label, spec, desiredRe
 
     if (!(await pathExists(dir))) {
       await mkdir(dirname(dir), { recursive: true });
+      const spin = progress?.spinner?.(`Cloning ${label} PR repo (${pr.owner}/${pr.repo}#${pr.number})`);
       await runCapture('git', ['clone', '--quiet', repoUrl, dir], { cwd: dirname(dir), env: gitNonInteractiveEnv() });
+      spin?.succeed?.(`Cloned ${label} PR repo (${pr.owner}/${pr.repo}#${pr.number})`);
     }
 
     const prRef = `refs/pull/${pr.number}/head`;
+    const spinFetch = progress?.spinner?.(`Fetching ${label} PR head (${prRef})`);
     await runCapture('git', ['fetch', '--quiet', 'origin', prRef], { cwd: dir, env: gitNonInteractiveEnv() });
     await runCapture('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dir, env: gitNonInteractiveEnv() });
+    spinFetch?.succeed?.(`Checked out ${label} PR head`);
     return dir;
   }
 
@@ -338,7 +345,9 @@ async function ensureRepoSpecCheckedOut({ targetRepoRoot, label, spec, desiredRe
   const dir = join(scratch, `${label}-${key}`);
   if (!(await pathExists(dir))) {
     await mkdir(dirname(dir), { recursive: true });
+    const spin = progress?.spinner?.(`Cloning ${label} source repo`);
     await runCapture('git', ['clone', '--quiet', raw, dir], { cwd: dirname(dir), env: gitNonInteractiveEnv() });
+    spin?.succeed?.(`Cloned ${label} source repo`);
   }
 
   // Best-effort: ensure the desired ref exists (if provided).
@@ -346,7 +355,9 @@ async function ensureRepoSpecCheckedOut({ targetRepoRoot, label, spec, desiredRe
   if (ref) {
     const ok = await gitOk(dir, ['rev-parse', '--verify', '--quiet', ref]);
     if (!ok) {
+      const spin = progress?.spinner?.(`Fetching ${label} ref (${ref})`);
       await git(dir, ['fetch', '--quiet', 'origin', ref]).catch(() => {});
+      spin?.succeed?.(`Fetched ${label} ref (${ref})`);
     }
   }
   return dir;
@@ -356,6 +367,105 @@ async function resolveGitPath(repoRoot, relPath) {
   const rel = (await git(repoRoot, ['rev-parse', '--git-path', relPath])).trim();
   if (!rel) return '';
   return rel.startsWith('/') ? rel : join(repoRoot, rel);
+}
+
+function isTestTty() {
+  return String(process.env.HAPPY_STACKS_TEST_TTY ?? '').trim() === '1';
+}
+
+function shouldShowProgress({ json, silent = false } = {}) {
+  if (silent) return false;
+  if (json) return false;
+  return true;
+}
+
+function createProgressReporter({ enabled, label = '[monorepo]' } = {}) {
+  const on = Boolean(enabled);
+  const canSpin = on && isTty() && !isTestTty();
+  const frames = ['|', '/', '-', '\\'];
+
+  const line = (s) => {
+    // eslint-disable-next-line no-console
+    console.log(s);
+  };
+
+  const spinner = (text) => {
+    const msg = String(text ?? '').trim();
+    if (!on) {
+      return {
+        update: () => {},
+        succeed: () => {},
+        fail: () => {},
+      };
+    }
+
+    if (!canSpin) {
+      line(`${dim(label)} ${msg}`);
+      return {
+        update: () => {},
+        succeed: (doneText) => {
+          const done = String(doneText ?? '').trim();
+          if (done) line(`${green('✓')} ${done}`);
+        },
+        fail: (failText) => {
+          const fail = String(failText ?? '').trim();
+          if (fail) line(`${yellow('!')} ${fail}`);
+        },
+      };
+    }
+
+    let idx = 0;
+    let current = msg;
+    let active = true;
+
+    const render = () => {
+      if (!active) return;
+      const f = frames[idx % frames.length];
+      idx += 1;
+      try {
+        process.stdout.write(`\r${dim(label)} ${current} ${dim(f)}   `);
+      } catch {
+        // ignore
+      }
+    };
+
+    // Initial render + keepalive.
+    render();
+    const t = setInterval(render, 120);
+
+    const stop = () => {
+      active = false;
+      try {
+        clearInterval(t);
+      } catch {
+        // ignore
+      }
+      try {
+        process.stdout.write('\r' + ' '.repeat(Math.min(140, current.length + String(label).length + 16)) + '\r');
+      } catch {
+        // ignore
+      }
+    };
+
+    return {
+      update: (nextText) => {
+        current = String(nextText ?? '').trim() || current;
+        render();
+      },
+      succeed: (doneText) => {
+        stop();
+        const done = String(doneText ?? '').trim();
+        if (done) line(`${green('✓')} ${done}`);
+      },
+      fail: (failText) => {
+        stop();
+        const fail = String(failText ?? '').trim();
+        if (fail) line(`${yellow('!')} ${fail}`);
+      },
+    };
+  };
+
+  return { spinner, line };
 }
 
 function section(title) {
@@ -452,6 +562,28 @@ async function listConflictedFiles(repoRoot) {
   return Array.from(new Set(files)).sort();
 }
 
+function hasConflictMarkers(text) {
+  const s = String(text ?? '');
+  // Typical git conflict markers at the start of a line.
+  return /^(<<<<<<< |>>>>>>> |\|\|\|\|\|\|\| )/m.test(s);
+}
+
+async function listFilesWithConflictMarkers(repoRoot, files) {
+  const fs = Array.isArray(files) ? files : [];
+  const hits = [];
+  for (const f of fs) {
+    const p = join(repoRoot, f);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const raw = await readFile(p, 'utf-8');
+      if (hasConflictMarkers(raw)) hits.push(f);
+    } catch {
+      // ignore unreadable files
+    }
+  }
+  return hits;
+}
+
 async function readGitAmStatus(targetRepoRoot) {
   const inProgress = await isGitAmInProgress(targetRepoRoot);
   const conflictedFiles = await listConflictedFiles(targetRepoRoot);
@@ -492,8 +624,13 @@ async function readGitAmStatus(targetRepoRoot) {
   return { inProgress, currentPatch, conflictedFiles };
 }
 
-async function formatPatchesToDir({ sourceRepoRoot, base, head, outDir }) {
+async function formatPatchesToDir({ sourceRepoRoot, base, head, outDir, progressLabel = '', progress } = {}) {
+  const range = `${base}..${head}`;
+  const spin = progress?.spinner?.(
+    `Formatting patches${progressLabel ? ` (${progressLabel})` : ''} ${dim(`(${range})`)}`
+  );
   await run('git', ['format-patch', '--quiet', '--output-directory', outDir, `${base}..${head}`], { cwd: sourceRepoRoot });
+  spin?.succeed?.(`Formatted patches${progressLabel ? ` (${progressLabel})` : ''}`);
   const entries = await readdir(outDir, { withFileTypes: true });
   const patches = entries
     .filter((e) => e.isFile() && e.name.endsWith('.patch'))
@@ -639,7 +776,7 @@ async function checkPureNewFilesAlreadyExistIdentically({ targetRepoRoot, direct
   return { ok: true, paths };
 }
 
-async function applyPatches({ targetRepoRoot, directory, patches, threeWay, skipApplied, continueOnFailure, quietGit }) {
+async function applyPatches({ targetRepoRoot, directory, patches, threeWay, skipApplied, continueOnFailure, quietGit, progress } = {}) {
   if (!patches.length) {
     return { applied: [], skippedAlreadyApplied: [], skippedAlreadyExistsIdentical: [], failed: [] };
   }
@@ -648,8 +785,21 @@ async function applyPatches({ targetRepoRoot, directory, patches, threeWay, skip
   const skippedAlreadyApplied = [];
   const skippedAlreadyExistsIdentical = [];
   const failed = [];
+  const total = patches.length;
+  const targetLabel = directory ? `${directory}/` : '.';
+  const spin = progress?.spinner?.(`Applying patches into ${targetLabel} ${dim(`(0/${total})`)}`);
+  let lastUpdateAt = 0;
 
-  for (const patch of patches) {
+  for (let i = 0; i < patches.length; i++) {
+    const patch = patches[i];
+    if (spin?.update) {
+      const now = Date.now();
+      // Avoid hammering the terminal. Update at most ~5x/sec.
+      if (now - lastUpdateAt > 200) {
+        lastUpdateAt = now;
+        spin.update(`Applying patches into ${targetLabel} ${dim(`(${i + 1}/${total})`)}`);
+      }
+    }
     const patchFile = basename(patch);
     // eslint-disable-next-line no-await-in-loop
     const patchText = await readFile(patch, 'utf-8');
@@ -763,6 +913,9 @@ async function applyPatches({ targetRepoRoot, directory, patches, threeWay, skip
     }
   }
 
+  spin?.succeed?.(
+    `Applied patches into ${targetLabel} ${dim(`(applied=${applied.length} skipped=${skippedAlreadyApplied.length + skippedAlreadyExistsIdentical.length} failed=${failed.length})`)}`
+  );
   return {
     applied,
     skippedAlreadyApplied,
@@ -783,6 +936,7 @@ async function portOne({
   skipApplied,
   continueOnFailure,
   quietGit,
+  progress,
 }) {
   const sourceRepoRoot = await resolveGitRoot(sourcePath);
   if (!sourceRepoRoot) {
@@ -807,7 +961,14 @@ async function portOne({
 
   const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-port-'));
   try {
-    const patches = await formatPatchesToDir({ sourceRepoRoot, base, head, outDir: tmp });
+    const patches = await formatPatchesToDir({
+      sourceRepoRoot,
+      base,
+      head,
+      outDir: tmp,
+      progressLabel: label,
+      progress,
+    });
     if (dryRun) {
       return {
         label,
@@ -829,6 +990,7 @@ async function portOne({
       skipApplied,
       continueOnFailure,
       quietGit,
+      progress,
     });
     return {
       label,
@@ -853,7 +1015,8 @@ async function portOne({
 async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
   const targetArg = (kv.get('--target') ?? '').trim();
   const targetHint = targetArg || process.cwd();
-  const targetRepoRoot = await resolveOrCloneTargetRepoRoot({ targetInput: targetHint, targetArg, flags, kv });
+  const progress = createProgressReporter({ enabled: shouldShowProgress({ json, silent }) });
+  const targetRepoRoot = await resolveOrCloneTargetRepoRoot({ targetInput: targetHint, targetArg, flags, kv, progress });
 
   // Prefer a clearer error message if the user is in the middle of conflict resolution.
   // (A git am session often makes the worktree dirty, which would otherwise trigger a generic "not clean" error.)
@@ -930,7 +1093,13 @@ async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
   for (const s of sources) {
     // Allow sources to be local paths OR URL/PR specs (cloned into target/.git scratch).
     // eslint-disable-next-line no-await-in-loop
-    const resolvedPath = await ensureRepoSpecCheckedOut({ targetRepoRoot, label: s.label, spec: s.path, desiredRef: s.ref });
+    const resolvedPath = await ensureRepoSpecCheckedOut({
+      targetRepoRoot,
+      label: s.label,
+      spec: s.path,
+      desiredRef: s.ref,
+      progress,
+    });
     // eslint-disable-next-line no-await-in-loop
     const r = await portOne({
       label: s.label,
@@ -944,6 +1113,7 @@ async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
       skipApplied,
       continueOnFailure,
       quietGit,
+      progress,
     });
     results.push(r);
   }
@@ -1041,20 +1211,22 @@ async function cmdPortStatus({ kv, json }) {
 }
 
 function buildPortLlmPromptText({ targetRepoRoot }) {
+  const hs = buildHappyStacksRunnerShellSnippet();
   return [
     'You are an assistant helping the user port split-repo commits into the slopus/happy monorepo.',
     '',
+    hs,
     `Target monorepo root: ${targetRepoRoot}`,
     '',
     'How to run the port:',
-    `- guided (recommended): happys monorepo port guide --target=${targetRepoRoot}`,
-    `- machine-readable report: happys monorepo port --target=${targetRepoRoot} --json`,
+    `- guided (recommended): hs monorepo port guide --target=${targetRepoRoot}`,
+    `- machine-readable report: hs monorepo port --target=${targetRepoRoot} --json`,
     '',
     'If a conflict happens (git am in progress):',
-    `- inspect state (JSON): happys monorepo port status --target=${targetRepoRoot} --json`,
-    `- inspect state (text): happys monorepo port status --target=${targetRepoRoot}`,
+    `- inspect state (JSON): hs monorepo port status --target=${targetRepoRoot} --json`,
+    `- inspect state (text): hs monorepo port status --target=${targetRepoRoot}`,
     `- after fixing files:       git -C ${targetRepoRoot} am --continue`,
-    `- or via wrapper:           happys monorepo port continue --target=${targetRepoRoot}`,
+    `- or via wrapper:           hs monorepo port continue --target=${targetRepoRoot}`,
     `- to skip current patch:    git -C ${targetRepoRoot} am --skip`,
     `- to abort:                git -C ${targetRepoRoot} am --abort`,
     '',
@@ -1069,10 +1241,11 @@ function buildPortLlmPromptText({ targetRepoRoot }) {
 
 function buildPortGuideLlmPromptText({ targetRepoRoot, initialCommandArgs }) {
   const parts = Array.isArray(initialCommandArgs) ? initialCommandArgs : [];
-  const cmd = ['happys', 'monorepo', ...parts.map((p) => String(p))].join(' ');
+  const cmd = ['hs', 'monorepo', ...parts.map((p) => String(p))].join(' ');
   return [
     'You are an assistant helping the user port split-repo commits into the slopus/happy monorepo.',
     '',
+    buildHappyStacksRunnerShellSnippet(),
     `Target monorepo root: ${targetRepoRoot}`,
     '',
     'Goal:',
@@ -1087,10 +1260,10 @@ function buildPortGuideLlmPromptText({ targetRepoRoot, initialCommandArgs }) {
     cmd,
     '',
     'If it stops with conflicts:',
-    `- Inspect status (JSON): happys monorepo port status --target=${targetRepoRoot} --json`,
+    `- Inspect status (JSON): hs monorepo port status --target=${targetRepoRoot} --json`,
     `- Resolve conflicted files`,
     `- Stage:  git -C ${targetRepoRoot} add <files>`,
-    `- Continue: happys monorepo port continue --target=${targetRepoRoot}`,
+    `- Continue: hs monorepo port continue --target=${targetRepoRoot}`,
     '',
     'Notes:',
     '- Conflicts are resolved one patch at a time (git am stops at the first conflict).',
@@ -1100,11 +1273,78 @@ function buildPortGuideLlmPromptText({ targetRepoRoot, initialCommandArgs }) {
   ].join('\n');
 }
 
-async function cmdPortContinue({ kv, json }) {
+async function cmdPortContinue({ kv, flags, json }) {
   const targetRepoRoot = await resolveTargetRepoRootFromArgs({ kv });
   const runAmContinue = async () => {
     const inProgressBefore = await isGitAmInProgress(targetRepoRoot);
     if (!inProgressBefore) return { ok: true, didRun: false };
+    const stageWanted = flags?.has?.('--stage') === true || flags?.has?.('--stage-conflicts') === true;
+    const { conflictedFiles, currentPatch } = await readGitAmStatus(targetRepoRoot);
+
+    const stageCandidates = conflictedFiles.length
+      ? conflictedFiles
+      : Array.isArray(currentPatch?.files)
+        ? currentPatch.files.filter(Boolean)
+        : [];
+
+    if (conflictedFiles.length) {
+      if (!stageWanted) {
+        const hint = [
+          `${yellow('[monorepo]')} continue blocked: ${bold('files still need staging')}`,
+          `[monorepo] git reports unmerged files (e.g. ${dim('UU')}). This usually means you resolved them in an editor but forgot ${bold('git add')}.`,
+          `[monorepo] conflicted files: ${conflictedFiles.join(', ')}`,
+          `[monorepo] next: git -C ${targetRepoRoot} add ${conflictedFiles.map((f) => JSON.stringify(f)).join(' ')}`,
+          `[monorepo] then re-run: happys monorepo port continue --target=${targetRepoRoot}`,
+          `[monorepo] tip: you can also run: happys monorepo port continue --target=${targetRepoRoot} --stage`,
+        ].join('\n');
+        printResult({
+          json,
+          data: { ok: false, targetRepoRoot, inProgress: true, conflictedFiles, needsStage: true, currentPatch },
+          text: json ? '' : hint,
+        });
+        process.exitCode = 1;
+        return { ok: false, didRun: false };
+      }
+
+      const markerHits = await listFilesWithConflictMarkers(targetRepoRoot, stageCandidates);
+      if (markerHits.length) {
+        const hint = [
+          `${yellow('[monorepo]')} refusing to auto-stage: conflict markers still present`,
+          `[monorepo] files: ${markerHits.join(', ')}`,
+          `[monorepo] next: open the file(s), remove ${dim('<<<<<<< / ======= / >>>>>>>')} markers, then run:`,
+          `  git -C ${targetRepoRoot} add ${markerHits.map((f) => JSON.stringify(f)).join(' ')}`,
+          `  happys monorepo port continue --target=${targetRepoRoot}`,
+        ].join('\n');
+        printResult({
+          json,
+          data: { ok: false, targetRepoRoot, inProgress: true, conflictedFiles, conflictMarkers: markerHits },
+          text: json ? '' : hint,
+        });
+        process.exitCode = 1;
+        return { ok: false, didRun: false };
+      }
+
+      await runCapture('git', ['add', '-A', '--', ...stageCandidates], { cwd: targetRepoRoot });
+    } else if (stageWanted && stageCandidates.length) {
+      const markerHits = await listFilesWithConflictMarkers(targetRepoRoot, stageCandidates);
+      if (markerHits.length) {
+        const hint = [
+          `${yellow('[monorepo]')} refusing to auto-stage: conflict markers still present`,
+          `[monorepo] files: ${markerHits.join(', ')}`,
+          `[monorepo] next: open the file(s), remove ${dim('<<<<<<< / ======= / >>>>>>>')} markers, then run:`,
+          `  git -C ${targetRepoRoot} add ${markerHits.map((f) => JSON.stringify(f)).join(' ')}`,
+          `  happys monorepo port continue --target=${targetRepoRoot}`,
+        ].join('\n');
+        printResult({
+          json,
+          data: { ok: false, targetRepoRoot, inProgress: true, conflictedFiles, conflictMarkers: markerHits },
+          text: json ? '' : hint,
+        });
+        process.exitCode = 1;
+        return { ok: false, didRun: false };
+      }
+      await runCapture('git', ['add', '-A', '--', ...stageCandidates], { cwd: targetRepoRoot });
+    }
     try {
       await runCapture('git', ['am', '--continue'], { cwd: targetRepoRoot });
       return { ok: true, didRun: true };
@@ -1115,7 +1355,7 @@ async function cmdPortContinue({ kv, json }) {
         `${red('[monorepo]')} continue failed (still conflicted).`,
         conflictedFiles.length ? `[monorepo] conflicted files: ${conflictedFiles.join(', ')}` : '',
         stderr ? `[monorepo] git:\n${stderr}` : '',
-        `[monorepo] next: resolve, then re-run: happys monorepo port continue --target=${targetRepoRoot}`,
+        `[monorepo] next: resolve, stage (${bold('git add')}), then re-run: happys monorepo port continue --target=${targetRepoRoot}`,
       ]
         .filter(Boolean)
         .join('\n');
@@ -1301,7 +1541,9 @@ async function cmdPortGuide({ kv, flags, json }) {
     let targetRepoRoot = await resolveGitRoot(targetInput);
     if (!targetRepoRoot) {
       const wantsClone = flags?.has?.('--clone-target') || flags?.has?.('--clone');
-      if (!wantsClone) {
+      // If the target doesn't exist yet, default to cloning without asking (best UX for `--target=...`).
+      const targetExists = await pathExists(targetInput);
+      if (targetExists && !wantsClone) {
         const shouldClone =
           (await promptSelect(rl, {
             title:
@@ -1319,12 +1561,148 @@ async function cmdPortGuide({ kv, flags, json }) {
         }
       }
       const repoUrl = (kv.get('--target-repo') ?? '').trim() || 'https://github.com/slopus/happy.git';
+      // eslint-disable-next-line no-console
+      console.log(dim(`[monorepo] cloning target monorepo -> ${targetInput}`));
       await ensureClonedHappyMonorepo({ targetPath: targetInput, repoUrl });
       targetRepoRoot = await resolveGitRoot(targetInput);
     }
     if (!targetRepoRoot || !isHappyMonorepoRoot(targetRepoRoot)) {
       throw new Error(`[monorepo] invalid target (expected slopus/happy monorepo root): ${targetInput}`);
     }
+    const existingPlan = await readPortPlan(targetRepoRoot);
+    if (existingPlan?.plan?.resumeArgv && Array.isArray(existingPlan.plan.resumeArgv)) {
+      // Resume mode:
+      // - do NOT require a clean worktree
+      // - do NOT reject if git am is in progress
+      // - do NOT re-prompt for options; use the stored plan
+      // eslint-disable-next-line no-console
+      console.log('');
+      // eslint-disable-next-line no-console
+      console.log(`${bold('[monorepo]')} guide: resuming existing port plan`);
+
+      const plan = existingPlan.plan;
+      const resumeArgv = [...plan.resumeArgv];
+      const initialArgv = Array.isArray(plan.initialArgv) ? [...plan.initialArgv] : null;
+
+      // Ensure we are on the intended branch if we can.
+      try {
+        const intended = String(plan.branch ?? '').trim();
+        if (intended && intended !== 'HEAD') {
+          const cur = (await git(targetRepoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || 'HEAD';
+          if (cur !== intended) {
+            const exists = await gitOk(targetRepoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${intended}`]);
+            if (exists) {
+              await git(targetRepoRoot, ['checkout', '--quiet', intended]);
+            }
+          }
+        }
+      } catch {
+        // ignore; we'll still rely on status/continue instructions
+      }
+
+      const attemptArgv = initialArgv && !(await gitOk(targetRepoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${String(plan.branch ?? '').trim()}`]))
+        ? initialArgv
+        : resumeArgv;
+
+      // If git am is already in progress, jump directly to the conflict loop.
+      const inProgress = await isGitAmInProgress(targetRepoRoot);
+      const { flags: attemptFlags, kv: attemptKv } = parseArgs(resumeArgv);
+      const allowAutoLlm = String(process.env.HAPPY_STACKS_DISABLE_LLM_AUTOEXEC ?? '').trim() !== '1';
+      const canAutoLaunchLlm = allowAutoLlm && (await detectInstalledLlmTools({ onlyAutoExec: true })).length > 0;
+      const preferredConflictMode = String(plan.preferredConflictMode ?? '').trim() || 'guided';
+
+      if (inProgress) {
+        // eslint-disable-next-line no-console
+        console.log('');
+        // eslint-disable-next-line no-console
+        console.log(`${yellow('[monorepo]')} guide: conflict detected`);
+        // eslint-disable-next-line no-console
+        console.log(dim('[monorepo] guide: waiting for conflict resolution'));
+        // Reuse the same action loop as the main guide path.
+        // eslint-disable-next-line no-await-in-loop
+        while (await isGitAmInProgress(targetRepoRoot)) {
+          await cmdPortStatus({ kv: attemptKv, json: false });
+          const action = await promptSelect(rl, {
+            title: bold('Resolve conflicts, then choose an action:'),
+            options: [
+              { label: `${green('continue')} (git am --continue)`, value: 'continue' },
+              { label: `${green('stage + continue')} ${dim('(git add conflicted files, then continue)')}`, value: 'stage-continue' },
+              { label: `${cyan('show status again')}`, value: 'status' },
+              ...(canAutoLaunchLlm
+                ? [{ label: `${green('launch LLM now')} ${dim('(recommended)')}`, value: 'llm-launch' }]
+                : []),
+              { label: `${cyan('llm prompt')} ${dim('(copy/paste)')}`, value: 'llm' },
+              { label: `${yellow('skip current patch')} (git am --skip)`, value: 'skip' },
+              { label: `${red('abort')} (git am --abort)`, value: 'abort' },
+              { label: `${dim('quit guide (leave state as-is)')}`, value: 'quit' },
+            ],
+            defaultIndex: 0,
+          });
+          if (action === 'status') continue;
+          if (action === 'llm-launch') {
+            const promptText = buildPortLlmPromptText({ targetRepoRoot });
+            // eslint-disable-next-line no-console
+            console.log('');
+            // eslint-disable-next-line no-console
+            console.log(bold('[monorepo] launching LLM...'));
+            const res = await launchLlmAssistant({
+              rl,
+              title: 'Happy Stacks port conflict',
+              subtitle: 'Resolve current git am conflict',
+              promptText,
+              cwd: targetRepoRoot,
+            });
+            if (!res.ok) {
+              // eslint-disable-next-line no-console
+              console.log(`${yellow('!')} Could not auto-launch an LLM (${res.reason || 'unknown'}).`);
+            }
+            continue;
+          }
+          if (action === 'llm') {
+            const llmFlags = new Set([...(attemptFlags ?? []), '--copy']);
+            await cmdPortLlm({ kv: attemptKv, flags: llmFlags, json: false });
+            continue;
+          }
+          if (action === 'abort') {
+            await runCapture('git', ['am', '--abort'], { cwd: targetRepoRoot });
+            await deletePortPlan(targetRepoRoot);
+            throw new Error('[monorepo] guide aborted (git am --abort)');
+          }
+          if (action === 'skip') {
+            await runCapture('git', ['am', '--skip'], { cwd: targetRepoRoot });
+            continue;
+          }
+          if (action === 'quit') {
+            throw new Error('[monorepo] guide stopped (git am still in progress). Run `happys monorepo port status` / `... continue` to proceed.');
+          }
+          if (action === 'stage-continue') {
+            const stageFlags = new Set([...(attemptFlags ?? []), '--stage']);
+            await cmdPortContinue({ kv: attemptKv, flags: stageFlags, json: false });
+            continue;
+          }
+          await cmdPortContinue({ kv: attemptKv, flags: attemptFlags, json: false });
+        }
+        // If am completed, fall through to resume remaining patches below.
+      }
+
+      // If we're not in a conflict, just resume applying the remaining patches onto the current branch.
+      try {
+        const { flags: rFlags, kv: rKv } = parseArgs(attemptArgv);
+        const jsonWanted = wantsJson(attemptArgv, { flags: rFlags });
+        await cmdPortRun({ argv: attemptArgv, flags: rFlags, kv: rKv, json: jsonWanted });
+      } catch (e) {
+        const inProgressAfter = await isGitAmInProgress(targetRepoRoot);
+        if (!inProgressAfter) throw e;
+        // Once the port is paused on conflicts, the conflict loop above will handle it on the next rerun.
+        throw e;
+      }
+
+      await deletePortPlan(targetRepoRoot);
+      // eslint-disable-next-line no-console
+      console.log(`${green('[monorepo]')} guide complete`);
+      return;
+    }
+
     await ensureCleanGitWorktree(targetRepoRoot);
     await ensureNoGitAmInProgress(targetRepoRoot);
 
@@ -1533,12 +1911,15 @@ async function cmdPortGuide({ kv, flags, json }) {
     ];
 
     await writePortPlan(targetRepoRoot, {
-      version: 1,
+      version: 2,
       createdAt: new Date().toISOString(),
       targetRepoRoot,
       base,
       branch,
       use3way,
+      preferredConflictMode,
+      sources,
+      initialArgv,
       resumeArgv,
     });
 
@@ -1586,6 +1967,7 @@ async function cmdPortGuide({ kv, flags, json }) {
             console.log(bold('[monorepo] launching LLM to resolve conflicts...'));
             // eslint-disable-next-line no-await-in-loop
             const res = await launchLlmAssistant({
+              rl,
               title: 'Happy Stacks monorepo port',
               subtitle: 'Resolve conflicts and complete the port',
               promptText,
@@ -1620,6 +2002,7 @@ async function cmdPortGuide({ kv, flags, json }) {
             title: bold('Resolve conflicts, then choose an action:'),
             options: [
               { label: `${green('continue')} (git am --continue)`, value: 'continue' },
+              { label: `${green('stage + continue')} ${dim('(git add conflicted files, then continue)')}`, value: 'stage-continue' },
               { label: `${cyan('show status again')}`, value: 'status' },
               ...(canAutoLaunchLlm ? [{ label: `${green('launch LLM now')} ${dim('(recommended)')}`, value: 'llm-launch' }] : []),
               { label: `${cyan('llm prompt')} ${dim('(copy/paste)')}`, value: 'llm' },
@@ -1641,6 +2024,7 @@ async function cmdPortGuide({ kv, flags, json }) {
             console.log(bold('[monorepo] launching LLM...'));
             // eslint-disable-next-line no-await-in-loop
             const res = await launchLlmAssistant({
+              rl,
               title: 'Happy Stacks port conflict',
               subtitle: 'Resolve current git am conflict',
               promptText,
@@ -1671,9 +2055,16 @@ async function cmdPortGuide({ kv, flags, json }) {
             throw new Error('[monorepo] guide stopped (git am still in progress). Run `happys monorepo port status` / `... continue` to proceed.');
           }
 
+          if (action === 'stage-continue') {
+            const stageFlags = new Set([...(attemptFlags ?? []), '--stage']);
+            // eslint-disable-next-line no-await-in-loop
+            await cmdPortContinue({ kv: attemptKv, flags: stageFlags, json: false });
+            continue;
+          }
+
           // continue
           // eslint-disable-next-line no-await-in-loop
-          await cmdPortContinue({ kv: attemptKv, json: false });
+          await cmdPortContinue({ kv: attemptKv, flags: attemptFlags, json: false });
         }
       }
     }
@@ -1762,7 +2153,7 @@ async function main() {
     return;
   }
   if (sub === 'continue') {
-    await cmdPortContinue({ kv, json });
+    await cmdPortContinue({ kv, flags, json });
     return;
   }
   if (sub === 'preflight') {

@@ -27,8 +27,16 @@ function buildInteractiveLaunchScript({ toolCmd, cd, title, promptText }) {
   if (!cwd) throw new Error('[llm] launch: missing cwd');
   if (!cmd) throw new Error('[llm] launch: missing toolCmd');
 
-  // Best-effort: print the prompt and open the CLI.
-  // We intentionally do NOT try to auto-feed stdin for tools we don't fully control.
+  const execLine = (() => {
+    // Prefer providing the prompt directly when the CLI supports it.
+    // - Claude Code: `claude "query"` starts an interactive session with an initial prompt.
+    // - OpenCode: `opencode --prompt "..."` starts the TUI with an initial prompt.
+    if (cmd === 'claude') return 'exec command claude "$HS_PROMPT"';
+    if (cmd === 'opencode') return 'exec command opencode --prompt "$HS_PROMPT"';
+    // Fallback: start the tool and ask the user to paste.
+    return `exec command ${JSON.stringify(cmd)}`;
+  })();
+
   return [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
@@ -37,20 +45,29 @@ function buildInteractiveLaunchScript({ toolCmd, cd, title, promptText }) {
     '',
     `echo ${JSON.stringify(t)}`,
     'echo',
-    'echo "Prompt (also copied to clipboard if supported by the parent process):"',
+    'echo "Prompt:"',
     'echo "------------------------------------------------------------"',
-    "cat <<'HS_PROMPT_EOF'",
+    'HS_PROMPT="$(cat <<\'HS_PROMPT_EOF\'',
     prompt,
     'HS_PROMPT_EOF',
+    ')"',
+    'echo "$HS_PROMPT"',
     'echo "------------------------------------------------------------"',
     'echo',
-    `echo "Starting: ${cmd}"`,
-    `exec command ${JSON.stringify(cmd)}`,
+    'if command -v pbcopy >/dev/null 2>&1; then',
+    '  printf "%s" "$HS_PROMPT" | pbcopy',
+    '  echo "Copied prompt to clipboard (pbcopy)."',
+    'fi',
+    'echo',
+    'echo "Press Enter to start now, or Ctrl+C to cancel."',
+    'read -r _',
+    execLine,
     '',
   ].join('\n');
 }
 
 export async function launchLlmAssistant({
+  rl: providedRl = null,
   title,
   subtitle,
   promptText,
@@ -73,27 +90,31 @@ export async function launchLlmAssistant({
     return { ok: false, reason: 'no supported LLM CLI detected', terminalSupport };
   }
 
+  const withMaybeRl = async (fn) => {
+    if (providedRl) return await fn(providedRl);
+    return await withRl(fn);
+  };
+
   const chosenTool =
     tools.length === 1
       ? tools[0]
       : tools.find((t) => t.id === preferredToolId) ||
-        (await withRl(async (rl) => {
-          const defaultIndex = Math.max(
-            0,
-            tools.findIndex((t) => t.id === 'codex')
-          );
-          const picked = await promptSelect(rl, {
-            title:
-              `${bold('Pick an LLM CLI')}\n` +
-              `${dim('We will launch it with a pre-filled migration prompt so it can run the port and resolve conflicts.')}`,
-            options: tools.map((t) => ({
-              value: t.id,
-              label: `${cyan(t.id)} — ${t.label}${t.note ? ` ${dim(`— ${t.note}`)}` : ''}`,
-            })),
-            defaultIndex,
-          });
-          return tools.find((t) => t.id === picked) || tools[0];
-        }));
+        (!isTty()
+          ? tools.find((t) => t.id === 'codex') || tools[0]
+          : await withMaybeRl(async (rl) => {
+              const defaultIndex = Math.max(0, tools.findIndex((t) => t.id === 'codex'));
+              const picked = await promptSelect(rl, {
+                title:
+                  `${bold('Pick an LLM CLI')}\n` +
+                  `${dim('We will launch it with a pre-filled migration prompt so it can run the port and resolve conflicts.')}`,
+                options: tools.map((t) => ({
+                  value: t.id,
+                  label: `${cyan(t.id)} — ${t.label}${t.note ? ` ${dim(`— ${t.note}`)}` : ''}`,
+                })),
+                defaultIndex,
+              });
+              return tools.find((t) => t.id === picked) || tools[0];
+            }));
 
   const launchOptions = [];
   if (terminalSupport.ok) {
@@ -109,20 +130,22 @@ export async function launchLlmAssistant({
   const launchMode =
     launchOptions.length === 1
       ? launchOptions[0].value
-      : await withRl(async (rl) => {
-          return await promptSelect(rl, {
-            title: `${bold('How do you want to run the migration assistant?')}`,
-            options: launchOptions,
-            defaultIndex: 0,
+      : !isTty()
+        ? launchOptions[0].value
+        : await withMaybeRl(async (rl) => {
+            return await promptSelect(rl, {
+              title: `${bold('How do you want to run the migration assistant?')}`,
+              options: launchOptions,
+              defaultIndex: 0,
+            });
           });
-        });
 
   const permissionMode =
     chosenTool.id !== 'codex'
       ? null
       : CODEX_PERMISSION_MODES.length === 1 || !isTty()
         ? defaultPermissionMode
-        : await withRl(async (rl) => {
+        : await withMaybeRl(async (rl) => {
             const opts = codexPermissionOptions();
             const v = await promptSelect(rl, {
               title:
@@ -173,7 +196,17 @@ export async function launchLlmAssistant({
     // eslint-disable-next-line no-console
     console.log(dim(`Starting: ${chosenTool.cmd}`));
 
-    await run(chosenTool.cmd, [], { cwd: cd, env: env ?? process.env, stdio: 'inherit' });
+    if (chosenTool.cmd === 'claude') {
+      // Claude Code supports starting interactive mode with an initial prompt:
+      // `claude "query"`.
+      await run('claude', [prompt], { cwd: cd, env: env ?? process.env, stdio: 'inherit' });
+    } else if (chosenTool.cmd === 'opencode') {
+      // OpenCode supports starting the TUI with an initial prompt:
+      // `opencode --prompt "..."`.
+      await run('opencode', ['--prompt', prompt], { cwd: cd, env: env ?? process.env, stdio: 'inherit' });
+    } else {
+      await run(chosenTool.cmd, [], { cwd: cd, env: env ?? process.env, stdio: 'inherit' });
+    }
     return { ok: true, launched: true, mode: 'here', tool: chosenTool.id, permissionMode, terminalSupport };
   }
 
