@@ -32,6 +32,21 @@ npx happy-stacks setup --profile=dev
 
 This will guide you through workspace setup, bootstrapping components, and the recommended developer auth flow (`dev-auth` seed stack + optional mobile dev-client install).
 
+### LLM helpers (optional)
+
+Happy Stacks has “LLM prompt” helpers for the two most common “LLM is useful here” flows:
+
+```bash
+# Import + migrate legacy split repos (pre-monorepo)
+happys import llm --mode=import --launch
+happys import llm --mode=migrate --stack=<stack> --launch
+
+# Port commits into a monorepo checkout (conflict-resolution helper)
+happys monorepo port llm --target=/abs/path/to/monorepo --launch
+```
+
+If `--launch` isn’t available on your system, use `--copy` instead and paste the prompt into any LLM UI.
+
 ### Components
 
 Happy Stacks is a launcher/orchestrator repo. The actual product code lives in component repos under:

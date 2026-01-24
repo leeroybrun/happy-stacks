@@ -5,6 +5,7 @@ import { clipboardAvailable, copyTextToClipboard } from '../ui/clipboard.mjs';
 import { isTty, promptSelect, withRl } from '../cli/wizard.mjs';
 import { banner, bullets, cmd as cmdFmt, sectionTitle } from '../ui/layout.mjs';
 import { bold, cyan, dim, green, red, yellow } from '../ui/ansi.mjs';
+import { run } from '../proc/proc.mjs';
 
 function codexPermissionOptions() {
   return [
@@ -16,6 +17,37 @@ function codexPermissionOptions() {
 
 function shouldAsk(options) {
   return isTty() && options.length > 1;
+}
+
+function buildInteractiveLaunchScript({ toolCmd, cd, title, promptText }) {
+  const t = String(title ?? 'Happy Stacks (LLM)').trim();
+  const cwd = String(cd ?? '').trim();
+  const cmd = String(toolCmd ?? '').trim();
+  const prompt = String(promptText ?? '').trimEnd();
+  if (!cwd) throw new Error('[llm] launch: missing cwd');
+  if (!cmd) throw new Error('[llm] launch: missing toolCmd');
+
+  // Best-effort: print the prompt and open the CLI.
+  // We intentionally do NOT try to auto-feed stdin for tools we don't fully control.
+  return [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    '',
+    `cd ${JSON.stringify(cwd)}`,
+    '',
+    `echo ${JSON.stringify(t)}`,
+    'echo',
+    'echo "Prompt (also copied to clipboard if supported by the parent process):"',
+    'echo "------------------------------------------------------------"',
+    "cat <<'HS_PROMPT_EOF'",
+    prompt,
+    'HS_PROMPT_EOF',
+    'echo "------------------------------------------------------------"',
+    'echo',
+    `echo "Starting: ${cmd}"`,
+    `exec command ${JSON.stringify(cmd)}`,
+    '',
+  ].join('\n');
 }
 
 export async function launchLlmAssistant({
@@ -34,11 +66,11 @@ export async function launchLlmAssistant({
   if (!prompt) return { ok: false, reason: 'empty prompt' };
   if (!cd) return { ok: false, reason: 'missing cwd' };
 
-  const tools = await detectInstalledLlmTools({ onlyAutoExec: true });
+  const tools = await detectInstalledLlmTools();
   const terminalSupport = await canLaunchNewTerminal({ env });
 
   if (tools.length === 0) {
-    return { ok: false, reason: 'no supported LLM CLI detected (auto-exec)', terminalSupport };
+    return { ok: false, reason: 'no supported LLM CLI detected', terminalSupport };
   }
 
   const chosenTool =
@@ -46,6 +78,10 @@ export async function launchLlmAssistant({
       ? tools[0]
       : tools.find((t) => t.id === preferredToolId) ||
         (await withRl(async (rl) => {
+          const defaultIndex = Math.max(
+            0,
+            tools.findIndex((t) => t.id === 'codex')
+          );
           const picked = await promptSelect(rl, {
             title:
               `${bold('Pick an LLM CLI')}\n` +
@@ -54,15 +90,10 @@ export async function launchLlmAssistant({
               value: t.id,
               label: `${cyan(t.id)} — ${t.label}${t.note ? ` ${dim(`— ${t.note}`)}` : ''}`,
             })),
-            defaultIndex: 0,
+            defaultIndex,
           });
           return tools.find((t) => t.id === picked) || tools[0];
         }));
-
-  // For now only Codex supports auto-exec.
-  if (chosenTool.id !== 'codex') {
-    return { ok: false, reason: `unsupported tool for auto-exec: ${chosenTool.id}`, terminalSupport };
-  }
 
   const launchOptions = [];
   if (terminalSupport.ok) {
@@ -87,32 +118,73 @@ export async function launchLlmAssistant({
         });
 
   const permissionMode =
-    CODEX_PERMISSION_MODES.length === 1 || !isTty()
-      ? defaultPermissionMode
-      : await withRl(async (rl) => {
-          const opts = codexPermissionOptions();
-          const v = await promptSelect(rl, {
-            title:
-              `${bold('LLM permissions')}\n` +
-              `${dim('Choose how much autonomy the LLM should have while running commands to migrate + resolve conflicts.')}`,
-            options: opts,
-            defaultIndex: Math.max(0, opts.findIndex((o) => o.value === defaultPermissionMode)),
+    chosenTool.id !== 'codex'
+      ? null
+      : CODEX_PERMISSION_MODES.length === 1 || !isTty()
+        ? defaultPermissionMode
+        : await withRl(async (rl) => {
+            const opts = codexPermissionOptions();
+            const v = await promptSelect(rl, {
+              title:
+                `${bold('LLM permissions')}\n` +
+                `${dim('Choose how much autonomy the LLM should have while running commands to migrate + resolve conflicts.')}`,
+              options: opts,
+              defaultIndex: Math.max(0, opts.findIndex((o) => o.value === defaultPermissionMode)),
+            });
+            return String(v || defaultPermissionMode);
           });
-          return String(v || defaultPermissionMode);
-        });
 
   if (launchMode === 'copy') {
     return { ok: true, launched: false, mode: 'copy', tool: chosenTool.id, permissionMode, terminalSupport };
   }
 
+  // Auto-exec path (Codex only for now).
+  if (chosenTool.id === 'codex') {
+    if (launchMode === 'here') {
+      await runCodexExecHere({ cd, permissionMode: permissionMode || defaultPermissionMode, promptText: prompt, env });
+      return { ok: true, launched: true, mode: 'here', tool: chosenTool.id, permissionMode, terminalSupport };
+    }
+
+    // new-terminal
+    const script = buildCodexExecScript({ cd, permissionMode: permissionMode || defaultPermissionMode, promptText: prompt });
+    const res = await launchScriptInNewTerminal({ scriptText: script, title: title || 'Happy Stacks migration (LLM)' });
+    if (!res.ok) {
+      return { ok: false, reason: res.reason || 'failed to launch terminal', terminalSupport };
+    }
+    return { ok: true, launched: true, mode: 'new-terminal', tool: chosenTool.id, permissionMode, terminalSupport };
+  }
+
+  // Interactive launch path (Claude/OpenCode/Aider/etc).
+  // Best-effort: copy prompt to clipboard now; the terminal script will print it too.
+  if (await clipboardAvailable()) {
+    await copyTextToClipboard(prompt).catch(() => {});
+  }
+
   if (launchMode === 'here') {
-    await runCodexExecHere({ cd, permissionMode, promptText: prompt, env });
+    // Print prompt and then start the CLI (interactive).
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(banner(title || 'LLM prompt', { subtitle: subtitle || 'Paste this into your LLM CLI to run the migration.' }));
+    // eslint-disable-next-line no-console
+    console.log(prompt);
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(dim(`Starting: ${chosenTool.cmd}`));
+
+    await run(chosenTool.cmd, [], { cwd: cd, env: env ?? process.env, stdio: 'inherit' });
     return { ok: true, launched: true, mode: 'here', tool: chosenTool.id, permissionMode, terminalSupport };
   }
 
   // new-terminal
-  const script = buildCodexExecScript({ cd, permissionMode, promptText: prompt });
-  const res = await launchScriptInNewTerminal({ scriptText: script, title: title || 'Happy Stacks migration (LLM)' });
+  const script = buildInteractiveLaunchScript({
+    toolCmd: chosenTool.cmd,
+    cd,
+    title: title || `Happy Stacks (${chosenTool.id})`,
+    promptText: prompt,
+  });
+  const res = await launchScriptInNewTerminal({ scriptText: script, title: title || `Happy Stacks (${chosenTool.id})` });
   if (!res.ok) {
     return { ok: false, reason: res.reason || 'failed to launch terminal', terminalSupport };
   }
@@ -137,11 +209,11 @@ export function renderLlmHelpBlock({ title, subtitle, promptText, detectedTools,
   lines.push(promptText);
   if (tools.length) {
     lines.push('');
-    lines.push(sectionTitle('Detected LLM CLIs (auto-exec capable)'));
+    lines.push(sectionTitle('Detected LLM CLIs'));
     lines.push(bullets(tools.map((t) => `- ${dim(t.id)}: ${t.label}${t.note ? ` ${dim(`— ${t.note}`)}` : ''}`)));
   } else {
     lines.push('');
-    lines.push(dim('No auto-exec LLM CLI detected (codex). You can still paste the prompt into any LLM UI.'));
+    lines.push(dim('No supported LLM CLI detected. You can still paste the prompt into any LLM UI.'));
   }
   if (terminalSupport?.ok) {
     lines.push('');

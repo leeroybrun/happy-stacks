@@ -358,50 +358,50 @@ async function postStartDiagnostics() {
     }
   }
 
+  const stackName = getDefaultAutostartPaths().stackName;
+  console.log('');
+  console.log(banner('service', { subtitle: `Post-start diagnostics (${stackName})` }));
+  console.log('');
+
+  const authCmd = stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
+
   if (res.ok && res.kind === 'running') {
-    console.log(`[local] daemon: running (pid=${res.pid})`);
+    console.log(sectionTitle('Daemon'));
+    console.log(bullets([`${green('✓')} running ${dim(`(pid=${res.pid})`)}`, kv('server:', internalUrl)]));
     return;
   }
 
-  // Not running: print actionable diagnostics (without referencing SwiftBar).
+  console.log(sectionTitle('Daemon'));
   if (res.kind === 'starting') {
-    console.log(`[local] daemon: starting (pid=${res.pid ?? 'unknown'})`);
-    if (res.logPath) {
-      console.log(`[local] daemon log: ${res.logPath}`);
-    }
-    return;
-  }
-  if (!existsSync(accessKey)) {
-    console.log(`[local] daemon: not running (auth required; missing credentials at ${accessKey})`);
-    console.log('[local] authenticate for this stack home with:');
-    console.log(
-      getDefaultAutostartPaths().stackName === 'main'
-        ? 'happys auth login'
-        : `happys stack auth ${getDefaultAutostartPaths().stackName} login`
-    );
+    console.log(bullets([`${yellow('!')} starting ${dim(`(pid=${res.pid ?? 'unknown'})`)}`]));
+  } else if (!existsSync(accessKey)) {
+    console.log(bullets([`${yellow('!')} auth required ${dim(`(missing ${accessKey})`)}`]));
+    console.log('');
+    console.log(sectionTitle('Authenticate'));
+    console.log(bullets([`${dim('run:')} ${cmdFmt(authCmd)}`]));
   } else if (res.kind === 'auth_required') {
-    console.log(`[local] daemon: waiting for auth (pid=${res.pid})`);
-    console.log('[local] authenticate for this stack home with:');
-    console.log(
-      getDefaultAutostartPaths().stackName === 'main'
-        ? 'happys auth login'
-        : `happys stack auth ${getDefaultAutostartPaths().stackName} login`
-    );
+    console.log(bullets([`${yellow('!')} waiting for auth ${dim(`(pid=${res.pid ?? 'unknown'})`)}`]));
+    console.log('');
+    console.log(sectionTitle('Authenticate'));
+    console.log(bullets([`${dim('run:')} ${cmdFmt(authCmd)}`]));
   } else {
-    console.log('[local] daemon: not running');
+    console.log(bullets([`${yellow('!')} not running`]));
   }
 
   const logPath = res.logPath ? res.logPath : await latestDaemonLog();
+  console.log('');
+  console.log(sectionTitle('Logs'));
   if (logPath) {
+    console.log(bullets([kv('latest:', logPath), `${dim('tail:')} ${cmdFmt(`happys service logs`)}`]));
     const tail = await readLastLines(logPath, 80);
-    console.log(`[local] last daemon log: ${logPath}`);
     if (tail) {
-      console.log('--- last 80 daemon log lines ---');
+      console.log('');
+      console.log(dim('--- last 80 daemon log lines ---'));
       console.log(tail);
-      console.log('--- end ---');
+      console.log(dim('--- end ---'));
     }
   } else {
-    console.log(`[local] daemon logs dir: ${logsDir}`);
+    console.log(bullets([kv('dir:', logsDir)]));
   }
 }
 

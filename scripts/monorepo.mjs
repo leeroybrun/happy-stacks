@@ -8,6 +8,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { isHappyMonorepoRoot } from './utils/paths/paths.mjs';
+import { parseGithubPullRequest } from './utils/git/refs.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { bold, cyan, dim, green, red, yellow } from './utils/ui/ansi.mjs';
 import { clipboardAvailable, copyTextToClipboard } from './utils/ui/clipboard.mjs';
@@ -17,12 +18,12 @@ import { launchLlmAssistant } from './utils/llm/assist.mjs';
 function usage() {
   return [
     '[monorepo] usage:',
-    '  happys monorepo port --target=/abs/path/to/monorepo [--branch=port/<name>] [--base=<ref>] [--onto-current] [--dry-run] [--3way] [--skip-applied] [--continue-on-failure] [--json]',
-    '  happys monorepo port guide [--target=/abs/path/to/monorepo] [--json]',
+    '  happys monorepo port --target=/abs/path/to/monorepo [--clone-target] [--target-repo=<git-url>] [--branch=port/<name>] [--base=<ref>] [--onto-current] [--dry-run] [--3way] [--skip-applied] [--continue-on-failure] [--json]',
+    '  happys monorepo port guide [--target=/abs/path/to/monorepo] [--clone-target] [--target-repo=<git-url>] [--json]',
     '  happys monorepo port preflight --target=/abs/path/to/monorepo [--base=<ref>] [--3way] [--json]',
     '  happys monorepo port status [--target=/abs/path/to/monorepo] [--json]',
     '  happys monorepo port continue [--target=/abs/path/to/monorepo] [--json]',
-    '  happys monorepo port llm --target=/abs/path/to/monorepo [--copy] [--json]',
+    '  happys monorepo port llm --target=/abs/path/to/monorepo [--copy] [--launch] [--json]',
     '    [--from-happy=/abs/path/to/old-happy --from-happy-base=<ref> --from-happy-ref=<ref>]',
     '    [--from-happy-cli=/abs/path/to/old-happy-cli --from-happy-cli-base=<ref> --from-happy-cli-ref=<ref>]',
     '    [--from-happy-server=/abs/path/to/old-happy-server --from-happy-server-base=<ref> --from-happy-server-ref=<ref>]',
@@ -45,6 +46,8 @@ function usage() {
     '',
     'LLM tip:',
     '- If you want an LLM to help resolve conflicts, run:',
+    '    happys monorepo port llm --target=/abs/path/to/monorepo --launch',
+    '  or, if you prefer copy/paste:',
     '    happys monorepo port llm --target=/abs/path/to/monorepo --copy',
     '  then paste the copied prompt into your LLM.',
   ].join('\n');
@@ -187,6 +190,166 @@ async function resolveTargetRepoRootFromArgs({ kv }) {
     throw new Error(`[monorepo] target does not look like a slopus/happy monorepo root (missing expo-app/cli/server): ${repoRoot}`);
   }
   return repoRoot;
+}
+
+function looksLikeUrlSpec(spec) {
+  const s = String(spec ?? '').trim();
+  if (!s) return false;
+  if (/^[a-z]+:\/\//i.test(s)) return true; // https://, file://, ssh://, etc
+  if (/^git@[^:]+:/.test(s)) return true; // git@github.com:owner/repo.git
+  if (/^github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(s)) return true;
+  return false;
+}
+
+function looksLikeGithubPullUrl(spec) {
+  const s = String(spec ?? '').trim();
+  return s.includes('github.com/') && s.includes('/pull/');
+}
+
+function safeSlug(s, { maxLen = 80 } = {}) {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLen || 80);
+}
+
+async function isEmptyDir(dir) {
+  try {
+    const entries = await readdir(dir);
+    return entries.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function gitNonInteractiveEnv() {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
+async function resolvePortScratchDir(targetRepoRoot, rel) {
+  const p = await resolveGitPath(targetRepoRoot, rel);
+  if (!p) return '';
+  await mkdir(dirname(p), { recursive: true });
+  return p;
+}
+
+async function ensureClonedHappyMonorepo({ targetPath, repoUrl }) {
+  const dest = String(targetPath ?? '').trim();
+  if (!dest) throw new Error('[monorepo] clone-target: missing --target=<dir>');
+  const url = String(repoUrl ?? '').trim() || 'https://github.com/slopus/happy.git';
+
+  const exists = await pathExists(dest);
+  if (exists) {
+    // `git clone` refuses to clone into an existing directory. Allow deleting if empty.
+    if (!(await isEmptyDir(dest))) {
+      throw new Error(`[monorepo] clone-target: target exists and is not empty: ${dest}`);
+    }
+    await rm(dest, { recursive: true, force: true }).catch(() => {});
+  }
+  await mkdir(dirname(dest), { recursive: true });
+
+  await runCapture('git', ['clone', '--quiet', url, dest], { cwd: dirname(dest), env: gitNonInteractiveEnv() });
+  return dest;
+}
+
+async function resolveOrCloneTargetRepoRoot({ targetInput, targetArg, flags, kv }) {
+  const hint = String(targetInput ?? '').trim();
+  if (!hint) throw new Error('[monorepo] missing target');
+
+  const repoRoot = await resolveGitRoot(hint);
+  if (repoRoot) {
+    if (!isHappyMonorepoRoot(repoRoot)) {
+      throw new Error(`[monorepo] target does not look like a slopus/happy monorepo root (missing expo-app/cli/server): ${repoRoot}`);
+    }
+    return repoRoot;
+  }
+
+  // Not a git repo. If it doesn't exist and clone is requested, clone into it.
+  const exists = await pathExists(hint);
+  const wantsClone = flags?.has?.('--clone-target') || flags?.has?.('--clone');
+  if (!exists) {
+    if (!wantsClone) {
+      throw new Error(
+        `[monorepo] target does not exist: ${hint}\n` +
+          `[monorepo] tip: create it (git clone) or re-run with: --clone-target --target-repo=<git-url>`
+      );
+    }
+    if (!String(targetArg ?? '').trim()) {
+      throw new Error('[monorepo] --clone-target requires an explicit --target=<dir>');
+    }
+    const targetRepo = String(kv?.get?.('--target-repo') ?? '').trim();
+    const cloned = await ensureClonedHappyMonorepo({ targetPath: hint, repoUrl: targetRepo || 'https://github.com/slopus/happy.git' });
+    const clonedRoot = await resolveGitRoot(cloned);
+    if (!clonedRoot || !isHappyMonorepoRoot(clonedRoot)) {
+      throw new Error(`[monorepo] cloned target does not look like a slopus/happy monorepo root: ${cloned}`);
+    }
+    return clonedRoot;
+  }
+
+  // Exists but isn't a git repo.
+  throw new Error(`[monorepo] target is not a git repo: ${hint}`);
+}
+
+async function ensureRepoSpecCheckedOut({ targetRepoRoot, label, spec, desiredRef = '' }) {
+  const raw = String(spec ?? '').trim();
+  if (!raw) return '';
+
+  // Local path fast path.
+  if (await pathExists(raw)) {
+    return raw;
+  }
+
+  if (!looksLikeUrlSpec(raw)) {
+    throw new Error(`[monorepo] ${label}: source path does not exist: ${raw}`);
+  }
+
+  const scratch = await resolvePortScratchDir(targetRepoRoot, 'happy-stacks/monorepo-port-sources');
+  if (!scratch) throw new Error('[monorepo] failed to resolve port scratch dir');
+
+  // GitHub PR URL: clone repo and fetch PR head into a detached checkout.
+  if (looksLikeGithubPullUrl(raw)) {
+    const pr = parseGithubPullRequest(raw);
+    if (!pr?.number || !pr.owner || !pr.repo) {
+      throw new Error(`[monorepo] ${label}: unable to parse GitHub PR URL: ${raw}`);
+    }
+    const repoUrl = `https://github.com/${pr.owner}/${pr.repo}.git`;
+    const key = safeSlug(`gh-${pr.owner}-${pr.repo}-pr-${pr.number}`, { maxLen: 90 }) || `pr-${pr.number}`;
+    const dir = join(scratch, `${label}-${key}`);
+
+    if (!(await pathExists(dir))) {
+      await mkdir(dirname(dir), { recursive: true });
+      await runCapture('git', ['clone', '--quiet', repoUrl, dir], { cwd: dirname(dir), env: gitNonInteractiveEnv() });
+    }
+
+    const prRef = `refs/pull/${pr.number}/head`;
+    await runCapture('git', ['fetch', '--quiet', 'origin', prRef], { cwd: dir, env: gitNonInteractiveEnv() });
+    await runCapture('git', ['checkout', '--quiet', 'FETCH_HEAD'], { cwd: dir, env: gitNonInteractiveEnv() });
+    return dir;
+  }
+
+  // Generic repo URL/path-like spec: clone it.
+  const key = safeSlug(raw, { maxLen: 90 }) || `${label}-${Date.now()}`;
+  const dir = join(scratch, `${label}-${key}`);
+  if (!(await pathExists(dir))) {
+    await mkdir(dirname(dir), { recursive: true });
+    await runCapture('git', ['clone', '--quiet', raw, dir], { cwd: dirname(dir), env: gitNonInteractiveEnv() });
+  }
+
+  // Best-effort: ensure the desired ref exists (if provided).
+  const ref = String(desiredRef ?? '').trim();
+  if (ref) {
+    const ok = await gitOk(dir, ['rev-parse', '--verify', '--quiet', ref]);
+    if (!ok) {
+      await git(dir, ['fetch', '--quiet', 'origin', ref]).catch(() => {});
+    }
+  }
+  return dir;
 }
 
 async function resolveGitPath(repoRoot, relPath) {
@@ -688,20 +851,10 @@ async function portOne({
 }
 
 async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
-  const target = (kv.get('--target') ?? '').trim();
-  if (!target) {
-    throw new Error('[monorepo] missing --target=/abs/path/to/monorepo');
-  }
+  const targetArg = (kv.get('--target') ?? '').trim();
+  const targetHint = targetArg || process.cwd();
+  const targetRepoRoot = await resolveOrCloneTargetRepoRoot({ targetInput: targetHint, targetArg, flags, kv });
 
-  const targetRepoRoot = await resolveGitRoot(target);
-  if (!targetRepoRoot) {
-    throw new Error(`[monorepo] target is not a git repo: ${target}`);
-  }
-  if (!isHappyMonorepoRoot(targetRepoRoot)) {
-    throw new Error(
-      `[monorepo] target does not look like a slopus/happy monorepo root (missing expo-app/cli/server): ${targetRepoRoot}`
-    );
-  }
   // Prefer a clearer error message if the user is in the middle of conflict resolution.
   // (A git am session often makes the worktree dirty, which would otherwise trigger a generic "not clean" error.)
   await ensureNoGitAmInProgress(targetRepoRoot);
@@ -775,13 +928,13 @@ async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
 
   const results = [];
   for (const s of sources) {
-    if (!(await pathExists(s.path))) {
-      throw new Error(`[monorepo] ${s.label}: source path does not exist: ${s.path}`);
-    }
+    // Allow sources to be local paths OR URL/PR specs (cloned into target/.git scratch).
+    // eslint-disable-next-line no-await-in-loop
+    const resolvedPath = await ensureRepoSpecCheckedOut({ targetRepoRoot, label: s.label, spec: s.path, desiredRef: s.ref });
     // eslint-disable-next-line no-await-in-loop
     const r = await portOne({
       label: s.label,
-      sourcePath: s.path,
+      sourcePath: resolvedPath,
       sourceRef: s.ref,
       sourceBase: s.base,
       targetRepoRoot,
@@ -1145,7 +1298,30 @@ async function cmdPortGuide({ kv, flags, json }) {
 
     const targetArg = (kv.get('--target') ?? '').trim();
     const targetInput = targetArg || (await prompt(rl, 'Target monorepo path: ', { defaultValue: targetDefault })).trim();
-    const targetRepoRoot = await resolveGitRoot(targetInput);
+    let targetRepoRoot = await resolveGitRoot(targetInput);
+    if (!targetRepoRoot) {
+      const wantsClone = flags?.has?.('--clone-target') || flags?.has?.('--clone');
+      if (!wantsClone) {
+        const shouldClone =
+          (await promptSelect(rl, {
+            title:
+              `${bold('Target directory is not a git repo')}\n` +
+              `${dim('Do you want Happy Stacks to clone the monorepo into this directory?')}\n` +
+              `${dim(targetInput)}`,
+            options: [
+              { label: `${green('yes (recommended)')} — clone slopus/happy into this directory`, value: true },
+              { label: 'no — I will provide an existing monorepo checkout', value: false },
+            ],
+            defaultIndex: 0,
+          })) === true;
+        if (!shouldClone) {
+          throw new Error(`[monorepo] invalid target (expected an existing slopus/happy monorepo checkout): ${targetInput}`);
+        }
+      }
+      const repoUrl = (kv.get('--target-repo') ?? '').trim() || 'https://github.com/slopus/happy.git';
+      await ensureClonedHappyMonorepo({ targetPath: targetInput, repoUrl });
+      targetRepoRoot = await resolveGitRoot(targetInput);
+    }
     if (!targetRepoRoot || !isHappyMonorepoRoot(targetRepoRoot)) {
       throw new Error(`[monorepo] invalid target (expected slopus/happy monorepo root): ${targetInput}`);
     }
@@ -1154,7 +1330,11 @@ async function cmdPortGuide({ kv, flags, json }) {
 
     const baseDefault = await resolveDefaultTargetBaseRef(targetRepoRoot);
     const baseArg = (kv.get('--base') ?? '').trim();
-    const base = baseArg || (await prompt(rl, 'Target base ref: ', { defaultValue: baseDefault || 'origin/main' })).trim();
+    // Don't prompt unless we truly can't infer.
+    const base = baseArg || baseDefault || 'origin/main';
+    if (!baseArg && !baseDefault) {
+      throw new Error('[monorepo] could not infer a target base ref. Pass --base=<ref>.');
+    }
 
     const branchArg = (kv.get('--branch') ?? '').trim();
     const branch = branchArg || (await prompt(rl, 'New branch name: ', { defaultValue: `port/${Date.now()}` })).trim();
@@ -1173,25 +1353,74 @@ async function cmdPortGuide({ kv, flags, json }) {
 
     const fromHappyArg = (kv.get('--from-happy') ?? '').trim();
     const fromHappyRef = (kv.get('--from-happy-ref') ?? '').trim();
-    const fromHappy = fromHappyArg || (await prompt(rl, 'Path to old happy repo (UI) [optional]: ', { defaultValue: '' })).trim();
-    const fromHappyBaseArg = (kv.get('--from-happy-base') ?? '').trim();
-    const fromHappyBase = fromHappy ? (fromHappyBaseArg || (await prompt(rl, 'old happy base ref: ', { defaultValue: 'upstream/main' })).trim()) : '';
-
     const fromHappyCliArg = (kv.get('--from-happy-cli') ?? '').trim();
-    const fromHappyCliRef = (kv.get('--from-happy-cli-ref') ?? '').trim();
-    const fromHappyCli = fromHappyCliArg || (await prompt(rl, 'Path to old happy-cli repo [optional]: ', { defaultValue: '' })).trim();
-    const fromHappyCliBaseArg = (kv.get('--from-happy-cli-base') ?? '').trim();
-    const fromHappyCliBase = fromHappyCli
-      ? (fromHappyCliBaseArg || (await prompt(rl, 'old happy-cli base ref: ', { defaultValue: 'upstream/main' })).trim())
-      : '';
-
     const fromHappyServerArg = (kv.get('--from-happy-server') ?? '').trim();
+    const hasAnySourceArg = Boolean(fromHappyArg || fromHappyCliArg || fromHappyServerArg);
+
+    const fromHappy =
+      fromHappyArg ||
+      (hasAnySourceArg
+        ? ''
+        : (await prompt(rl, 'Path or GitHub PR URL for old happy (UI) [optional]: ', { defaultValue: '' })).trim());
+    const fromHappyBaseArg = (kv.get('--from-happy-base') ?? '').trim();
+    let fromHappyBase = '';
+    if (fromHappy) {
+      if (fromHappyBaseArg) {
+        fromHappyBase = fromHappyBaseArg;
+      } else if (looksLikeUrlSpec(fromHappy)) {
+        fromHappyBase = 'origin/main';
+      } else {
+        const root = await resolveGitRoot(fromHappy);
+        fromHappyBase = (root && (await resolveDefaultBaseRef(root))) || '';
+      }
+      if (!fromHappyBase) {
+        fromHappyBase = (await prompt(rl, 'old happy base ref: ', { defaultValue: 'upstream/main' })).trim();
+      }
+    }
+
+    const fromHappyCliRef = (kv.get('--from-happy-cli-ref') ?? '').trim();
+    const fromHappyCli =
+      fromHappyCliArg ||
+      (hasAnySourceArg
+        ? ''
+        : (await prompt(rl, 'Path or GitHub PR URL for old happy-cli [optional]: ', { defaultValue: '' })).trim());
+    const fromHappyCliBaseArg = (kv.get('--from-happy-cli-base') ?? '').trim();
+    let fromHappyCliBase = '';
+    if (fromHappyCli) {
+      if (fromHappyCliBaseArg) {
+        fromHappyCliBase = fromHappyCliBaseArg;
+      } else if (looksLikeUrlSpec(fromHappyCli)) {
+        fromHappyCliBase = 'origin/main';
+      } else {
+        const root = await resolveGitRoot(fromHappyCli);
+        fromHappyCliBase = (root && (await resolveDefaultBaseRef(root))) || '';
+      }
+      if (!fromHappyCliBase) {
+        fromHappyCliBase = (await prompt(rl, 'old happy-cli base ref: ', { defaultValue: 'upstream/main' })).trim();
+      }
+    }
+
     const fromHappyServerRef = (kv.get('--from-happy-server-ref') ?? '').trim();
-    const fromHappyServer = fromHappyServerArg || (await prompt(rl, 'Path to old happy-server repo [optional]: ', { defaultValue: '' })).trim();
+    const fromHappyServer =
+      fromHappyServerArg ||
+      (hasAnySourceArg
+        ? ''
+        : (await prompt(rl, 'Path or GitHub PR URL for old happy-server [optional]: ', { defaultValue: '' })).trim());
     const fromHappyServerBaseArg = (kv.get('--from-happy-server-base') ?? '').trim();
-    const fromHappyServerBase = fromHappyServer
-      ? (fromHappyServerBaseArg || (await prompt(rl, 'old happy-server base ref: ', { defaultValue: 'upstream/main' })).trim())
-      : '';
+    let fromHappyServerBase = '';
+    if (fromHappyServer) {
+      if (fromHappyServerBaseArg) {
+        fromHappyServerBase = fromHappyServerBaseArg;
+      } else if (looksLikeUrlSpec(fromHappyServer)) {
+        fromHappyServerBase = 'origin/main';
+      } else {
+        const root = await resolveGitRoot(fromHappyServer);
+        fromHappyServerBase = (root && (await resolveDefaultBaseRef(root))) || '';
+      }
+      if (!fromHappyServerBase) {
+        fromHappyServerBase = (await prompt(rl, 'old happy-server base ref: ', { defaultValue: 'upstream/main' })).trim();
+      }
+    }
 
     if (!fromHappy && !fromHappyCli && !fromHappyServer) {
       throw new Error('[monorepo] guide: nothing to port. Provide at least one source path.');
@@ -1463,6 +1692,26 @@ async function cmdPortLlm({ kv, flags, json }) {
   if (json) {
     printResult({ json, data: { targetRepoRoot, prompt: promptText, detectedTools: tools.map((t) => t.id) } });
     return;
+  }
+
+  const wantsLaunch = flags?.has?.('--launch') || process.argv.includes('--launch');
+  if (wantsLaunch) {
+    const launched = await launchLlmAssistant({
+      title: 'Happy Stacks monorepo port (LLM)',
+      subtitle: 'Runs the port + resolves conflicts (one patch at a time).',
+      promptText,
+      cwd: targetRepoRoot,
+      env: process.env,
+      allowRunHere: true,
+      allowCopyOnly: true,
+    });
+    if (!launched.ok) {
+      // eslint-disable-next-line no-console
+      console.log(dim(`[monorepo] LLM launch unavailable: ${launched.reason || 'unknown'}`));
+      // fall through to printing the prompt
+    } else if (launched.launched) {
+      return;
+    }
   }
 
   // eslint-disable-next-line no-console

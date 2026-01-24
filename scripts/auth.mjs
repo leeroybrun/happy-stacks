@@ -34,6 +34,8 @@ import {
   resolveCliHomeDir,
 } from './utils/stack/dirs.mjs';
 import { resolveLocalhostHost, preferStackLocalhostUrl } from './utils/paths/localhost_host.mjs';
+import { banner, bullets, cmd as cmdFmt, kv, ok, sectionTitle, warn } from './utils/ui/layout.mjs';
+import { bold, cyan, dim } from './utils/ui/ansi.mjs';
 
 function getInternalServerUrlCompat() {
   const { port, internalServerUrl } = getInternalServerUrl({ env: process.env, defaultPort: 3005 });
@@ -110,7 +112,12 @@ async function cmdDevKey({ argv, json }) {
       printResult({ json, data: { ok: true, action: 'set', path: res.path } });
       return;
     }
-    console.log(`[auth] dev-key saved to ${res.path}`);
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(banner('auth dev-key', { subtitle: 'Saved locally (never committed).' }));
+    // eslint-disable-next-line no-console
+    console.log(bullets([ok(kv('path:', res.path))]));
     return;
   }
   if (clear) {
@@ -119,7 +126,16 @@ async function cmdDevKey({ argv, json }) {
       printResult({ json, data: { ok: res.ok, action: 'clear', ...res } });
       return;
     }
-    console.log(res.deleted ? `[auth] dev-key removed (${res.path})` : `[auth] dev-key not set (${res.path})`);
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(banner('auth dev-key', { subtitle: 'Local dev key state.' }));
+    // eslint-disable-next-line no-console
+    console.log(
+      bullets([
+        res.deleted ? ok(`removed ${dim(`(${res.path})`)}`) : warn(`not set ${dim(`(${res.path})`)}`),
+      ])
+    );
     return;
   }
 
@@ -128,16 +144,30 @@ async function cmdDevKey({ argv, json }) {
     throw new Error(`[auth] dev-key: ${out.error ?? 'failed'}`);
   }
   if (!out.secretKeyBase64Url) {
-    const msg =
-      `[auth] dev-key is not configured.\n` +
-      `Set it once (local-only, not committed):\n` +
-      `  happys auth dev-key --set "<base64url-secret-or-backup-format>"\n` +
-      `Or export it for this shell:\n` +
-      `  export HAPPY_STACKS_DEV_AUTH_SECRET_KEY="<base64url-secret>"\n`;
     if (json) {
       printResult({ json, data: { ok: false, error: 'missing_dev_key', file: out.path ?? null } });
     } else {
-      console.log(msg);
+      // eslint-disable-next-line no-console
+      console.log('');
+      // eslint-disable-next-line no-console
+      console.log(banner('auth dev-key', { subtitle: 'Not configured.' }));
+      // eslint-disable-next-line no-console
+      console.log('');
+      // eslint-disable-next-line no-console
+      console.log(sectionTitle('How to set it'));
+      // eslint-disable-next-line no-console
+      console.log(
+        bullets([
+          `${dim('save locally:')} ${cmdFmt('happys auth dev-key --set "<base64url-secret-or-backup-format>"')}`,
+          `${dim('or export for this shell:')} export HAPPY_STACKS_DEV_AUTH_SECRET_KEY="<base64url-secret>"`,
+        ])
+      );
+      if (out.path) {
+        // eslint-disable-next-line no-console
+        console.log('');
+        // eslint-disable-next-line no-console
+        console.log(dim(`Path: ${out.path}`));
+      }
     }
     process.exit(1);
   }
@@ -151,7 +181,15 @@ async function cmdDevKey({ argv, json }) {
     printResult({ json, data: { ok: true, key: value, format: fmt, source: out.source ?? null } });
     return;
   }
-  console.log(`[auth] dev-key (${fmt}) [source=${out.source ?? 'unknown'}]`);
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(banner('auth dev-key', { subtitle: 'Local dev key (use --print for raw output).' }));
+  // eslint-disable-next-line no-console
+  console.log(bullets([kv('format:', cyan(fmt)), kv('source:', out.source ?? 'unknown')]));
+  // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
   console.log(value);
 }
 
@@ -915,20 +953,29 @@ async function main() {
       json,
       data: { commands: ['status', 'login', 'copy-from', 'dev-key'], stackScoped: 'happys stack auth <name> status|login|copy-from' },
       text: [
-        '[auth] usage:',
-        '  happys auth status [--json]',
-        '  happys auth login [--force] [--print] [--json]',
-        '  happys auth copy-from <sourceStack|legacy> --all [--except=main,dev-auth] [--force] [--with-infra] [--link] [--json]',
-        '  happys auth dev-key [--print] [--format=base64url|backup] [--set=<base64url>] [--clear] [--json]',
         '',
-        'advanced:',
-        '  happys auth login --context=selfhost|dev|stack   # UX labels only',
-        '  happys auth copy-from legacy --allow-main [--link] [--force]   # reuse (symlink) or copy ~/.happy creds into main happy-stacks install',
+        banner('auth', { subtitle: 'Login and auth seeding helpers for Happy Stacks.' }),
         '',
-        'stack-scoped:',
-        '  happys stack auth <name> status [--json]',
-        '  happys stack auth <name> login [--force] [--print] [--json]',
-        '  happys stack auth <name> copy-from <sourceStack|legacy> [--force] [--with-infra] [--link] [--json]',
+        sectionTitle('Usage (global)'),
+        bullets([
+          `${dim('status:')} ${cmdFmt('happys auth status')} ${dim('[--json]')}`,
+          `${dim('login:')}  ${cmdFmt('happys auth login')} ${dim('[--force] [--print] [--json]')}`,
+          `${dim('seed:')}   ${cmdFmt('happys auth copy-from <sourceStack|legacy> --all')} ${dim('[--except=main,dev-auth] [--force] [--with-infra] [--link] [--json]')}`,
+          `${dim('dev key:')} ${cmdFmt('happys auth dev-key')} ${dim('[--print] [--format=base64url|backup] [--set=<secret>] [--clear] [--json]')}`,
+        ]),
+        '',
+        sectionTitle('Usage (stack-scoped)'),
+        bullets([
+          `${dim('status:')} ${cmdFmt('happys stack auth <name> status')} ${dim('[--json]')}`,
+          `${dim('login:')}  ${cmdFmt('happys stack auth <name> login')} ${dim('[--force] [--print] [--json]')}`,
+          `${dim('seed:')}   ${cmdFmt('happys stack auth <name> copy-from <sourceStack|legacy>')} ${dim('[--force] [--with-infra] [--link] [--json]')}`,
+        ]),
+        '',
+        sectionTitle('Advanced'),
+        bullets([
+          `${dim('UX labels only:')} ${cmdFmt('happys auth login --context=selfhost|dev|stack')}`,
+          `${dim('import legacy creds into main:')} ${cmdFmt('happys auth copy-from legacy --allow-main')} ${dim('[--link] [--force]')}`,
+        ]),
       ].join('\n'),
     });
     return;

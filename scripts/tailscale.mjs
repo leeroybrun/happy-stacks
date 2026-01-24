@@ -7,8 +7,8 @@ import { getInternalServerUrl } from './utils/server/urls.mjs';
 import { resolveCommandPath } from './utils/proc/commands.mjs';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
-import { banner } from './utils/ui/layout.mjs';
-import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
+import { banner, bullets, cmd as cmdFmt, kv, ok, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green } from './utils/ui/ansi.mjs';
 
 /**
  * Manage Tailscale Serve for exposing the local UI/API over HTTPS (secure context).
@@ -361,19 +361,29 @@ async function main() {
       json,
       data: { commands: ['status', 'enable', 'disable', 'reset', 'url'] },
       text: [
+        '',
         banner('tailscale', { subtitle: 'Tailscale Serve (HTTPS secure context)' }),
         '',
-        bold('usage:'),
-        `  ${cyan('happys tailscale')} status [--json]`,
-        `  ${cyan('happys tailscale')} enable [--json]`,
-        `  ${cyan('happys tailscale')} disable [--json]`,
-        `  ${cyan('happys tailscale')} url [--json]`,
+        sectionTitle('Usage'),
+        bullets([
+          `${dim('status:')} ${cmdFmt('happys tailscale status')} ${dim('[--json]')}`,
+          `${dim('enable:')} ${cmdFmt('happys tailscale enable')} ${dim('[--json]')}`,
+          `${dim('disable:')} ${cmdFmt('happys tailscale disable')} ${dim('[--json]')}`,
+          `${dim('url:')} ${cmdFmt('happys tailscale url')} ${dim('[--json]')}`,
+        ]),
         '',
-        bold('legacy (cloned repo):'),
-        `  ${dim('pnpm tailscale:status [--json]')}`,
+        sectionTitle('Notes'),
+        bullets([
+          `${dim('what it does:')} configures \`tailscale serve\` to proxy your local server (${dim('usually')} ${cyan('http://127.0.0.1:3005')}) over HTTPS`,
+          `${dim('env:')} set ${cyan('HAPPY_LOCAL_TAILSCALE_SERVE=1')} to allow stack runs to auto-enable serve (best-effort)`,
+          `${dim('sandbox:')} enable/disable are blocked unless ${cyan('HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1')}`,
+        ]),
         '',
-        bold('advanced:'),
-        `  ${dim('node scripts/tailscale.mjs enable --upstream=<url> --path=/ [--json]')}`,
+        sectionTitle('Legacy / advanced'),
+        bullets([
+          `${dim('cloned repo legacy:')} ${dim('pnpm tailscale:status [--json]')}`,
+          `${dim('low-level:')} ${dim('node scripts/tailscale.mjs enable --upstream=<url> --path=/ [--json]')}`,
+        ]),
       ].join('\n'),
     });
     return;
@@ -393,7 +403,7 @@ async function main() {
       if (json) {
         printResult({ json, data: { status, httpsUrl: extractHttpsUrl(status) } });
       } else {
-      process.stdout.write(status);
+        process.stdout.write(status);
       }
       return;
     }
@@ -401,7 +411,7 @@ async function main() {
       const status = await tailscaleServeStatus();
       const url = extractHttpsUrl(status);
       if (!url) {
-        throw new Error('[local] no https:// URL found in `tailscale serve status` output');
+        throw new Error('[tailscale] no https:// URL found in `tailscale serve status` output');
       }
       printResult({ json, data: { url }, text: url });
       return;
@@ -446,13 +456,13 @@ async function main() {
       return;
     }
     default:
-      throw new Error(`[local] unknown tailscale command: ${cmd}`);
+      throw new Error(`[tailscale] unknown command: ${cmd}`);
   }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((err) => {
-    console.error('[local] failed:', err);
+    console.error('[tailscale] failed:', err);
     process.exit(1);
   });
 }

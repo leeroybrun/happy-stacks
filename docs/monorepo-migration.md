@@ -57,6 +57,25 @@ happys monorepo port continue --target=/abs/path/to/monorepo
 - `port status` shows whether a `git am` session is in progress, the current patch subject, and conflicted files.
 - `port continue` runs `git am --continue` for the target repo (after you staged resolved files). If you started from `port guide`, it can also resume the remaining port automatically after each continue.
 
+### LLM-assisted conflict resolution (optional)
+
+If you want to use an LLM to drive the port and resolve conflicts:
+
+- **Best UX (guided)**: run `port guide` and pick **LLM** when it previews the first likely conflict.
+- **Direct prompt helper**:
+
+```bash
+# Launch an LLM CLI in a new terminal (best-effort)
+happys monorepo port llm --target=/abs/path/to/monorepo --launch
+
+# Or: print + copy a prompt for copy/paste
+happys monorepo port llm --target=/abs/path/to/monorepo --copy
+```
+
+Notes:
+- Conflict resolution is **incremental**: `git am` stops at the **first** conflict; resolve it, then continue, and repeat.
+- If no supported LLM CLI is installed (or terminal launching isn’t available), use `--copy` and paste into any LLM UI.
+
 How to bring “the changes you want to port” into this environment:
 
 - **If you already have local checkouts** of your legacy repos (recommended for forks/branches that aren’t PRs yet):

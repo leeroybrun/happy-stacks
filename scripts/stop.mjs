@@ -6,21 +6,27 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
-import { cmd, sectionTitle } from './utils/ui/layout.mjs';
+import { banner, bullets, cmd, kv, sectionTitle } from './utils/ui/layout.mjs';
 import { dim, green, yellow } from './utils/ui/ansi.mjs';
 
 function usage() {
   return [
-    '[stop] usage:',
-    '  happys stop [--except-stacks=main,exp1] [--yes] [--aggressive] [--sweep-owned] [--no-docker] [--no-service] [--json]',
     '',
-    'Stops stacks and related local processes (server, daemon, Expo, managed infra) using stack-scoped commands.',
+    banner('stop', { subtitle: 'Stop stacks safely (bulk).' }),
     '',
-    'Examples:',
-    '  happys stop --except-stacks=main --yes',
-    '  happys stop --yes --no-docker',
-    '  happys stop --except-stacks=main --yes --aggressive',
-    '  happys stop --except-stacks=main --yes --aggressive --sweep-owned',
+    sectionTitle('Usage'),
+    bullets([
+      `${dim('stop all (non-interactive):')} ${cmd('happys stop --yes')}`,
+      `${dim('exclude some stacks:')} ${cmd('happys stop --except-stacks=main,exp1 --yes')}`,
+      `${dim('aggressive:')} ${cmd('happys stop --yes --aggressive')} ${dim('(also stops daemon-tracked sessions)')}`,
+      `${dim('sweep-owned:')} ${cmd('happys stop --yes --sweep-owned')} ${dim('(final owned-process sweep)')}`,
+      `${dim('no docker:')} ${cmd('happys stop --yes --no-docker')}`,
+      `${dim('no service:')} ${cmd('happys stop --yes --no-service')}`,
+      `${dim('json:')} ${cmd('happys stop --yes --json')}`,
+    ]),
+    '',
+    sectionTitle('What it does'),
+    bullets([dim('Stops stacks and related local processes (server, daemon, Expo, managed infra) using stack-scoped commands.')]),
   ].join('\n');
 }
 
@@ -82,10 +88,14 @@ async function main() {
     // Simple confirm prompt (avoid importing wizard/rl here).
     // eslint-disable-next-line no-console
     console.log('');
-    console.log(sectionTitle('Stop stacks'));
-    console.log(`${yellow('!')} ${dim('will stop:')} ${targets.join(', ')}`);
+    console.log(banner('stop', { subtitle: 'Confirmation required (TTY).' }));
+    console.log('');
+    console.log(sectionTitle('Will stop'));
+    console.log(bullets([kv('stacks:', targets.join(', '))]));
+    console.log('');
+    console.log(sectionTitle('Proceed'));
     // eslint-disable-next-line no-console
-    console.log(`${dim('Re-run with')} ${cmd('happys stop --yes')} ${dim('to proceed.')}`);
+    console.log(bullets([`${dim('re-run:')} ${cmd('happys stop --yes')}`]));
     process.exit(1);
   }
 
@@ -140,19 +150,35 @@ async function main() {
   }
 
   // eslint-disable-next-line no-console
+  console.log('');
+  // eslint-disable-next-line no-console
+  console.log(banner('stop', { subtitle: 'Complete.' }));
+  // eslint-disable-next-line no-console
   console.log(
-    `${green('✓')} done ${dim('(')}stopped=${results.length}${skipped.length ? ` skipped=${skipped.length}` : ''}${errors.length ? ` errors=${errors.length}` : ''}${dim(')')}`
+    bullets([
+      kv('stopped:', String(results.length)),
+      kv('skipped:', String(skipped.length)),
+      kv('errors:', String(errors.length)),
+    ])
   );
   if (skipped.length) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(sectionTitle('Skipped'));
     for (const s of skipped) {
       // eslint-disable-next-line no-console
-      console.log(`[stop] skipped (${s.stackName}): ${s.reason}${s.envPath ? ` (${s.envPath})` : ''}`);
+      console.log(`- ${s.stackName}: ${s.reason}${s.envPath ? ` ${dim(`(${s.envPath})`)}` : ''}`);
     }
   }
   if (errors.length) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(sectionTitle('Errors'));
     for (const e of errors) {
       // eslint-disable-next-line no-console
-      console.warn(`[stop] error (${e.stackName}): ${e.error}`);
+      console.warn(`- ${e.stackName}: ${e.error}`);
     }
   }
 }

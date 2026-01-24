@@ -230,6 +230,91 @@ test('monorepo port accepts monorepo sources without double-prefixing paths', as
   assert.equal(content, 'v2\n');
 });
 
+test('monorepo port can clone the target monorepo into a new directory', async (t) => {
+  const root = await withTempRoot(t);
+  const seedMono = join(root, 'seed-mono');
+  const target = join(root, 'target-cloned'); // does not exist yet
+  const sourceCli = join(root, 'source-cli');
+  const env = gitEnv();
+
+  // Seed monorepo repo that will be cloned into `target`
+  await initMonorepoStub({ dir: seedMono, env, seed: { 'cli/hello.txt': 'v1\n' } });
+
+  // Source CLI repo with one change commit (v1 -> v2)
+  await mkdir(sourceCli, { recursive: true });
+  await run('git', ['init', '-q'], { cwd: sourceCli, env });
+  await run('git', ['checkout', '-q', '-b', 'main'], { cwd: sourceCli, env });
+  await writeFile(join(sourceCli, 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(sourceCli, 'hello.txt'), 'v1\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env });
+  await run('git', ['commit', '-q', '-m', 'chore: init cli'], { cwd: sourceCli, env });
+  const base = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: sourceCli, env })).trim();
+  await writeFile(join(sourceCli, 'hello.txt'), 'v2\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env });
+  await run('git', ['commit', '-q', '-m', 'feat: update hello'], { cwd: sourceCli, env });
+
+  const out = await runCapture(
+    process.execPath,
+    [
+      join(process.cwd(), 'scripts', 'monorepo.mjs'),
+      'port',
+      `--target=${target}`,
+      '--clone-target',
+      `--target-repo=${seedMono}`,
+      `--branch=port/test-target-clone`,
+      `--from-happy-cli=${sourceCli}`,
+      `--from-happy-cli-base=${base}`,
+      '--json',
+    ],
+    { cwd: process.cwd(), env }
+  );
+  const parsed = JSON.parse(out.trim());
+  assert.equal(parsed.ok, true);
+
+  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  assert.equal(content, 'v2\n');
+});
+
+test('monorepo port accepts source repo URLs by cloning them into a temp checkout', async (t) => {
+  const root = await withTempRoot(t);
+  const target = join(root, 'target-mono');
+  const sourceCli = join(root, 'source-cli');
+  const env = gitEnv();
+
+  // Target monorepo stub (seed base file)
+  await initMonorepoStub({ dir: target, env, seed: { 'cli/hello.txt': 'v1\n' } });
+
+  // Source CLI repo with one change commit
+  const base = await initSplitRepoStub({
+    dir: sourceCli,
+    env,
+    name: 'cli',
+    seed: { 'hello.txt': 'v1\n' },
+  });
+  await writeFile(join(sourceCli, 'hello.txt'), 'v2\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env });
+  await run('git', ['commit', '-q', '-m', 'feat: update hello'], { cwd: sourceCli, env });
+
+  const out = await runCapture(
+    process.execPath,
+    [
+      join(process.cwd(), 'scripts', 'monorepo.mjs'),
+      'port',
+      `--target=${target}`,
+      `--branch=port/test-source-url`,
+      `--from-happy-cli=file://${sourceCli}`,
+      `--from-happy-cli-base=${base}`,
+      '--json',
+    ],
+    { cwd: process.cwd(), env }
+  );
+  const parsed = JSON.parse(out.trim());
+  assert.equal(parsed.ok, true);
+
+  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  assert.equal(content, 'v2\n');
+});
+
 test('monorepo port --continue-on-failure completes even when some patches do not apply', async (t) => {
   const root = await withTempRoot(t);
   const target = join(root, 'target-mono');
@@ -697,12 +782,11 @@ test('monorepo port guide can wait for conflict resolution and finish the port',
   const scriptPath = join(process.cwd(), 'scripts', 'monorepo.mjs');
   const inputLines = [
     target, // Target monorepo path
-    'main', // Target base ref
     'port/test-guide', // New branch name
     '1', // Use 3-way merge: yes
+    // Sources: since we provide --from-happy-cli via the prompts in this test, guide will still prompt.
     '', // Path to old happy (skip)
     sourceCli, // Path to old happy-cli
-    'main', // old happy-cli base ref
     '', // Path to old happy-server (skip)
   ];
 
@@ -750,20 +834,16 @@ test('monorepo port guide can wait for conflict resolution and finish the port',
   // Feed the wizard answers step-by-step (readline can be picky under non-tty runners).
   await waitFor(() => out.includes('Target monorepo path:'), 5_000);
   sendLine(inputLines[0]);
-  await waitFor(() => out.includes('Target base ref:'), 5_000);
-  sendLine(inputLines[1]);
   await waitFor(() => out.includes('New branch name:'), 5_000);
-  sendLine(inputLines[2]);
+  sendLine(inputLines[1]);
   await waitFor(() => out.includes('Use 3-way merge'), 5_000);
+  sendLine(inputLines[2]);
+  await waitFor(() => out.includes('old happy (UI)'), 5_000);
   sendLine(inputLines[3]);
-  await waitFor(() => out.includes('Path to old happy repo'), 5_000);
+  await waitFor(() => out.includes('old happy-cli'), 5_000);
   sendLine(inputLines[4]);
-  await waitFor(() => out.includes('Path to old happy-cli repo'), 5_000);
+  await waitFor(() => out.includes('old happy-server'), 5_000);
   sendLine(inputLines[5]);
-  await waitFor(() => out.includes('old happy-cli base ref'), 5_000);
-  sendLine(inputLines[6]);
-  await waitFor(() => out.includes('Path to old happy-server repo'), 5_000);
-  sendLine(inputLines[7]);
 
   // Preflight now runs before starting the port. Accept the default (guided) mode.
   await waitFor(() => out.includes('Preflight detected conflicts'), 10_000);
@@ -1017,19 +1097,15 @@ test('monorepo port guide quit leaves a plan; port continue resumes and complete
   // Feed the wizard answers step-by-step.
   await waitFor(() => out.includes('Target monorepo path:'), 5_000);
   sendLine(target);
-  await waitFor(() => out.includes('Target base ref:'), 5_000);
-  sendLine('main');
   await waitFor(() => out.includes('New branch name:'), 5_000);
   sendLine('port/test-guide-quit');
   await waitFor(() => out.includes('Use 3-way merge'), 5_000);
   sendLine('1');
-  await waitFor(() => out.includes('Path to old happy repo'), 5_000);
+  await waitFor(() => out.includes('old happy (UI)'), 5_000);
   sendLine('');
-  await waitFor(() => out.includes('Path to old happy-cli repo'), 5_000);
+  await waitFor(() => out.includes('old happy-cli'), 5_000);
   sendLine(sourceCli);
-  await waitFor(() => out.includes('old happy-cli base ref'), 5_000);
-  sendLine('main');
-  await waitFor(() => out.includes('Path to old happy-server repo'), 5_000);
+  await waitFor(() => out.includes('old happy-server'), 5_000);
   sendLine('');
 
   // Preflight now runs before starting the port. Accept the default (guided) mode.

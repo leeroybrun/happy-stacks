@@ -39,13 +39,13 @@ import { detectSwiftbarPluginInstalled } from './utils/menubar/swiftbar.mjs';
 
 async function fetchHealth(url) {
   const tryGet = async (path) => {
-  try {
+    try {
       const res = await fetch(`${url}${path}`, { method: 'GET' });
-    const body = await res.text();
-    return { ok: res.ok, status: res.status, body: body.trim() };
+      const body = await res.text();
+      return { ok: res.ok, status: res.status, body: body.trim() };
     } catch {
-    return { ok: false, status: null, body: null };
-  }
+      return { ok: false, status: null, body: null };
+    }
   };
 
   // Prefer /health when available, but fall back to / (matches waitForServerReady).
@@ -72,9 +72,19 @@ async function main() {
       json,
       data: { flags: ['--fix', '--server=happy-server|happy-server-light'], json: true },
       text: [
-        '[doctor] usage:',
-        '  happys doctor [--fix] [--json]',
-        '  node scripts/doctor.mjs [--fix] [--server=happy-server|happy-server-light] [--json]',
+        '',
+        banner('doctor', { subtitle: 'Diagnose common local setup failure modes.' }),
+        '',
+        sectionTitle('Usage'),
+        bullets([
+          `${dim('recommended:')} ${cmd('happys doctor')} ${dim('[--fix] [--json]')}`,
+          `${dim('direct:')} ${cmd('node scripts/doctor.mjs')} ${dim('[--fix] [--server=happy-server|happy-server-light] [--json]')}`,
+        ]),
+        '',
+        sectionTitle('Notes'),
+        bullets([
+          `${dim('--fix:')} best-effort fixes (non-stack mode only; refuses to kill unknown port listeners in stack mode)`,
+        ]),
       ].join('\n'),
     });
     return;
@@ -109,7 +119,7 @@ async function main() {
 
   const serverComponentName = getServerComponentName({ kv });
   if (serverComponentName === 'both') {
-    throw new Error(`[local] --server=both is not supported for doctor (pick one: happy-server-light or happy-server)`);
+    throw new Error(`[doctor] --server=both is not supported (pick one: happy-server-light or happy-server)`);
   }
 
   const serverDir = getComponentDir(rootDir, serverComponentName);
@@ -152,8 +162,7 @@ async function main() {
     console.log(sectionTitle('Details'));
     console.log(bullets([
       kv('internal:', cyan(internalServerUrl)),
-      kv('public:', publicServerUrl ? cyan(publicServerUrl) : dim('(none)'),
-      ),
+      kv('public:', publicServerUrl ? cyan(publicServerUrl) : dim('(none)')),
       kv('server:', cyan(serverComponentName)),
       kv('uiBuild:', uiBuildDir),
       kv('cliHome:', cliHomeDir),
@@ -162,6 +171,7 @@ async function main() {
       kv('workspace:', workspaceDir),
     ]));
     console.log('');
+    console.log(sectionTitle('Checks'));
   }
 
   if (!(await pathExists(serverDir))) {
@@ -312,6 +322,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('[local] doctor failed:', err);
+  console.error('[doctor] failed:', err);
   process.exit(1);
 });

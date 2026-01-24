@@ -26,7 +26,7 @@ function usage() {
     '  happys import inspect [--happy=<path|url>] [--happy-cli=<path|url>] [--happy-server=<path|url>] [--happy-server-light=<path|url>] [--yes] [--json]',
     '  happys import apply --stack=<name> [--server=happy-server|happy-server-light] [--happy=<path|url>] [--happy-ref=<ref>] [--happy-cli=<path|url>] [--happy-cli-ref=<ref>] [--happy-server=<path|url>] [--happy-server-ref=<ref>] [--happy-server-light=<path|url>] [--happy-server-light-ref=<ref>] [--yes] [--json]',
     '  happys import migrate [--stack=<name>]',
-    '  happys import llm [--mode=import|migrate] [--stack=<name>] [--copy]',
+    '  happys import llm [--mode=import|migrate] [--stack=<name>] [--copy] [--launch]',
     '  happys import [--json]',
     '',
     'What it does:',
@@ -252,7 +252,34 @@ async function ensureWorktreeForRef({ rootDir, componentLabel, repoRoot, ref }) 
 
   // eslint-disable-next-line no-console
   console.log(dim(`Creating worktree: ${repoRoot} -> ${targetDir} (${r})`));
-  await run('git', ['worktree', 'add', targetDir, r], { cwd: repoRoot });
+
+  // Important:
+  // A normal clone has a branch checked out in its "main worktree" already.
+  // `git worktree add <dir> <branch>` fails if `<branch>` is currently checked out anywhere.
+  //
+  // To make `happys import apply` robust for typical contributor setups,
+  // create a dedicated, uniquely named branch under the source repo when the ref is a local branch.
+  const isLocalBranch = await gitOk(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${r}`]);
+  if (isLocalBranch) {
+    const importPrefix = `hs-import/${componentSlug}/${safeRef}`;
+    let importBranch = importPrefix;
+    let i = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      // eslint-disable-next-line no-await-in-loop
+      const exists = await gitOk(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${importBranch}`]);
+      if (!exists) break;
+      i += 1;
+      importBranch = `${importPrefix}-${i}`;
+      if (i > 50) {
+        throw new Error(`[import] could not find a free import branch name for ${r}`);
+      }
+    }
+    await run('git', ['worktree', 'add', '-b', importBranch, targetDir, r], { cwd: repoRoot });
+  } else {
+    // Commit SHA / tag / remote ref: keep it detached to avoid consuming/locking branches.
+    await run('git', ['worktree', 'add', '--detach', targetDir, r], { cwd: repoRoot });
+  }
   return targetDir;
 }
 
@@ -351,16 +378,34 @@ async function chooseCheckoutPathForRepo({ rl, rootDir, componentLabel, repoRoot
   });
   const workspaceDir = getWorkspaceDir(rootDir);
   const safe = sanitizeSlugPart(String(branch ?? 'branch'));
-  const targetDir = join(workspaceDir, 'imports', 'worktrees', componentLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-'), safe);
+  const componentSlug = componentLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const targetDir = join(workspaceDir, 'imports', 'worktrees', componentSlug, safe);
+
   // eslint-disable-next-line no-console
   console.log(dim(`Creating worktree: ${repoRoot} -> ${targetDir} (${branch})`));
+
   // Create only the parent directory; git worktree add expects the target dir to NOT exist.
   await mkdir(join(targetDir, '..'), { recursive: true });
   if (existsSync(targetDir)) {
     throw new Error(`[import] worktree path already exists: ${targetDir}\n[import] fix: delete it or pick a different branch name/slug`);
   }
-  await run('git', ['worktree', 'add', targetDir, branch], { cwd: repoRoot });
-  return { path: targetDir, branch: String(branch ?? '').trim() || await gitBranch(targetDir) };
+
+  // Same reasoning as ensureWorktreeForRef(): avoid trying to check out the exact same branch in 2 worktrees.
+  const importPrefix = `hs-import/${componentSlug}/${safe}`;
+  let importBranch = importPrefix;
+  let i = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await gitOk(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${importBranch}`]);
+    if (!exists) break;
+    i += 1;
+    importBranch = `${importPrefix}-${i}`;
+    if (i > 50) throw new Error(`[import] could not find a free import branch name for ${branch}`);
+  }
+  await run('git', ['worktree', 'add', '-b', importBranch, targetDir, branch], { cwd: repoRoot });
+
+  return { path: targetDir, branch: importBranch };
 }
 
 async function ensureStackExists({ rootDir, stackName, serverComponent }) {
@@ -555,6 +600,25 @@ async function cmdLlm({ argv }) {
   if (json) {
     printResult({ json, data: { mode, stack: stackName || null, prompt: promptText, detectedTools: tools.map((t) => t.id) } });
     return;
+  }
+
+  const wantsLaunch = flags.has('--launch');
+  if (wantsLaunch) {
+    const launched = await launchLlmAssistant({
+      title: 'Happy Stacks import/migrate (LLM)',
+      subtitle: 'Guides import and/or runs the monorepo port + conflict resolution.',
+      promptText,
+      cwd: rootDir,
+      env: process.env,
+      allowRunHere: true,
+      allowCopyOnly: true,
+    });
+    if (launched.ok && launched.launched) return;
+    if (!launched.ok) {
+      // eslint-disable-next-line no-console
+      console.log(dim(`[import] LLM launch unavailable: ${launched.reason || 'unknown'}`));
+    }
+    // fall through to printing the prompt
   }
 
   // eslint-disable-next-line no-console
@@ -1249,4 +1313,3 @@ main().catch((err) => {
   process.stderr.write(String(err?.message ?? err) + '\n');
   process.exit(1);
 });
-
