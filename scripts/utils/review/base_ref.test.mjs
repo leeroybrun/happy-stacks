@@ -24,6 +24,9 @@ async function makeRepoWithRemoteHead() {
   await runGit(local, ['commit', '-m', 'initial']);
   await runGit(local, ['remote', 'add', 'upstream', remote]);
   await runGit(local, ['push', '-u', 'upstream', 'main']);
+  // In CI, `git init --bare` may default HEAD to `master`, and `remote set-head --auto` fails
+  // with "Cannot determine remote HEAD" if that branch doesn't exist. Make it deterministic.
+  await runGit(remote, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
   // Ensure refs/remotes/upstream/HEAD exists.
   await runGit(local, ['remote', 'set-head', 'upstream', '--auto']);
 
