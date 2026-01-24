@@ -12,12 +12,14 @@ import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { bold, cyan, dim, green, red, yellow } from './utils/ui/ansi.mjs';
 import { clipboardAvailable, copyTextToClipboard } from './utils/ui/clipboard.mjs';
 import { detectInstalledLlmTools } from './utils/llm/tools.mjs';
+import { launchLlmAssistant } from './utils/llm/assist.mjs';
 
 function usage() {
   return [
     '[monorepo] usage:',
     '  happys monorepo port --target=/abs/path/to/monorepo [--branch=port/<name>] [--base=<ref>] [--onto-current] [--dry-run] [--3way] [--skip-applied] [--continue-on-failure] [--json]',
     '  happys monorepo port guide [--target=/abs/path/to/monorepo] [--json]',
+    '  happys monorepo port preflight --target=/abs/path/to/monorepo [--base=<ref>] [--3way] [--json]',
     '  happys monorepo port status [--target=/abs/path/to/monorepo] [--json]',
     '  happys monorepo port continue [--target=/abs/path/to/monorepo] [--json]',
     '  happys monorepo port llm --target=/abs/path/to/monorepo [--copy] [--json]',
@@ -58,6 +60,31 @@ async function gitOk(cwd, args) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function withTempDetachedWorktree({ repoRoot, ref, label }, fn) {
+  const root = await resolveGitRoot(repoRoot);
+  if (!root) throw new Error('[monorepo] failed to resolve git root for worktree');
+  const safeLabel = String(label ?? 'worktree')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const tmp = await mkdtemp(join(tmpdir(), `happy-stacks-${safeLabel}-`));
+  const dir = join(tmp, 'wt');
+  const r = String(ref ?? '').trim();
+  if (!r) throw new Error('[monorepo] missing worktree ref');
+  try {
+    await runCapture('git', ['worktree', 'add', '--detach', dir, r], { cwd: root });
+    return await fn(dir);
+  } finally {
+    try {
+      await runCapture('git', ['worktree', 'remove', '--force', dir], { cwd: root });
+      await runCapture('git', ['worktree', 'prune'], { cwd: root });
+    } catch {
+      // ignore
+    }
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -180,6 +207,29 @@ function noteLine(s) {
   console.log(dim(s));
 }
 
+function summarizePreflightFailures(preflight) {
+  const results = Array.isArray(preflight?.results) ? preflight.results : [];
+  const lines = [];
+  for (const r of results) {
+    const failed = r?.report?.failed ?? [];
+    if (!Array.isArray(failed) || failed.length === 0) continue;
+    const label = String(r.label ?? '').trim() || 'source';
+    const first = failed[0] ?? null;
+    if (!first) continue;
+
+    const subj = String(first.subject ?? '').replace(/^\[PATCH \d+\/\d+\]\s*/, '');
+    const kind = first.kind ? ` (${first.kind})` : '';
+    const paths = (first.paths ?? []).slice(0, 4).join(', ');
+
+    lines.push(`- ${cyan(label)}: first failing patch`);
+    lines.push(`  - ${subj || first.patch}${kind}${paths ? ` → ${paths}` : ''}`);
+    if (failed.length > 1) {
+      lines.push(`  - ${dim(`note: ${failed.length - 1} subsequent patch(es) also failed in preflight; they may be cascading until this first one is resolved`)}`);
+    }
+  }
+  return lines;
+}
+
 async function resolvePortPlanPath(targetRepoRoot) {
   return await resolveGitPath(targetRepoRoot, 'happy-stacks/monorepo-port-plan.json');
 }
@@ -224,6 +274,46 @@ async function listConflictedFiles(repoRoot) {
     if (path) files.push(path);
   }
   return Array.from(new Set(files)).sort();
+}
+
+async function readGitAmStatus(targetRepoRoot) {
+  const inProgress = await isGitAmInProgress(targetRepoRoot);
+  const conflictedFiles = await listConflictedFiles(targetRepoRoot);
+
+  let currentPatch = null;
+  if (inProgress) {
+    try {
+      const raw = await git(targetRepoRoot, ['am', '--show-current-patch']);
+      const meta = parsePatchMeta(raw);
+      const diffs = extractUnifiedDiffs(raw);
+      const filesRaw = Array.from(new Set(diffs.map((d) => d.plusPath || d.bPath).filter(Boolean))).sort();
+      const files = [];
+      for (const f of filesRaw) {
+        // `git am --directory <subdir>` applies patches under a directory, but `--show-current-patch`
+        // still shows the original (unprefixed) paths. Best-effort map them to the monorepo layout.
+        // eslint-disable-next-line no-await-in-loop
+        if (await pathExists(join(targetRepoRoot, f))) {
+          files.push(f);
+          continue;
+        }
+        const candidates = [`expo-app/${f}`, `cli/${f}`, `server/${f}`];
+        let mapped = '';
+        for (const c of candidates) {
+          // eslint-disable-next-line no-await-in-loop
+          if (await pathExists(join(targetRepoRoot, c))) {
+            mapped = c;
+            break;
+          }
+        }
+        files.push(mapped || f);
+      }
+      currentPatch = { subject: meta.subject || '', fromSha: meta.fromSha || '', files, filesRaw };
+    } catch {
+      currentPatch = { subject: '', fromSha: '', files: [], filesRaw: [] };
+    }
+  }
+
+  return { inProgress, currentPatch, conflictedFiles };
 }
 
 async function formatPatchesToDir({ sourceRepoRoot, base, head, outDir }) {
@@ -742,42 +832,8 @@ async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
 
 async function cmdPortStatus({ kv, json }) {
   const targetRepoRoot = await resolveTargetRepoRootFromArgs({ kv });
-  const inProgress = await isGitAmInProgress(targetRepoRoot);
+  const { inProgress, currentPatch, conflictedFiles } = await readGitAmStatus(targetRepoRoot);
   const branch = (await git(targetRepoRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || 'HEAD';
-  const conflictedFiles = await listConflictedFiles(targetRepoRoot);
-
-  let currentPatch = null;
-  if (inProgress) {
-    try {
-      const raw = await git(targetRepoRoot, ['am', '--show-current-patch']);
-      const meta = parsePatchMeta(raw);
-      const diffs = extractUnifiedDiffs(raw);
-      const filesRaw = Array.from(new Set(diffs.map((d) => d.plusPath || d.bPath).filter(Boolean))).sort();
-      const files = [];
-      for (const f of filesRaw) {
-        // `git am --directory <subdir>` applies patches under a directory, but `--show-current-patch`
-        // still shows the original (unprefixed) paths. Best-effort map them to the monorepo layout.
-        // eslint-disable-next-line no-await-in-loop
-        if (await pathExists(join(targetRepoRoot, f))) {
-          files.push(f);
-          continue;
-        }
-        const candidates = [`expo-app/${f}`, `cli/${f}`, `server/${f}`];
-        let mapped = '';
-        for (const c of candidates) {
-          // eslint-disable-next-line no-await-in-loop
-          if (await pathExists(join(targetRepoRoot, c))) {
-            mapped = c;
-            break;
-          }
-        }
-        files.push(mapped || f);
-      }
-      currentPatch = { subject: meta.subject || '', fromSha: meta.fromSha || '', files, filesRaw };
-    } catch {
-      currentPatch = { subject: '', fromSha: '', files: [], filesRaw: [] };
-    }
-  }
 
   const text = (() => {
     if (json) return '';
@@ -816,6 +872,66 @@ async function cmdPortStatus({ kv, json }) {
     data: { ok: true, targetRepoRoot, branch, inProgress, currentPatch, conflictedFiles },
     text,
   });
+}
+
+function buildPortLlmPromptText({ targetRepoRoot }) {
+  return [
+    'You are an assistant helping the user port split-repo commits into the slopus/happy monorepo.',
+    '',
+    `Target monorepo root: ${targetRepoRoot}`,
+    '',
+    'How to run the port:',
+    `- guided (recommended): happys monorepo port guide --target=${targetRepoRoot}`,
+    `- machine-readable report: happys monorepo port --target=${targetRepoRoot} --json`,
+    '',
+    'If a conflict happens (git am in progress):',
+    `- inspect state (JSON): happys monorepo port status --target=${targetRepoRoot} --json`,
+    `- inspect state (text): happys monorepo port status --target=${targetRepoRoot}`,
+    `- after fixing files:       git -C ${targetRepoRoot} am --continue`,
+    `- or via wrapper:           happys monorepo port continue --target=${targetRepoRoot}`,
+    `- to skip current patch:    git -C ${targetRepoRoot} am --skip`,
+    `- to abort:                git -C ${targetRepoRoot} am --abort`,
+    '',
+    'Instructions:',
+    '- Prefer minimal conflict resolutions that preserve intent.',
+    '- Conflicts are resolved one patch at a time (git am stops at the first conflict).',
+    '- Do not “pre-resolve” hypothetical future conflicts; re-check status after each continue.',
+    '- Keep changes scoped to expo-app/, cli/, server/.',
+    '- After each continue, re-check status until port completes.',
+  ].join('\n');
+}
+
+function buildPortGuideLlmPromptText({ targetRepoRoot, initialCommandArgs }) {
+  const parts = Array.isArray(initialCommandArgs) ? initialCommandArgs : [];
+  const cmd = ['happys', 'monorepo', ...parts.map((p) => String(p))].join(' ');
+  return [
+    'You are an assistant helping the user port split-repo commits into the slopus/happy monorepo.',
+    '',
+    `Target monorepo root: ${targetRepoRoot}`,
+    '',
+    'Goal:',
+    '- Run the port command.',
+    '- If conflicts occur, resolve them cleanly and continue until the port completes.',
+    '',
+    'Important:',
+    '- The port may already be running and stopped on a conflict (git am in progress).',
+    `- If running "${cmd}" fails with "git am already in progress", do NOT retry it; use status/continue below.`,
+    '',
+    'If the port is not started yet, start it (run exactly):',
+    cmd,
+    '',
+    'If it stops with conflicts:',
+    `- Inspect status (JSON): happys monorepo port status --target=${targetRepoRoot} --json`,
+    `- Resolve conflicted files`,
+    `- Stage:  git -C ${targetRepoRoot} add <files>`,
+    `- Continue: happys monorepo port continue --target=${targetRepoRoot}`,
+    '',
+    'Notes:',
+    '- Conflicts are resolved one patch at a time (git am stops at the first conflict).',
+    '- It’s common for later patches to fail “on paper” until the first conflict is resolved; don’t over-edit.',
+    '',
+    'Repeat status/resolve/continue until it completes.',
+  ].join('\n');
 }
 
 async function cmdPortContinue({ kv, json }) {
@@ -882,7 +998,100 @@ async function cmdPortContinue({ kv, json }) {
   });
 }
 
-async function cmdPortGuide({ kv, json }) {
+async function runPortPreflightData({ targetRepoRoot, baseRef, threeWay, sources }) {
+  const srcs = Array.isArray(sources) ? sources : [];
+  if (!targetRepoRoot) throw new Error('[monorepo] preflight: missing targetRepoRoot');
+  if (!baseRef) throw new Error('[monorepo] preflight: missing baseRef');
+  if (!srcs.length) {
+    throw new Error('[monorepo] preflight: nothing to port. Provide at least one source.');
+  }
+
+  const data = await withTempDetachedWorktree({ repoRoot: targetRepoRoot, ref: baseRef, label: 'monorepo-preflight' }, async (worktreeDir) => {
+    const preflightArgv = [
+      'port',
+      `--target=${worktreeDir}`,
+      '--onto-current',
+      '--continue-on-failure',
+      '--json',
+      ...(threeWay ? ['--3way'] : []),
+      ...srcs.flatMap((s) => [
+        `--${s.label}=${s.path}`,
+        ...(s.base ? [`--${s.label}-base=${s.base}`] : []),
+        ...(s.ref ? [`--${s.label}-ref=${s.ref}`] : []),
+      ]),
+    ];
+    const parsed = parseArgs(preflightArgv);
+    // Run silently; we only care about the returned JSON data.
+    return await cmdPortRun({ argv: preflightArgv, flags: parsed.flags, kv: parsed.kv, json: true, silent: true });
+  });
+
+  const failedPatches = (data?.results ?? []).reduce((sum, r) => sum + Number(r.failedPatches ?? 0), 0);
+  const ok = failedPatches === 0;
+  const sourcesWithFailures = (data?.results ?? []).filter((r) => Number(r?.failedPatches ?? 0) > 0).length;
+  return {
+    ok,
+    targetRepoRoot,
+    base: baseRef,
+    threeWay: Boolean(threeWay),
+    failedPatches,
+    sourcesWithFailures,
+    results: data?.results ?? [],
+  };
+}
+
+async function cmdPortPreflight({ argv, flags, kv, json }) {
+  const target = (kv.get('--target') ?? '').trim();
+  if (!target) throw new Error('[monorepo] preflight: missing --target=/abs/path/to/monorepo');
+
+  const targetRepoRoot = await resolveGitRoot(target);
+  if (!targetRepoRoot) throw new Error(`[monorepo] preflight: target is not a git repo: ${target}`);
+  if (!isHappyMonorepoRoot(targetRepoRoot)) {
+    throw new Error(`[monorepo] preflight: target is not a slopus/happy monorepo root: ${targetRepoRoot}`);
+  }
+
+  const threeWay = flags.has('--3way');
+  const baseOverride = (kv.get('--base') ?? '').trim();
+  const baseRef = baseOverride || (await resolveDefaultTargetBaseRef(targetRepoRoot));
+  if (!baseRef) throw new Error('[monorepo] preflight: could not infer a target base ref. Pass --base=<ref>.');
+
+  const sources = [
+    {
+      label: 'from-happy',
+      path: (kv.get('--from-happy') ?? '').trim(),
+      ref: (kv.get('--from-happy-ref') ?? '').trim(),
+      base: (kv.get('--from-happy-base') ?? '').trim(),
+    },
+    {
+      label: 'from-happy-cli',
+      path: (kv.get('--from-happy-cli') ?? '').trim(),
+      ref: (kv.get('--from-happy-cli-ref') ?? '').trim(),
+      base: (kv.get('--from-happy-cli-base') ?? '').trim(),
+    },
+    {
+      label: 'from-happy-server',
+      path: (kv.get('--from-happy-server') ?? '').trim(),
+      ref: (kv.get('--from-happy-server-ref') ?? '').trim(),
+      base: (kv.get('--from-happy-server-base') ?? '').trim(),
+    },
+  ].filter((s) => s.path);
+
+  if (!sources.length) {
+    throw new Error('[monorepo] preflight: nothing to port. Provide at least one of: --from-happy, --from-happy-cli, --from-happy-server');
+  }
+
+  const out = await runPortPreflightData({ targetRepoRoot, baseRef, threeWay, sources });
+  const summary = out.ok
+    ? `${green('[monorepo]')} preflight: no conflicts detected`
+    : `${yellow('[monorepo]')} preflight: conflicts detected ${dim(`(${out.sourcesWithFailures} source(s); may cascade)`)}`;
+
+  printResult({
+    json,
+    data: out,
+    text: json ? '' : summary,
+  });
+}
+
+async function cmdPortGuide({ kv, flags, json }) {
   if (!isTty()) {
     throw new Error('[monorepo] port guide requires a TTY. Re-run in an interactive terminal.');
   }
@@ -907,7 +1116,8 @@ async function cmdPortGuide({ kv, json }) {
       ].join('\n')
     );
 
-    const targetInput = (await prompt(rl, 'Target monorepo path: ', { defaultValue: targetDefault })).trim();
+    const targetArg = (kv.get('--target') ?? '').trim();
+    const targetInput = targetArg || (await prompt(rl, 'Target monorepo path: ', { defaultValue: targetDefault })).trim();
     const targetRepoRoot = await resolveGitRoot(targetInput);
     if (!targetRepoRoot || !isHappyMonorepoRoot(targetRepoRoot)) {
       throw new Error(`[monorepo] invalid target (expected slopus/happy monorepo root): ${targetInput}`);
@@ -916,25 +1126,44 @@ async function cmdPortGuide({ kv, json }) {
     await ensureNoGitAmInProgress(targetRepoRoot);
 
     const baseDefault = await resolveDefaultTargetBaseRef(targetRepoRoot);
-    const base = (await prompt(rl, 'Target base ref: ', { defaultValue: baseDefault || 'origin/main' })).trim();
-    const branch = (await prompt(rl, 'New branch name: ', { defaultValue: `port/${Date.now()}` })).trim();
-    const use3way =
-      (await promptSelect(rl, {
-        title: 'Use 3-way merge (recommended)?',
-        options: [
-          { label: 'yes (recommended)', value: true },
-          { label: 'no', value: false },
-        ],
-        defaultIndex: 0,
-      })) === true;
+    const baseArg = (kv.get('--base') ?? '').trim();
+    const base = baseArg || (await prompt(rl, 'Target base ref: ', { defaultValue: baseDefault || 'origin/main' })).trim();
 
-    const fromHappy = (await prompt(rl, 'Path to old happy repo (UI) [optional]: ', { defaultValue: '' })).trim();
-    const fromHappyBase = fromHappy ? (await prompt(rl, 'old happy base ref: ', { defaultValue: 'upstream/main' })).trim() : '';
-    const fromHappyCli = (await prompt(rl, 'Path to old happy-cli repo [optional]: ', { defaultValue: '' })).trim();
-    const fromHappyCliBase = fromHappyCli ? (await prompt(rl, 'old happy-cli base ref: ', { defaultValue: 'upstream/main' })).trim() : '';
-    const fromHappyServer = (await prompt(rl, 'Path to old happy-server repo [optional]: ', { defaultValue: '' })).trim();
+    const branchArg = (kv.get('--branch') ?? '').trim();
+    const branch = branchArg || (await prompt(rl, 'New branch name: ', { defaultValue: `port/${Date.now()}` })).trim();
+
+    const use3wayArg = flags?.has?.('--3way') === true;
+    const use3way = use3wayArg
+      ? true
+      : (await promptSelect(rl, {
+          title: 'Use 3-way merge (recommended)?',
+          options: [
+            { label: 'yes (recommended)', value: true },
+            { label: 'no', value: false },
+          ],
+          defaultIndex: 0,
+        })) === true;
+
+    const fromHappyArg = (kv.get('--from-happy') ?? '').trim();
+    const fromHappyRef = (kv.get('--from-happy-ref') ?? '').trim();
+    const fromHappy = fromHappyArg || (await prompt(rl, 'Path to old happy repo (UI) [optional]: ', { defaultValue: '' })).trim();
+    const fromHappyBaseArg = (kv.get('--from-happy-base') ?? '').trim();
+    const fromHappyBase = fromHappy ? (fromHappyBaseArg || (await prompt(rl, 'old happy base ref: ', { defaultValue: 'upstream/main' })).trim()) : '';
+
+    const fromHappyCliArg = (kv.get('--from-happy-cli') ?? '').trim();
+    const fromHappyCliRef = (kv.get('--from-happy-cli-ref') ?? '').trim();
+    const fromHappyCli = fromHappyCliArg || (await prompt(rl, 'Path to old happy-cli repo [optional]: ', { defaultValue: '' })).trim();
+    const fromHappyCliBaseArg = (kv.get('--from-happy-cli-base') ?? '').trim();
+    const fromHappyCliBase = fromHappyCli
+      ? (fromHappyCliBaseArg || (await prompt(rl, 'old happy-cli base ref: ', { defaultValue: 'upstream/main' })).trim())
+      : '';
+
+    const fromHappyServerArg = (kv.get('--from-happy-server') ?? '').trim();
+    const fromHappyServerRef = (kv.get('--from-happy-server-ref') ?? '').trim();
+    const fromHappyServer = fromHappyServerArg || (await prompt(rl, 'Path to old happy-server repo [optional]: ', { defaultValue: '' })).trim();
+    const fromHappyServerBaseArg = (kv.get('--from-happy-server-base') ?? '').trim();
     const fromHappyServerBase = fromHappyServer
-      ? (await prompt(rl, 'old happy-server base ref: ', { defaultValue: 'upstream/main' })).trim()
+      ? (fromHappyServerBaseArg || (await prompt(rl, 'old happy-server base ref: ', { defaultValue: 'upstream/main' })).trim())
       : '';
 
     if (!fromHappy && !fromHappyCli && !fromHappyServer) {
@@ -954,10 +1183,78 @@ async function cmdPortGuide({ kv, json }) {
     if (fromHappyCli) noteLine(`- ${cyan('happy-cli')}  ${fromHappyCli} ${dim(`(base=${fromHappyCliBase})`)}`);
     if (fromHappyServer) noteLine(`- ${cyan('happy-server')} ${fromHappyServer} ${dim(`(base=${fromHappyServerBase})`)}`);
 
+    const sources = [
+      ...(fromHappy ? [{ label: 'from-happy', path: fromHappy, base: fromHappyBase, ref: fromHappyRef }] : []),
+      ...(fromHappyCli ? [{ label: 'from-happy-cli', path: fromHappyCli, base: fromHappyCliBase, ref: fromHappyCliRef }] : []),
+      ...(fromHappyServer
+        ? [{ label: 'from-happy-server', path: fromHappyServer, base: fromHappyServerBase, ref: fromHappyServerRef }]
+        : []),
+    ];
+
+    section('Preflight');
+    const preflight = await runPortPreflightData({ targetRepoRoot, baseRef: base, threeWay: use3way, sources });
+    // eslint-disable-next-line no-console
+    console.log(
+      preflight.ok
+        ? `${green('[monorepo]')} preflight: no conflicts detected`
+        : `${yellow('[monorepo]')} preflight: conflicts detected ${dim(`(${preflight.sourcesWithFailures} source(s); may cascade)`)}`
+    );
+    const previewLines = summarizePreflightFailures(preflight);
+    if (previewLines.length) {
+      section('First likely conflict (preview)');
+      for (const l of previewLines) {
+        // eslint-disable-next-line no-console
+        console.log(l.startsWith('  ') ? dim(l) : l);
+      }
+      // eslint-disable-next-line no-console
+      console.log('');
+      // eslint-disable-next-line no-console
+      console.log(
+        dim(
+          'Tip: If the first patch fails, many later patches can fail in preflight too (cascading). ' +
+            'In the real port run, git am stops at the first conflict — resolve it first, then continue.'
+        )
+      );
+    }
+
+    const allowAutoLlm = String(process.env.HAPPY_STACKS_DISABLE_LLM_AUTOEXEC ?? '').trim() !== '1';
+    const canAutoLaunchLlm = allowAutoLlm && (await detectInstalledLlmTools({ onlyAutoExec: true })).length > 0;
+    let preferredConflictMode = 'guided';
+    if (!preflight.ok) {
+      preferredConflictMode = await promptSelect(rl, {
+        title:
+          `${bold('Preflight detected conflicts')}\n` +
+          `${dim('How do you want to proceed? (You can still change your mind later in the conflict loop.)')}`,
+        options: [
+          ...(canAutoLaunchLlm
+            ? [{ label: `${green('LLM (recommended)')} — run the port and resolve conflicts automatically`, value: 'llm' }]
+            : []),
+          { label: `${cyan('guided')} — resolve conflicts manually as they occur`, value: 'guided' },
+          { label: `${dim('quit')} — exit without starting the port`, value: 'quit' },
+        ],
+        defaultIndex: canAutoLaunchLlm ? 0 : 0,
+      });
+    }
+    if (preferredConflictMode === 'quit') {
+      throw new Error('[monorepo] guide cancelled (no changes made).');
+    }
+
     const baseSourceArgs = [
-      ...(fromHappy ? [`--from-happy=${fromHappy}`, `--from-happy-base=${fromHappyBase}`] : []),
-      ...(fromHappyCli ? [`--from-happy-cli=${fromHappyCli}`, `--from-happy-cli-base=${fromHappyCliBase}`] : []),
-      ...(fromHappyServer ? [`--from-happy-server=${fromHappyServer}`, `--from-happy-server-base=${fromHappyServerBase}`] : []),
+      ...(fromHappy ? [`--from-happy=${fromHappy}`, `--from-happy-base=${fromHappyBase}`, ...(fromHappyRef ? [`--from-happy-ref=${fromHappyRef}`] : [])] : []),
+      ...(fromHappyCli
+        ? [
+            `--from-happy-cli=${fromHappyCli}`,
+            `--from-happy-cli-base=${fromHappyCliBase}`,
+            ...(fromHappyCliRef ? [`--from-happy-cli-ref=${fromHappyCliRef}`] : []),
+          ]
+        : []),
+      ...(fromHappyServer
+        ? [
+            `--from-happy-server=${fromHappyServer}`,
+            `--from-happy-server-base=${fromHappyServerBase}`,
+            ...(fromHappyServerRef ? [`--from-happy-server-ref=${fromHappyServerRef}`] : []),
+          ]
+        : []),
     ];
 
     const initialArgv = [
@@ -994,6 +1291,7 @@ async function cmdPortGuide({ kv, json }) {
     // eslint-disable-next-line no-console
     console.log(`${bold('[monorepo]')} guide: starting port ${dim(`(${branch})`)}`);
 
+    let llmLaunched = false;
     let first = true;
     while (true) {
       const attemptArgv = first ? initialArgv : resumeArgv;
@@ -1024,11 +1322,50 @@ async function cmdPortGuide({ kv, json }) {
           // eslint-disable-next-line no-await-in-loop
           await cmdPortStatus({ kv: attemptKv, json: false });
 
+          if (preferredConflictMode === 'llm' && canAutoLaunchLlm && !llmLaunched) {
+            const promptText = buildPortGuideLlmPromptText({ targetRepoRoot, initialCommandArgs: initialArgv });
+            // eslint-disable-next-line no-console
+            console.log('');
+            // eslint-disable-next-line no-console
+            console.log(bold('[monorepo] launching LLM to resolve conflicts...'));
+            // eslint-disable-next-line no-await-in-loop
+            const res = await launchLlmAssistant({
+              title: 'Happy Stacks monorepo port',
+              subtitle: 'Resolve conflicts and complete the port',
+              promptText,
+              cwd: targetRepoRoot,
+              allowRunHere: true,
+              allowCopyOnly: true,
+            });
+            llmLaunched = true;
+
+            if (!res.ok) {
+              // eslint-disable-next-line no-console
+              console.log(`${yellow('!')} Could not auto-launch an LLM (${res.reason || 'unknown'}).`);
+            } else if (res.mode === 'new-terminal') {
+              // eslint-disable-next-line no-console
+              console.log('');
+              // eslint-disable-next-line no-console
+              console.log(`${bold('Press Enter')} once the LLM finishes to re-check status.`);
+              // eslint-disable-next-line no-await-in-loop
+              await prompt(rl, '', { defaultValue: '' });
+            } else if (res.mode === 'copy') {
+              // eslint-disable-next-line no-console
+              console.log('');
+              // eslint-disable-next-line no-console
+              console.log(`${bold('Press Enter')} once you finish running the prompt to re-check status.`);
+              // eslint-disable-next-line no-await-in-loop
+              await prompt(rl, '', { defaultValue: '' });
+            }
+            continue;
+          }
+
           const action = await promptSelect(rl, {
             title: bold('Resolve conflicts, then choose an action:'),
             options: [
               { label: `${green('continue')} (git am --continue)`, value: 'continue' },
               { label: `${cyan('show status again')}`, value: 'status' },
+              ...(canAutoLaunchLlm ? [{ label: `${green('launch LLM now')} ${dim('(recommended)')}`, value: 'llm-launch' }] : []),
               { label: `${cyan('llm prompt')} ${dim('(copy/paste)')}`, value: 'llm' },
               { label: `${yellow('skip current patch')} (git am --skip)`, value: 'skip' },
               { label: `${red('abort')} (git am --abort)`, value: 'abort' },
@@ -1038,6 +1375,25 @@ async function cmdPortGuide({ kv, json }) {
           });
 
           if (action === 'status') {
+            continue;
+          }
+          if (action === 'llm-launch') {
+            const promptText = buildPortLlmPromptText({ targetRepoRoot });
+            // eslint-disable-next-line no-console
+            console.log('');
+            // eslint-disable-next-line no-console
+            console.log(bold('[monorepo] launching LLM...'));
+            // eslint-disable-next-line no-await-in-loop
+            const res = await launchLlmAssistant({
+              title: 'Happy Stacks port conflict',
+              subtitle: 'Resolve current git am conflict',
+              promptText,
+              cwd: targetRepoRoot,
+            });
+            if (!res.ok) {
+              // eslint-disable-next-line no-console
+              console.log(`${yellow('!')} Could not auto-launch an LLM (${res.reason || 'unknown'}).`);
+            }
             continue;
           }
           if (action === 'llm') {
@@ -1074,28 +1430,7 @@ async function cmdPortGuide({ kv, json }) {
 
 async function cmdPortLlm({ kv, flags, json }) {
   const targetRepoRoot = await resolveTargetRepoRootFromArgs({ kv });
-  const promptText = [
-    'You are an assistant helping the user port split-repo commits into the slopus/happy monorepo.',
-    '',
-    `Target monorepo root: ${targetRepoRoot}`,
-    '',
-    'How to run the port:',
-    `- guided (recommended): happys monorepo port guide --target=${targetRepoRoot}`,
-    `- machine-readable report: happys monorepo port --target=${targetRepoRoot} --json`,
-    '',
-    'If a conflict happens (git am in progress):',
-    `- inspect state (JSON): happys monorepo port status --target=${targetRepoRoot} --json`,
-    `- inspect state (text): happys monorepo port status --target=${targetRepoRoot}`,
-    `- after fixing files:       git -C ${targetRepoRoot} am --continue`,
-    `- or via wrapper:           happys monorepo port continue --target=${targetRepoRoot}`,
-    `- to skip current patch:    git -C ${targetRepoRoot} am --skip`,
-    `- to abort:                git -C ${targetRepoRoot} am --abort`,
-    '',
-    'Instructions:',
-    '- Prefer minimal conflict resolutions that preserve intent.',
-    '- Keep changes scoped to expo-app/, cli/, server/.',
-    '- After each continue, re-check status until port completes.',
-  ].join('\n');
+  const promptText = buildPortLlmPromptText({ targetRepoRoot });
   const tools = await detectInstalledLlmTools();
 
   if (json) {
@@ -1154,8 +1489,12 @@ async function main() {
     await cmdPortContinue({ kv, json });
     return;
   }
+  if (sub === 'preflight') {
+    await cmdPortPreflight({ argv, flags, kv, json });
+    return;
+  }
   if (sub === 'guide') {
-    await cmdPortGuide({ kv, json });
+    await cmdPortGuide({ kv, flags, json });
     return;
   }
   if (sub === 'llm') {

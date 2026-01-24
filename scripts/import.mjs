@@ -17,6 +17,7 @@ import { sanitizeSlugPart } from './utils/git/refs.mjs';
 import { readEnvObjectFromFile } from './utils/env/read.mjs';
 import { clipboardAvailable, copyTextToClipboard } from './utils/ui/clipboard.mjs';
 import { detectInstalledLlmTools } from './utils/llm/tools.mjs';
+import { launchLlmAssistant } from './utils/llm/assist.mjs';
 
 function usage() {
   return [
@@ -390,18 +391,56 @@ async function resolveDefaultMonorepoRoot({ rootDir }) {
 }
 
 async function runMonorepoPort({ rootDir, targetMonorepoRoot, sources, branch, dryRun }) {
-  // Use the guided mode when applying patches (interactive conflict resolution).
+  // Use guided mode only when we expect conflicts (or when the user wants it).
   const args = [
     'port',
     ...(dryRun ? [] : ['guide']),
     `--target=${targetMonorepoRoot}`,
     `--branch=${branch}`,
+    '--3way',
     ...(dryRun ? ['--dry-run'] : []),
   ];
   if (sources.happy) args.push(`--from-happy=${sources.happy}`);
   if (sources['happy-cli']) args.push(`--from-happy-cli=${sources['happy-cli']}`);
   if (sources['happy-server']) args.push(`--from-happy-server=${sources['happy-server']}`);
   await run(process.execPath, [join(rootDir, 'scripts/monorepo.mjs'), ...args], { cwd: rootDir });
+}
+
+async function runMonorepoPortRun({ rootDir, targetMonorepoRoot, sources, branch }) {
+  const args = ['port', `--target=${targetMonorepoRoot}`, `--branch=${branch}`, '--3way', '--json'];
+  if (sources.happy) args.push(`--from-happy=${sources.happy}`);
+  if (sources['happy-cli']) args.push(`--from-happy-cli=${sources['happy-cli']}`);
+  if (sources['happy-server']) args.push(`--from-happy-server=${sources['happy-server']}`);
+  const out = await runCapture(process.execPath, [join(rootDir, 'scripts/monorepo.mjs'), ...args], { cwd: rootDir });
+  return JSON.parse(String(out ?? '').trim() || '{}');
+}
+
+async function runMonorepoPortPreflight({ rootDir, targetMonorepoRoot, sources }) {
+  const args = ['port', 'preflight', `--target=${targetMonorepoRoot}`, '--3way', '--json'];
+  if (sources.happy) args.push(`--from-happy=${sources.happy}`);
+  if (sources['happy-cli']) args.push(`--from-happy-cli=${sources['happy-cli']}`);
+  if (sources['happy-server']) args.push(`--from-happy-server=${sources['happy-server']}`);
+  const out = await runCapture(process.execPath, [join(rootDir, 'scripts/monorepo.mjs'), ...args], { cwd: rootDir });
+  return JSON.parse(String(out ?? '').trim() || '{}');
+}
+
+function summarizePreflightFailures(preflight) {
+  const results = Array.isArray(preflight?.results) ? preflight.results : [];
+  const lines = [];
+  for (const r of results) {
+    const failed = r?.report?.failed ?? [];
+    if (!Array.isArray(failed) || failed.length === 0) continue;
+    const label = String(r.label ?? '').trim() || 'source';
+    lines.push(`- ${cyan(label)}: ${failed.length} failed patch(es)`);
+    for (const f of failed.slice(0, 5)) {
+      const subj = String(f.subject ?? '').replace(/^\[PATCH \d+\/\d+\]\s*/, '');
+      const kind = f.kind ? ` (${f.kind})` : '';
+      const paths = (f.paths ?? []).slice(0, 3).join(', ');
+      lines.push(`  - ${subj || f.patch}${kind}${paths ? ` → ${paths}` : ''}`);
+    }
+    if (failed.length > 5) lines.push(`  - ...and ${failed.length - 5} more`);
+  }
+  return lines;
 }
 
 function summarizePins(pins) {
@@ -469,6 +508,39 @@ function buildLlmPromptForMigrate({ stackName }) {
     'Conflict handling:',
     '- This uses `happys monorepo port guide` which pauses on conflicts.',
     '- To inspect machine-readably: `happys monorepo port status --target=<monorepo-root> --json`',
+  ].join('\n');
+}
+
+function buildMonorepoMigrationPrompt({ targetMonorepoRoot, branch, sources }) {
+  const args = [
+    `happys monorepo port --target=${targetMonorepoRoot} --branch=${branch} --3way`,
+    sources.happy ? `--from-happy=${sources.happy}` : '',
+    sources['happy-cli'] ? `--from-happy-cli=${sources['happy-cli']}` : '',
+    sources['happy-server'] ? `--from-happy-server=${sources['happy-server']}` : '',
+  ]
+    .filter(Boolean)
+    .join(' \\\n+  ');
+
+  return [
+    'You are an assistant helping the user migrate split-repo commits into the Happy monorepo layout.',
+    '',
+    `Target monorepo worktree: ${targetMonorepoRoot}`,
+    `Port branch: ${branch}`,
+    '',
+    'Goal:',
+    '- Run the port command.',
+    '- If conflicts occur, resolve them cleanly and continue until complete.',
+    '',
+    'Start the port:',
+    args,
+    '',
+    'If it stops with conflicts:',
+    `- Inspect: happys monorepo port status --target=${targetMonorepoRoot} --json`,
+    `- Resolve conflicted files (keep changes scoped to expo-app/, cli/, server/)`,
+    `- Stage:  git -C ${targetMonorepoRoot} add <files>`,
+    `- Continue: happys monorepo port continue --target=${targetMonorepoRoot}`,
+    '',
+    'Repeat status/resolve/continue until ok.',
   ].join('\n');
 }
 
@@ -702,16 +774,16 @@ async function cmdMigrateStack({ rootDir, argv }) {
         ? await createMonorepoPortWorktree({ rootDir, monorepoRepoRoot, slug: sanitizeSlugPart(branch), baseRef: '' })
         : monorepoRepoRoot;
 
-    // eslint-disable-next-line no-console
-    console.log('');
-    // eslint-disable-next-line no-console
-    console.log(banner('Migrating', { subtitle: 'Porting commits into the monorepo layout (guided conflict resolution).' }));
-
     // Only pass sources that exist.
     const sources = {};
     if (pins.happy) sources.happy = pins.happy;
     if (pins['happy-cli']) sources['happy-cli'] = pins['happy-cli'];
     if (pins['happy-server']) sources['happy-server'] = pins['happy-server'];
+    // Port flow is owned by `happys monorepo port guide` (preflight + auto-apply + conflicts + optional LLM).
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(banner('Migrating', { subtitle: 'Porting commits into the monorepo layout (preflight + guided conflict resolution).' }));
     await runMonorepoPort({ rootDir, targetMonorepoRoot, sources, branch, dryRun: false });
 
     // After migration: reuse or new stack.
@@ -1048,93 +1120,108 @@ async function main() {
         });
         const branch = String(portBranch ?? '').trim() || portBranchDefault;
 
-        const worktreeMode = await promptSelect(rl, {
-          title: `${bold('Where should the port be applied?')}\n${dim('Recommended: create a dedicated monorepo worktree for this port branch.')}`,
-          options: [
-            { label: `create a dedicated monorepo worktree (${green('recommended')})`, value: 'worktree' },
-            { label: `use the existing monorepo checkout ${dim('(advanced)')}`, value: 'in-place' },
-          ],
-          defaultIndex: 0,
-        });
-
-        const targetMonorepoRoot =
-          worktreeMode === 'worktree'
-            ? await createMonorepoPortWorktree({ rootDir, monorepoRepoRoot, slug: sanitizeSlugPart(branch), baseRef: '' })
-            : monorepoRepoRoot;
-
-        // eslint-disable-next-line no-console
-        console.log('');
-        // eslint-disable-next-line no-console
-        console.log(banner('Migrating', { subtitle: 'Porting commits into the monorepo layout (guided conflict resolution).' }));
-
-        await runMonorepoPort({
-          rootDir,
-          targetMonorepoRoot,
-          sources: selected,
-          branch,
-          dryRun: migrateWanted === 'dry-run',
-        });
-
         if (migrateWanted === 'dry-run') {
+          // Also show the "what would be ported" preview (patch count only).
+          // eslint-disable-next-line no-console
+          console.log('');
+          // eslint-disable-next-line no-console
+          console.log(banner('Dry run', { subtitle: 'Previewing what would be ported (does not apply patches).' }));
+          await runMonorepoPort({ rootDir, targetMonorepoRoot: monorepoRepoRoot, sources: selected, branch, dryRun: true });
           // eslint-disable-next-line no-console
           console.log(green('✓ Dry run complete'));
         } else {
-          // eslint-disable-next-line no-console
-          console.log('');
-          const stackAfter = await promptSelect(rl, {
-            title: `${bold('After migration')}\n${dim('Do you want to reuse the same stack or create a new stack for the monorepo branch?')}`,
+          // Choose where to apply the real port (only needed when we actually run it).
+          const worktreeMode = await promptSelect(rl, {
+            title: `${bold('Where should the port be applied?')}\n${dim('Recommended: create a dedicated monorepo worktree for this port branch.')}`,
             options: [
-              { label: `create a new stack (${green('recommended')}) — keep legacy stack intact`, value: 'new' },
-              { label: `reuse existing stack — switch it to the monorepo checkout`, value: 'reuse' },
+              { label: `create a dedicated monorepo worktree (${green('recommended')})`, value: 'worktree' },
+              { label: `use the existing monorepo checkout ${dim('(advanced)')}`, value: 'in-place' },
             ],
             defaultIndex: 0,
           });
 
-          const migratedStackNameDefault =
-            sanitizeStackName(`${ensuredStack}-mono`) || sanitizeStackName(`mono-${ensuredStack}`) || 'mono';
-          const migratedStackName =
-            stackAfter === 'reuse'
-              ? ensuredStack
-              : sanitizeStackName(
-                  (
-                    await prompt(rl, `New monorepo stack name (default: ${migratedStackNameDefault}): `, {
-                      defaultValue: migratedStackNameDefault,
-                    })
-                  ).trim() || migratedStackNameDefault
-                );
+          const targetMonorepoRoot =
+            worktreeMode === 'worktree'
+              ? await createMonorepoPortWorktree({ rootDir, monorepoRepoRoot, slug: sanitizeSlugPart(branch), baseRef: '' })
+              : monorepoRepoRoot;
 
-          const migratedServerComponent = selected['happy-server'] ? 'happy-server' : serverComponent;
-          const finalStackName =
-            stackAfter === 'reuse'
-              ? migratedStackName
-              : await ensureStackExists({ rootDir, stackName: migratedStackName, serverComponent: migratedServerComponent });
+          let migrationCompleted = false;
+          try {
+            // This delegates all port logic to `happys monorepo port guide` (preflight + auto-apply + conflicts + optional LLM).
+            // eslint-disable-next-line no-console
+            console.log('');
+            // eslint-disable-next-line no-console
+            console.log(banner('Migrating', { subtitle: 'Porting commits into the monorepo layout (guided).' }));
+            await runMonorepoPort({ rootDir, targetMonorepoRoot, sources: selected, branch, dryRun: false });
+            migrationCompleted = true;
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.log('');
+            // eslint-disable-next-line no-console
+            console.log(`${yellow('!')} Migration stopped ${dim(`(${String(e?.message ?? e ?? 'unknown')})`)}`);
+            // eslint-disable-next-line no-console
+            console.log(dim('You can retry later by re-running import and choosing migration again.'));
+            migrationCompleted = false;
+          }
 
-          const monoPins = {};
-          if (selected.happy) monoPins.happy = targetMonorepoRoot;
-          if (selected['happy-cli']) monoPins['happy-cli'] = targetMonorepoRoot;
-          if (selected['happy-server']) monoPins['happy-server'] = targetMonorepoRoot;
-          // Keep server-light pinned if user opted into it (server-light is not ported by monorepo port today).
-          if (selected['happy-server-light']) monoPins['happy-server-light'] = selected['happy-server-light'];
+          if (migrationCompleted) {
+            // eslint-disable-next-line no-console
+            console.log('');
+            const stackAfter = await promptSelect(rl, {
+              title: `${bold('After migration')}\n${dim('Do you want to reuse the same stack or create a new stack for the monorepo branch?')}`,
+              options: [
+                { label: `create a new stack (${green('recommended')}) — keep legacy stack intact`, value: 'new' },
+                { label: `reuse existing stack — switch it to the monorepo checkout`, value: 'reuse' },
+              ],
+              defaultIndex: 0,
+            });
 
-          const finalEnvPath = await pinStackComponentDirs({ stackName: finalStackName, pins: monoPins });
+            const migratedStackNameDefault =
+              sanitizeStackName(`${ensuredStack}-mono`) || sanitizeStackName(`mono-${ensuredStack}`) || 'mono';
+            const migratedStackName =
+              stackAfter === 'reuse'
+                ? ensuredStack
+                : sanitizeStackName(
+                    (
+                      await prompt(rl, `New monorepo stack name (default: ${migratedStackNameDefault}): `, {
+                        defaultValue: migratedStackNameDefault,
+                      })
+                    ).trim() || migratedStackNameDefault
+                  );
 
-          // eslint-disable-next-line no-console
-          console.log('');
-          // eslint-disable-next-line no-console
-          console.log(banner('Migrated', { subtitle: 'Your monorepo stack is ready.' }));
-          // eslint-disable-next-line no-console
-          console.log(kvFmt('Stack', cyan(finalStackName)));
-          // eslint-disable-next-line no-console
-          console.log(kvFmt('Env', finalEnvPath));
-          // eslint-disable-next-line no-console
-          console.log(sectionTitle('Next'));
-          // eslint-disable-next-line no-console
-          console.log(
-            bullets([
-              `Run: ${cmdFmt(`happys stack dev ${finalStackName}`)}`,
-              `If you need to import more branches later, re-run: ${cmdFmt('happys import')}`,
-            ])
-          );
+            const migratedServerComponent = selected['happy-server'] ? 'happy-server' : serverComponent;
+            const finalStackName =
+              stackAfter === 'reuse'
+                ? migratedStackName
+                : await ensureStackExists({ rootDir, stackName: migratedStackName, serverComponent: migratedServerComponent });
+
+            const monoPins = {};
+            if (selected.happy) monoPins.happy = targetMonorepoRoot;
+            if (selected['happy-cli']) monoPins['happy-cli'] = targetMonorepoRoot;
+            if (selected['happy-server']) monoPins['happy-server'] = targetMonorepoRoot;
+            // Keep server-light pinned if user opted into it (server-light is not ported by monorepo port today).
+            if (selected['happy-server-light']) monoPins['happy-server-light'] = selected['happy-server-light'];
+
+            const finalEnvPath = await pinStackComponentDirs({ stackName: finalStackName, pins: monoPins });
+
+            // eslint-disable-next-line no-console
+            console.log('');
+            // eslint-disable-next-line no-console
+            console.log(banner('Migrated', { subtitle: 'Your monorepo stack is ready.' }));
+            // eslint-disable-next-line no-console
+            console.log(kvFmt('Stack', cyan(finalStackName)));
+            // eslint-disable-next-line no-console
+            console.log(kvFmt('Env', finalEnvPath));
+            // eslint-disable-next-line no-console
+            console.log(sectionTitle('Next'));
+            // eslint-disable-next-line no-console
+            console.log(
+              bullets([
+                `Run: ${cmdFmt(`happys stack dev ${finalStackName}`)}`,
+                `If you need to import more branches later, re-run: ${cmdFmt('happys import')}`,
+              ])
+            );
+          }
         }
       }
 

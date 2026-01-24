@@ -709,8 +709,19 @@ test('monorepo port guide can wait for conflict resolution and finish the port',
   const child = spawn(
     process.execPath,
     [scriptPath, 'port', 'guide'],
-    { cwd: process.cwd(), env: { ...gitEnv(), HAPPY_STACKS_TEST_TTY: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
+    {
+      cwd: process.cwd(),
+      env: { ...gitEnv(), HAPPY_STACKS_TEST_TTY: '1', HAPPY_STACKS_DISABLE_LLM_AUTOEXEC: '1' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }
   );
+  t.after(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  });
 
   let out = '';
   let err = '';
@@ -754,12 +765,16 @@ test('monorepo port guide can wait for conflict resolution and finish the port',
   await waitFor(() => out.includes('Path to old happy-server repo'), 5_000);
   sendLine(inputLines[7]);
 
+  // Preflight now runs before starting the port. Accept the default (guided) mode.
+  await waitFor(() => out.includes('Preflight detected conflicts'), 10_000);
+  sendLine('');
+
   // Wait for the guide to detect a conflict and start waiting for user action.
   await waitFor(() => out.includes('guide: conflict detected') || out.includes('guide: waiting for conflict resolution'), 10_000);
   conflictSeen = true;
 
   // Wait until the guide is actually prompting for the action.
-  await waitFor(() => out.includes('Pick [1-5] (default: 1):'), 10_000);
+  await waitFor(() => out.includes('Resolve conflicts, then choose an action:'), 10_000);
 
   // Resolve conflict in target repo by choosing value=source and staging.
   await writeFile(join(target, 'cli', 'hello.txt'), 'value=source\n', 'utf-8');
@@ -965,8 +980,19 @@ test('monorepo port guide quit leaves a plan; port continue resumes and complete
   const child = spawn(
     process.execPath,
     [scriptPath, 'port', 'guide'],
-    { cwd: process.cwd(), env: { ...gitEnv(), HAPPY_STACKS_TEST_TTY: '1' }, stdio: ['pipe', 'pipe', 'pipe'] }
+    {
+      cwd: process.cwd(),
+      env: { ...gitEnv(), HAPPY_STACKS_TEST_TTY: '1', HAPPY_STACKS_DISABLE_LLM_AUTOEXEC: '1' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }
   );
+  t.after(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  });
 
   let out = '';
   let err = '';
@@ -1006,10 +1032,19 @@ test('monorepo port guide quit leaves a plan; port continue resumes and complete
   await waitFor(() => out.includes('Path to old happy-server repo'), 5_000);
   sendLine('');
 
+  // Preflight now runs before starting the port. Accept the default (guided) mode.
+  await waitFor(() => out.includes('Preflight detected conflicts'), 10_000);
+  sendLine('');
+
   // Wait for conflict prompt, then quit.
   await waitFor(() => out.includes('guide: waiting for conflict resolution') || out.includes('guide: conflict detected'), 10_000);
-  await waitFor(() => out.includes('Pick [1-5] (default: 1):'), 10_000);
-  sendLine('5');
+  await waitFor(() => out.includes('Resolve conflicts, then choose an action:'), 10_000);
+  const menuTail = out.split('Resolve conflicts, then choose an action:').pop() || '';
+  const m = menuTail.match(/\n\s*(\d+)\)\s*quit guide \(leave state as-is\)/);
+  if (!m?.[1]) {
+    throw new Error(`failed to locate quit option index\nstdout:\n${out}\nstderr:\n${err}`);
+  }
+  sendLine(m[1]);
   await waitFor(() => exitCode !== null, 10_000);
   assert.notEqual(exitCode, 0, `expected guide to exit non-zero on quit\nstdout:\n${out}\nstderr:\n${err}`);
 
@@ -1467,4 +1502,51 @@ test('monorepo port can port from a non-HEAD ref (--from-happy-cli-ref) without 
   const parsed = JSON.parse(out.trim());
   assert.equal(parsed.ok, true);
   assert.equal((await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString(), 'v2\n');
+});
+
+test('monorepo port preflight reports conflicts without modifying the target repo', async (t) => {
+  const root = await withTempRoot(t);
+  const target = join(root, 'target-mono');
+  const sourceCli = join(root, 'source-cli');
+  const env = gitEnv();
+
+  // Target monorepo stub with cli/hello.txt="value=target".
+  await initMonorepoStub({ dir: target, env, seed: { 'cli/hello.txt': 'value=target\n' } });
+  const targetHeadBefore = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: target, env })).trim();
+
+  // Source CLI: base commit then feature commit that changes hello.txt (will conflict).
+  await mkdir(sourceCli, { recursive: true });
+  await run('git', ['init', '-q'], { cwd: sourceCli, env });
+  await run('git', ['checkout', '-q', '-b', 'main'], { cwd: sourceCli, env });
+  await writeFile(join(sourceCli, 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(sourceCli, 'hello.txt'), 'value=base\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env });
+  await run('git', ['commit', '-q', '-m', 'chore: init cli'], { cwd: sourceCli, env });
+  await run('git', ['checkout', '-q', '-b', 'feature'], { cwd: sourceCli, env });
+  await writeFile(join(sourceCli, 'hello.txt'), 'value=source\n', 'utf-8');
+  await run('git', ['add', '.'], { cwd: sourceCli, env });
+  await run('git', ['commit', '-q', '-m', 'feat: update hello'], { cwd: sourceCli, env });
+
+  const out = await runCapture(
+    process.execPath,
+    [
+      join(process.cwd(), 'scripts', 'monorepo.mjs'),
+      'port',
+      'preflight',
+      `--target=${target}`,
+      '--base=main',
+      '--json',
+      `--from-happy-cli=${sourceCli}`,
+      '--from-happy-cli-base=main',
+      '--from-happy-cli-ref=feature',
+    ],
+    { cwd: process.cwd(), env }
+  );
+  const parsed = JSON.parse(out.trim());
+  assert.equal(parsed.ok, false);
+  assert.ok(parsed.failedPatches >= 1);
+
+  // Target should remain untouched (preflight runs in a temporary detached worktree).
+  const targetHeadAfter = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: target, env })).trim();
+  assert.equal(targetHeadAfter, targetHeadBefore);
 });
