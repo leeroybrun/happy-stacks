@@ -31,6 +31,22 @@ sudo apt-get install -y \
   jq \
   rsync
 
+echo "[provision] tuning Linux file watcher limits (Expo/Metro)..."
+# Expo/Metro can exhaust default inotify watcher limits on fresh VMs (ENOSPC).
+# Raise the limits and persist them across reboots.
+sudo tee /etc/sysctl.d/99-happy-stacks.conf >/dev/null <<'EOF'
+fs.inotify.max_user_watches=1048576
+fs.inotify.max_user_instances=1024
+EOF
+sudo sysctl --system >/dev/null 2>&1 || true
+
+echo "[provision] (optional) installing watchman (improves Metro watcher performance when available)..."
+if sudo apt-get install -y watchman >/dev/null 2>&1; then
+  echo "[provision] watchman installed"
+else
+  echo "[provision] watchman not available via apt (skipping)"
+fi
+
 echo "[provision] installing nvm + Node..."
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
@@ -54,6 +70,34 @@ corepack enable >/dev/null 2>&1 || true
 # (Yarn classic is used by the slopus/happy monorepo today.)
 corepack prepare yarn@1.22.22 --activate >/dev/null 2>&1 || true
 corepack prepare pnpm@latest --activate >/dev/null 2>&1 || true
+
+echo "[provision] configuring happy-stacks VM defaults (ports)..."
+# When port-forwarding a VM to the macOS host, it's convenient to avoid using the host's default ports (3005/8081).
+# Persist these as happy-stacks home defaults so `npx happy-stacks ...` picks them up automatically.
+HS_HOME="${HOME}/.happy-stacks"
+mkdir -p "$HS_HOME"
+ENV_LOCAL="${HS_HOME}/env.local"
+MARK_BEGIN="# --- happy-stacks-vm defaults (added by provision script) ---"
+MARK_END="# --- /happy-stacks-vm defaults ---"
+if ! grep -qF "$MARK_BEGIN" "$ENV_LOCAL" 2>/dev/null; then
+  cat >>"$ENV_LOCAL" <<'EOF'
+
+# --- happy-stacks-vm defaults (added by provision script) ---
+# Server port selection for stacks (affects `happys stack new ...` defaults, including main).
+HAPPY_STACKS_STACK_PORT_START=13005
+
+# Expo dev-server (web) ports for stacks (avoid 8081; keep stable per stack).
+HAPPY_STACKS_EXPO_DEV_PORT_STRATEGY=stable
+HAPPY_STACKS_EXPO_DEV_PORT_BASE=18081
+HAPPY_STACKS_EXPO_DEV_PORT_RANGE=1000
+
+# Optional: set a preferred bind mode for VM usage.
+# - loopback: prefer localhost-only URLs (best for port-forwarded VM usage; not reachable from phones)
+# - lan: prefer LAN URLs (best for phones on same network)
+# HAPPY_STACKS_BIND_MODE=loopback
+# --- /happy-stacks-vm defaults ---
+EOF
+fi
 
 echo "[provision] done."
 echo "[provision] Node: $(node --version)"
