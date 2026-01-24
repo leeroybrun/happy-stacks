@@ -29,6 +29,7 @@ import { expandHome } from './utils/paths/canonical_home.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
 import { detectSwiftbarPluginInstalled } from './utils/menubar/swiftbar.mjs';
 import { banner, bullets, cmd as cmdFmt, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { applyBindModeToEnv, resolveBindModeFromArgs } from './utils/net/bind_mode.mjs';
 
 function resolveWorkspaceDirDefault() {
   const explicit = (process.env.HAPPY_STACKS_WORKSPACE_DIR ?? process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? '').toString().trim();
@@ -371,6 +372,14 @@ async function cmdSetup({ rootDir, argv }) {
 
   const { flags, kv } = parseArgs(argv);
   const json = wantsJson(argv, { flags });
+
+  // Optional: bind mode affects how we print URLs (loopback vs LAN).
+  // We apply it early so all downstream helpers inherit the same env.
+  const bindMode = resolveBindModeFromArgs({ flags, kv });
+  if (bindMode) {
+    applyBindModeToEnv(process.env, bindMode);
+  }
+
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
@@ -382,6 +391,9 @@ async function cmdSetup({ rootDir, argv }) {
           '--workspace-dir=/absolute/path   # dev profile only',
           '--install-path',
           '--start-now',
+          '--bind=loopback|lan',
+          '--loopback',
+          '--lan',
           '--auth|--no-auth',
           '--tailscale|--no-tailscale',
           '--autostart|--no-autostart',

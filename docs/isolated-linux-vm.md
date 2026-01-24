@@ -16,8 +16,24 @@ brew install lima
 
 ```bash
 limactl create --name happy-pr --tty=false template://ubuntu-24.04
-limactl start happy-pr
+limactl start happy-pr --network vzNAT
 ```
+
+### 2b) Host access (ports + browser URLs)
+
+When you want to open Happy/Expo URLs in your macOS browser, the simplest approach is:
+
+- Start the VM with a host-reachable network: `--network vzNAT`
+- Run Happy Stacks with `--bind=lan` so it prints LAN-reachable URLs (VM IP)
+
+Inside the VM, you can see your IP with:
+
+```bash
+ip -4 addr show lima0 || true
+hostname -I || true
+```
+
+Note: Some environments disable localhost port forwarding; using `vzNAT` avoids relying on forwarding.
 
 ### 3) Provision the VM (Node + build deps)
 
@@ -29,6 +45,10 @@ Inside the VM:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leeroybrun/happy-local/main/scripts/provision/linux-ubuntu-review-pr.sh -o /tmp/linux-ubuntu-review-pr.sh && chmod +x /tmp/linux-ubuntu-review-pr.sh && /tmp/linux-ubuntu-review-pr.sh
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 ```
 
 ### 3b) (Optional) Run the Happy Stacks dev setup wizard
@@ -52,7 +72,8 @@ npx --yes happy-stacks@latest review-pr \
   --happy=https://github.com/slopus/happy/pull/<PR_NUMBER> \
   --no-mobile \
   --keep-sandbox \
-  --verbose
+  --verbose \
+  -- --bind=lan
 ```
 
 Notes:

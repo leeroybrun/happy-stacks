@@ -103,3 +103,21 @@ echo "[provision] done."
 echo "[provision] Node: $(node --version)"
 echo "[provision] npm:  $(npm --version)"
 echo "[provision] git:  $(git --version)"
+
+# Helpful for VM workflows: show a best-effort LAN IP (useful with Lima `--network vzNAT`).
+if command -v hostname >/dev/null 2>&1; then
+  IPS_RAW="$(hostname -I 2>/dev/null || true)"
+  if [[ -n "${IPS_RAW// }" ]]; then
+    echo "[provision] VM IPs: ${IPS_RAW}"
+    VM_IP="$(echo "$IPS_RAW" | tr ' ' '\n' | grep -E '^[0-9]+\.' | grep -v '^127\.' | head -n1 || true)"
+    if [[ -n "${VM_IP:-}" ]]; then
+      echo "[provision] VM IP (best guess): ${VM_IP}"
+    fi
+  fi
+fi
+
+cat <<'EOF'
+[provision] tip: If you want to open Happy/Expo URLs in your macOS browser:
+- Start the VM with a host-reachable network (recommended): `limactl start <name> --network vzNAT`
+- Run happy-stacks commands with: `--bind=lan` (prints LAN-reachable URLs)
+EOF
