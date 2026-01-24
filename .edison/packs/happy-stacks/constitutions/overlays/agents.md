@@ -106,5 +106,7 @@ These rules apply **only** when the task’s target component repo has an i18n s
 
 - These repos do **not** use the `happy` UI translation system.
 - Do **not** translate server logs/errors piecemeal unless/until a dedicated server-side i18n system exists.
+
+{{include:constitutions/includes/HAPPY_CRITICAL_PRINCIPLES.md}}
 <!-- /EXTEND -->
 

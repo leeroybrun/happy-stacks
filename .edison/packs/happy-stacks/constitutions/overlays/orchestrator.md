@@ -66,5 +66,7 @@ When planning/scaffolding work across Happy components, you must explicitly acco
 ### Component: `happy-server` / `happy-server-light` (not translated)
 
 - Do not demand translations for these repos unless/until they adopt an explicit i18n system.
+
+{{include:constitutions/includes/HAPPY_CRITICAL_PRINCIPLES.md}}
 <!-- /EXTEND -->
 

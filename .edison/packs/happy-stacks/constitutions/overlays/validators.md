@@ -111,5 +111,7 @@ Only enforce translation requirements for components that actually have an i18n 
 
 - Do not fail a task for “missing translations” in these repos (no i18n system).
   - Server logs/errors are not localized today; do not demand localized variants unless a server-side i18n system is introduced as an explicit feature.
+
+{{include:constitutions/includes/HAPPY_CRITICAL_PRINCIPLES.md}}
 <!-- /EXTEND -->
 
