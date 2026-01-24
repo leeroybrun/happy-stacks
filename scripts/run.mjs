@@ -26,6 +26,7 @@ import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stac
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
 import { resolveServerUiEnv } from './utils/server/ui_env.mjs';
+import { applyBindModeToEnv, resolveBindModeFromArgs } from './utils/net/bind_mode.mjs';
 import { cmd, sectionTitle } from './utils/ui/layout.mjs';
 import { cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 
@@ -45,12 +46,27 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--no-browser', '--mobile', '--expo-tailscale'], json: true },
+      data: {
+        flags: [
+          '--server=happy-server|happy-server-light',
+          '--no-ui',
+          '--no-daemon',
+          '--restart',
+          '--no-browser',
+          '--mobile',
+          '--expo-tailscale',
+          '--bind=loopback|lan',
+          '--loopback',
+          '--lan',
+        ],
+        json: true,
+      },
       text: [
         '[start] usage:',
         '  happys start [--server=happy-server|happy-server-light] [--restart] [--json]',
         '  happys start --mobile        # also start Expo dev-client Metro for mobile',
         '  happys start --expo-tailscale # forward Expo to Tailscale interface for remote access',
+        '  happys start --bind=loopback  # prefer localhost-only URLs (not reachable from phones)',
         '  (legacy in a cloned repo): pnpm start [-- --server=happy-server|happy-server-light] [--json]',
         '  note: --json prints the resolved config (dry-run) and exits.',
         '',
@@ -62,6 +78,12 @@ async function main() {
   }
 
   const rootDir = getRootDir(import.meta.url);
+
+  // Optional bind-mode override (affects Expo host/origins; best-effort sets HOST too).
+  const bindMode = resolveBindModeFromArgs({ flags, kv });
+  if (bindMode) {
+    applyBindModeToEnv(process.env, bindMode);
+  }
 
   const inferred = inferComponentFromCwd({
     rootDir,

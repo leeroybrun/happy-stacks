@@ -798,10 +798,10 @@ async function cmdSetup({ rootDir, argv }) {
           )}\n` +
           `${dim(`If you skip this, you can always run commands via ${cyan('npx happy-stacks ...')}.`)}`,
         options: [
-          { label: `yes (${green('recommended')}) — enable ${cyan('happys')} in your terminal`, value: true },
-          { label: `no (default) — keep using ${cyan('npx happy-stacks ...')}`, value: false },
+          { label: `yes (${green('recommended')}, default) — enable ${cyan('happys')} in your terminal`, value: true },
+          { label: `no — keep using ${cyan('npx happy-stacks ...')}`, value: false },
         ],
-        defaultIndex: installPath ? 0 : 1,
+        defaultIndex: 0,
       });
       return v;
     });

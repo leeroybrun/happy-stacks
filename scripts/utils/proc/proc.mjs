@@ -34,13 +34,14 @@ function flushPrefixed(stream, prefix, bufState) {
 }
 
 export function spawnProc(label, cmd, args, env, options = {}) {
+  const { silent = false, teeFile, teeLabel, ...spawnOptions } = options ?? {};
   const child = spawn(cmd, args, {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
     // Create a new process group so we can kill the whole tree reliably on shutdown.
     detached: process.platform !== 'win32',
-    ...options,
+    ...spawnOptions,
   });
 
   const outState = { buf: '' };
@@ -48,15 +49,51 @@ export function spawnProc(label, cmd, args, env, options = {}) {
   const outPrefix = `[${label}] `;
   const errPrefix = `[${label}] `;
 
-  child.stdout?.on('data', (d) => writeWithPrefix(process.stdout, outPrefix, outState, d));
-  child.stderr?.on('data', (d) => writeWithPrefix(process.stderr, errPrefix, errState, d));
+  const teePath = typeof teeFile === 'string' && teeFile.trim() ? teeFile.trim() : '';
+  const teeStream = teePath ? createWriteStream(teePath, { flags: 'a' }) : null;
+  const teeOutState = { buf: '' };
+  const teeErrState = { buf: '' };
+  const teePrefix = (() => {
+    const t = typeof teeLabel === 'string' ? teeLabel.trim() : '';
+    if (t) return `[${t}] `;
+    return outPrefix;
+  })();
+
+  child.stdout?.on('data', (d) => {
+    if (!silent) writeWithPrefix(process.stdout, outPrefix, outState, d);
+    if (teeStream) writeWithPrefix(teeStream, teePrefix, teeOutState, d);
+  });
+  child.stderr?.on('data', (d) => {
+    if (!silent) writeWithPrefix(process.stderr, errPrefix, errState, d);
+    if (teeStream) writeWithPrefix(teeStream, teePrefix, teeErrState, d);
+  });
   child.on('close', () => {
-    flushPrefixed(process.stdout, outPrefix, outState);
-    flushPrefixed(process.stderr, errPrefix, errState);
+    if (!silent) {
+      flushPrefixed(process.stdout, outPrefix, outState);
+      flushPrefixed(process.stderr, errPrefix, errState);
+    }
+    if (teeStream) {
+      flushPrefixed(teeStream, teePrefix, teeOutState);
+      flushPrefixed(teeStream, teePrefix, teeErrState);
+      try {
+        teeStream.end();
+      } catch {
+        // ignore
+      }
+    }
   });
   child.on('exit', (code, sig) => {
     if (code !== 0) {
-      process.stderr.write(`[${label}] exited (code=${code}, sig=${sig})\n`);
+      if (!silent) {
+        process.stderr.write(`[${label}] exited (code=${code}, sig=${sig})\n`);
+      }
+      if (teeStream) {
+        try {
+          teeStream.write(`${teePrefix.trimEnd()} exited (code=${code}, sig=${sig})\n`);
+        } catch {
+          // ignore
+        }
+      }
     }
   });
 

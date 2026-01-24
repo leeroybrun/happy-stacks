@@ -75,6 +75,7 @@ import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls
 import { getDaemonEnv, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 import { createStepPrinter } from './utils/cli/progress.mjs';
 import { getVerbosityLevel } from './utils/cli/verbosity.mjs';
+import { applyBindModeToEnv, resolveBindModeFromArgs } from './utils/net/bind_mode.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -2123,6 +2124,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
   const name = (positionals[1] ?? '').trim() || 'dev-auth';
   const serverComponent = (kv.get('--server') ?? '').trim() || 'happy-server-light';
   const interactive = !flags.has('--non-interactive') && (flags.has('--interactive') || isTty());
+  const bindMode = resolveBindModeFromArgs({ flags, kv });
 
   if (json) {
     // Keep JSON mode non-interactive and stable by using the existing stack command output.
@@ -2192,6 +2194,11 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         const internalServerUrl = `http://127.0.0.1:${serverPort}`;
         const publicServerUrl = await preferStackLocalhostUrl(`http://localhost:${serverPort}`, { stackName: name });
 
+        const logDir = join(getHappyStacksHomeDir(process.env), 'logs', 'dev-auth');
+        await mkdir(logDir, { recursive: true }).catch(() => {});
+        const serverLogPath = join(logDir, `server.${Date.now()}.log`);
+        const expoLogPath = join(logDir, `expo.${Date.now()}.log`);
+
         const autostart = { stackName: name, baseDir: resolveStackEnvPath(name).baseDir };
         const children = [];
 
@@ -2204,8 +2211,19 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
             HAPPY_LOCAL_SERVER_PORT: String(serverPort),
             HAPPY_STACKS_SERVER_URL: '',
             HAPPY_LOCAL_SERVER_URL: '',
+            ...(bindMode
+              ? applyBindModeToEnv(
+                  {
+                    // start from empty so we only inject the bind override keys here
+                  },
+                  bindMode
+                )
+              : {}),
           },
           fn: async ({ env }) => {
+            if (bindMode) {
+              applyBindModeToEnv(env, bindMode);
+            }
             const serverDir =
               serverComponent === 'happy-server'
                 ? env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_SERVER
@@ -2241,7 +2259,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 serverAlreadyRunning: false,
                 restart: true,
                 children,
-                spawnOptions: quietAuthFlow ? { stdio: 'ignore' } : {},
+                spawnOptions: quietAuthFlow ? { silent: true, teeFile: serverLogPath, teeLabel: 'server' } : {},
                 quiet: quietAuthFlow,
               });
               serverProc = started.serverProc;
@@ -2263,13 +2281,33 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 stackName: name,
                 envPath: env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '',
                 children,
-                spawnOptions: quietAuthFlow ? { stdio: 'ignore' } : {},
+                spawnOptions: quietAuthFlow ? { silent: true, teeFile: expoLogPath, teeLabel: 'expo' } : {},
                 quiet: quietAuthFlow,
               });
               if (uiRes?.skipped === false && uiRes.proc) {
                 uiProc = uiRes.proc;
               }
               steps.stop('✓', 'start temporary UI');
+
+              if (quietAuthFlow && uiProc) {
+                uiProc.once('exit', (code, sig) => {
+                  if (code === 0) return;
+                  void (async () => {
+                    const c = typeof code === 'number' ? code : null;
+                    // eslint-disable-next-line no-console
+                    console.error(`[stack] Expo exited unexpectedly (code=${c ?? 'null'}, sig=${sig ?? 'null'})`);
+                    // eslint-disable-next-line no-console
+                    console.error(`[stack] expo log: ${expoLogPath}`);
+                    const tail = await readLastLines(expoLogPath, 80);
+                    if (tail) {
+                      // eslint-disable-next-line no-console
+                      console.error('');
+                      // eslint-disable-next-line no-console
+                      console.error(tail.trimEnd());
+                    }
+                  })();
+                });
+              }
 
               console.log('');
               const uiPort = uiRes?.port;
@@ -2290,6 +2328,9 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 console.log('');
                 console.log(`${bold('Press Enter')} to open it in your browser.`);
                 await prompt(rl, '', { defaultValue: '' });
+                if (uiProc && uiProc.exitCode != null && uiProc.exitCode !== 0) {
+                  throw new Error(`[stack] Expo exited unexpectedly (code=${uiProc.exitCode}). See log: ${expoLogPath}`);
+                }
                 await openUrlInBrowser(uiRoot).catch(() => {});
                 console.log(`${green('✓')} Browser opened`);
               } else {

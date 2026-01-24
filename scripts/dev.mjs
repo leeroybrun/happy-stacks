@@ -26,6 +26,7 @@ import { getAccountCountForServerComponent, resolveAutoCopyFromMainEnabled } fro
 import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
+import { applyBindModeToEnv, resolveBindModeFromArgs } from './utils/net/bind_mode.mjs';
 import { cmd, sectionTitle } from './utils/ui/layout.mjs';
 import { cyan, dim, green } from './utils/ui/ansi.mjs';
 
@@ -43,7 +44,23 @@ async function main() {
   if (wantsHelp(argv, { flags })) {
     printResult({
       json,
-      data: { flags: ['--server=happy-server|happy-server-light', '--no-ui', '--no-daemon', '--restart', '--watch', '--no-watch', '--no-browser', '--mobile', '--expo-tailscale'], json: true },
+      data: {
+        flags: [
+          '--server=happy-server|happy-server-light',
+          '--no-ui',
+          '--no-daemon',
+          '--restart',
+          '--watch',
+          '--no-watch',
+          '--no-browser',
+          '--mobile',
+          '--expo-tailscale',
+          '--bind=loopback|lan',
+          '--loopback',
+          '--lan',
+        ],
+        json: true,
+      },
       text: [
         '[dev] usage:',
         '  happys dev [--server=happy-server|happy-server-light] [--restart] [--json]',
@@ -52,6 +69,7 @@ async function main() {
         '  happys dev --no-browser    # do not open the UI in your browser automatically',
         '  happys dev --mobile        # also start Expo dev-client Metro for mobile',
         '  happys dev --expo-tailscale # forward Expo to Tailscale interface for remote access',
+        '  happys dev --bind=loopback  # prefer localhost-only URLs (not reachable from phones)',
         '  note: --json prints the resolved config (dry-run) and exits.',
         '',
         'note:',
@@ -64,6 +82,12 @@ async function main() {
     return;
   }
   const rootDir = getRootDir(import.meta.url);
+
+  // Optional bind-mode override (affects Expo host/origins; best-effort sets HOST too).
+  const bindMode = resolveBindModeFromArgs({ flags, kv });
+  if (bindMode) {
+    applyBindModeToEnv(process.env, bindMode);
+  }
 
   const inferred = inferComponentFromCwd({
     rootDir,
