@@ -30,6 +30,10 @@ jobs:
             - name: Install dependencies
               run: pnpm install --frozen-lockfile
 
+            - name: Unit tests (happy-stacks)
+              # Runs Node's built-in test runner against scripts/**/*.test.mjs (does not require components/).
+              run: node ./bin/happys.mjs test stacks
+
             - name: Build
               # CI does not have component repos under components/ (and we don't want to clone/build them here).
               # This still validates that the build command wiring works.
