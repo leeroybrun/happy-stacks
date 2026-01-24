@@ -2158,6 +2158,8 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
   const serverComponent = (kv.get('--server') ?? '').trim() || 'happy-server-light';
   const interactive = !flags.has('--non-interactive') && (flags.has('--interactive') || isTty());
   const bindMode = resolveBindModeFromArgs({ flags, kv });
+  const forceLogin =
+    flags.has('--login') ? true : flags.has('--no-login') || flags.has('--skip-login') ? false : null;
 
   if (json) {
     // Keep JSON mode non-interactive and stable by using the existing stack command output.
@@ -2206,14 +2208,17 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
   if (interactive) {
     await withRl(async (rl) => {
       let savedDevKey = false;
-      const wantLogin = await promptSelect(rl, {
-        title: `${bold('dev-auth seed stack')}\n${dim('Recommended: do the guided login now so the seed is ready immediately.')}`,
-        options: [
-          { label: `yes (${green('recommended')}) — start temporary server + UI and log in`, value: true },
-          { label: `no — I will do this later`, value: false },
-        ],
-        defaultIndex: 0,
-      });
+      const wantLogin =
+        forceLogin != null
+          ? forceLogin
+          : await promptSelect(rl, {
+              title: `${bold('dev-auth seed stack')}\n${dim('Recommended: do the guided login now so the seed is ready immediately.')}`,
+              options: [
+                { label: `yes (${green('recommended')}) — start temporary server + UI and log in`, value: true },
+                { label: `no — I will do this later`, value: false },
+              ],
+              defaultIndex: 0,
+            });
 
       if (wantLogin) {
         console.log('');
@@ -3531,7 +3536,7 @@ async function main() {
         '  happys stack duplicate <from> <to> [--duplicate-worktrees] [--deps=none|link|install|link-or-install] [--json]',
         '  happys stack info <name> [--json]',
         '  happys stack pr <name> --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
-        '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--non-interactive] [--json]',
+        '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--login|--no-login] [--non-interactive] [--json]',
         '  happys stack daemon <name> start|stop|restart|status [--json]',
         '  happys stack happy <name> [-- ...]',
         '  happys stack env <name> set KEY=VALUE [KEY2=VALUE2...] | unset KEY [KEY2...] | get KEY | list | path [--json]',

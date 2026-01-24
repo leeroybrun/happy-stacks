@@ -262,58 +262,36 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
       `Recommended: set up a dedicated ${cyan('dev-auth')} seed stack so you authenticate once, then new stacks “just work”.`
     )
   );
+  const seedChoice = 'dev-auth';
+  const linkChoice = 'link';
 
-  const options = [];
-  if (sources.hasDevAuthAccessKey) {
-    options.push({
-      label: `${green('✓')} use ${cyan('dev-auth')} seed stack (${green('recommended')}) — already authenticated`,
-      value: 'use-dev-auth',
+  if (!sources.hasDevAuthAccessKey) {
+    const wantLoginNow = await withRl(async (rl) => {
+      return await promptSelect(rl, {
+        title:
+          `${bold('Sign in now?')}\n` +
+          `${dim('This will create a dedicated dev-auth seed stack and walk you through a guided login in the browser.')}\n` +
+          `${dim('After this, new stacks can reuse your auth automatically (recommended).')}`,
+        options: [
+          { label: `yes (${green('recommended')}) — sign in now`, value: true },
+          { label: `no — I will do this later`, value: false },
+        ],
+        defaultIndex: 0,
+      });
     });
+
+    if (!wantLoginNow) {
+      // eslint-disable-next-line no-console
+      console.log(dim(`Tip: run ${yellow('happys stack create-dev-auth-seed dev-auth --login')} anytime to sign in.`));
+      return;
+    }
+
+    // Guided wizard: creates stack, starts temporary UI/server, stores dev key (optional), logs in CLI.
+    await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth', '--login'] });
   } else {
-    options.push({
-      label: `create ${cyan('dev-auth')} seed stack (${green('recommended')}) — login once, reuse across stacks`,
-      value: 'create-dev-auth',
-    });
-  }
-  if (sources.hasMainAccessKey) {
-    options.push({ label: `use ${cyan('main')} as seed — fast, but shares identity with main`, value: 'main' });
-  }
-  if (sources.hasLegacyAccessKey) {
-    options.push({ label: `use legacy ${cyan('~/.happy')} as seed — best-effort`, value: 'legacy' });
-  }
-  options.push({ label: `skip for now — you can do this later`, value: 'skip' });
-
-  const choice = await withRl(async (rl) => {
-    return await promptSelect(rl, {
-      title: bold('Choose an auth strategy'),
-      options,
-      defaultIndex: 0,
-    });
-  });
-
-  if (choice === 'skip') {
     // eslint-disable-next-line no-console
-    console.log(dim(`Tip: run ${yellow('happys stack create-dev-auth-seed')} anytime to set this up.`));
-    return;
+    console.log(dim(`Found an existing ${cyan('dev-auth')} seed stack; configuring auth reuse for new stacks.`));
   }
-
-  const seedChoice = choice === 'create-dev-auth' || choice === 'use-dev-auth' ? 'dev-auth' : String(choice);
-  if (choice === 'create-dev-auth') {
-    // Guided wizard: creates stack, starts temporary UI/server, saves dev key (optional), logs in CLI.
-    await runNodeScript({ rootDir, rel: 'scripts/stack.mjs', args: ['create-dev-auth-seed', 'dev-auth'] });
-  }
-
-  // Symlink vs copy for seeded stacks (preferred: symlink so credentials stay up to date).
-  const linkChoice = await withRl(async (rl) => {
-    return await promptSelect(rl, {
-      title: `${bold('Auth seeding mode')}\n${dim('When seeding credentials into stacks, should we symlink or copy?')}`,
-      options: [
-        { label: `symlink (${green('recommended')}) — stays up to date`, value: 'link' },
-        { label: `copy — more isolated per stack`, value: 'copy' },
-      ],
-      defaultIndex: 0,
-    });
-  });
 
   await ensureEnvLocalUpdated({
     rootDir,
@@ -333,14 +311,15 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
   if (candidateTargets.length) {
     const seedNow = await withRl(async (rl) => {
       return await promptSelect(rl, {
-        title: `${bold('Seed existing stacks?')}\n${dim(
-          `We found ${candidateTargets.length} existing stack(s) that could reuse auth from ${cyan(seedChoice)}.`
-        )}\n${dim('This can fix “auth required / no machine” without re-login.')}`,
+        title:
+          `${bold('Apply sign-in to existing stacks?')}\n` +
+          `${dim(`We found ${candidateTargets.length} existing stack(s) that could reuse your auth automatically.`)}\n` +
+          `${dim('This can fix “auth required / no machine” without re-login.')}`,
         options: [
-          { label: `yes — seed ${candidateTargets.length} stack(s) now`, value: true },
-          { label: 'no (default)', value: false },
+          { label: `yes (${green('recommended')}) — apply to ${candidateTargets.length} stack(s) now`, value: true },
+          { label: 'no — leave them as-is', value: false },
         ],
-        defaultIndex: 1,
+        defaultIndex: 0,
       });
     });
     if (seedNow) {
@@ -360,7 +339,7 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
     console.log(dim('No existing stacks detected that need seeding (nothing to do).'));
   }
 
-  // Dev key UX (for phone/Playwright restores). Keep it explicit because it’s sensitive.
+  // Dev key UX (for phone/Playwright restores).
   const sourcesAfter = detectAuthSources();
   if (sourcesAfter.hasDevKey) {
     // eslint-disable-next-line no-console
@@ -371,19 +350,8 @@ async function maybeConfigureAuthDefaults({ rootDir, profile, interactive }) {
     console.log(dim('This lets you restore the UI account quickly (and can help automation).'));
     // eslint-disable-next-line no-console
     console.log(dim(`Stored at: ${sourcesAfter.devKeyPath}`));
-    const keyChoice = await withRl(async (rl) => {
-      return await promptSelect(rl, {
-        title: 'Do you want to print it now?',
-        options: [
-          { label: `yes — print dev key (${yellow('will display a secret')})`, value: 'print' },
-          { label: 'no (default) — keep it private', value: 'skip' },
-        ],
-        defaultIndex: 1,
-      });
-    });
-    if (keyChoice === 'print') {
-      await runNodeScript({ rootDir, rel: 'scripts/auth.mjs', args: ['dev-key', '--print'] });
-    }
+    // eslint-disable-next-line no-console
+    console.log(dim(`Tip: to print it later, run: ${yellow('happys auth dev-key --print')}`));
   } else {
     // eslint-disable-next-line no-console
     console.log(dim(`Tip: to store a dev key later, run: ${yellow('happys auth dev-key --set "<key>"')}`));
