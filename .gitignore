@@ -30,3 +30,5 @@ env.local
 /.tmp
 /.edison/_tmp
 /.agent-diffs
+/.cache
+/.home
