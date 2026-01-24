@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getHappyStacksHomeDir, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { getCanonicalHomeDir } from './utils/env/config.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
@@ -27,6 +27,7 @@ import { runCommandLogged } from './utils/cli/progress.mjs';
 import { bold, cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
 import { listAllStackNames } from './utils/stack/stacks.mjs';
+import { detectSwiftbarPluginInstalled } from './utils/menubar/swiftbar.mjs';
 
 function resolveWorkspaceDirDefault() {
   const explicit = (process.env.HAPPY_STACKS_WORKSPACE_DIR ?? process.env.HAPPY_LOCAL_WORKSPACE_DIR ?? '').toString().trim();
@@ -86,6 +87,18 @@ async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, t
 async function ensureSystemdAvailable() {
   if (process.platform !== 'linux') return true;
   return (await commandExists('systemctl')) && (await commandExists('journalctl'));
+}
+
+async function detectDockerSupport() {
+  const installed = await commandExists('docker');
+  if (!installed) return { installed: false, running: false };
+  try {
+    // `docker info` returns non-zero quickly when the daemon isn't running.
+    await runCapture('docker', ['info'], { timeoutMs: 2500 });
+    return { installed: true, running: true };
+  } catch {
+    return { installed: true, running: false };
+  }
 }
 
 async function runNodeScript({ rootDir, rel, args = [], env = process.env }) {
@@ -433,13 +446,30 @@ async function cmdSetup({ rootDir, argv }) {
         ? dim('Run Happy locally (optionally with Tailscale + autostart).')
         : dim('Prepare a contributor workspace (components + worktrees + stacks).'),
       '',
+      bold('How Happy runs locally:'),
+      profile === 'selfhost'
+        ? [
+            `- ${cyan('server')}: stores sessions + serves the API`,
+            `- ${cyan('web UI')}: where you chat + view sessions`,
+            `- ${cyan('daemon')}: background process that runs/streams sessions and lets terminal runs show up in the UI`,
+            '',
+            dim(`A ${cyan('stack')} is one isolated instance (dirs + ports + database). Setup configures the default stack: ${cyan('main')}.`),
+          ]
+        : [
+            `- ${cyan('workspace')}: your git checkouts (components + worktrees)`,
+            `- ${cyan('stacks')}: isolated runtimes under ${cyan('~/.happy/stacks/<name>')}`,
+            `- ${cyan('daemon')}: runs sessions + connects the UI <-> terminal`,
+          ],
+      '',
       bold('What will happen:'),
       profile === 'selfhost'
         ? [
             `- ${cyan('init')}: set up Happy Stacks home + shims`,
             `- ${cyan('bootstrap')}: clone/install components`,
-            `- ${cyan('start')}: (optional) start Happy now`,
-            `- ${cyan('login')}: (optional) authenticate`,
+            `- ${cyan('start')}: start Happy now (recommended)`,
+            `- ${cyan('login')}: guided login (recommended)`,
+            '',
+            dim(`Tip: ${cyan('happy-server-light')} is the simplest local install (no Docker). ${cyan('happy-server')} needs Docker (Postgres/Redis/Minio).`),
           ]
         : [
             `- ${cyan('workspace')}: choose where components + worktrees live`,
@@ -448,6 +478,8 @@ async function cmdSetup({ rootDir, argv }) {
             `- ${cyan('auth')}: (recommended) set up a ${cyan('dev-auth')} seed stack (login once, reuse everywhere)`,
             `- ${cyan('stacks')}: (recommended) create an isolated dev stack (keep main stable)`,
             `- ${cyan('mobile')}: (optional) install the iOS dev-client (for phone testing)`,
+            '',
+            dim(`Tip: for PR work, use ${cyan('worktrees')} (isolated branches) + ${cyan('stacks')} (isolated runtime state).`),
           ],
       '',
     ].flat();
@@ -466,17 +498,43 @@ async function cmdSetup({ rootDir, argv }) {
   const serverFromArg = normalizeServerComponent(kv.get('--server'));
   let serverComponent = serverFromArg || normalizeServerComponent(process.env.HAPPY_STACKS_SERVER_COMPONENT) || 'happy-server-light';
   if (profile === 'selfhost' && interactive && !serverFromArg) {
-    serverComponent = await withRl(async (rl) => {
-      const picked = await promptSelect(rl, {
-        title: `${bold('Server flavor')}\n${dim('Pick the backend you want to run locally. You can switch later.')}`,
-        options: [
-          { label: `happy-server-light (${green('recommended')}) — simplest local install (SQLite)`, value: 'happy-server-light' },
-          { label: `happy-server — full server (Postgres/Redis/Minio via Docker)`, value: 'happy-server' },
-        ],
-        defaultIndex: serverComponent === 'happy-server' ? 1 : 0,
+    const docker = await detectDockerSupport();
+    if (!docker.installed) {
+      serverComponent = 'happy-server-light';
+      // eslint-disable-next-line no-console
+      console.log(`${green('✓')} Server: ${cyan('happy-server-light')} ${dim('(Docker not detected; simplest local install)')}`);
+    } else if (!docker.running) {
+      serverComponent = 'happy-server-light';
+      // eslint-disable-next-line no-console
+      console.log(
+        `${green('✓')} Server: ${cyan('happy-server-light')} ${dim('(Docker detected but not running; using simplest option)')}`
+      );
+      // eslint-disable-next-line no-console
+      console.log(dim(`Tip: start Docker Desktop, then re-run setup if you want ${cyan('happy-server')} (full server).`));
+    } else {
+      serverComponent = await withRl(async (rl) => {
+        const picked = await promptSelect(rl, {
+          title: `${bold('Server flavor')}\n${dim('Pick the backend you want to run locally. You can switch later.')}`,
+          options: [
+            { label: `happy-server-light (${green('recommended')}) — simplest local install (SQLite)`, value: 'happy-server-light' },
+            { label: `happy-server — full server (Postgres/Redis/Minio via Docker)`, value: 'happy-server' },
+          ],
+          defaultIndex: serverComponent === 'happy-server' ? 1 : 0,
+        });
+        return picked;
       });
-      return picked;
-    });
+    }
+  }
+  // If the user explicitly requested full server, enforce Docker availability.
+  if (profile === 'selfhost' && serverFromArg === 'happy-server') {
+    const docker = await detectDockerSupport();
+    if (!docker.installed || !docker.running) {
+      throw new Error(
+        `[setup] --server=happy-server requires Docker (Postgres/Redis/Minio).\n` +
+          `Docker is ${!docker.installed ? 'not installed' : 'not running'}.\n` +
+          `Fix: use --server=happy-server-light (simplest), or start Docker and retry.`
+      );
+    }
   }
 
   // Dev profile: pick where to store components + worktrees.
@@ -529,73 +587,121 @@ async function cmdSetup({ rootDir, argv }) {
 
   if (interactive) {
     if (profile === 'selfhost') {
-      tailscaleWanted = await withRl(async (rl) => {
-        const v = await promptSelect(rl, {
-          title: `${bold('Remote access')}\n${dim('Optional: use Tailscale Serve to get an HTTPS URL for Happy (secure, recommended for phone access).')}`,
-          options: [
-            { label: 'no (default)', value: false },
-            { label: `yes (${green('recommended for phone')}) — enable Tailscale Serve`, value: true },
-          ],
-          defaultIndex: tailscaleWanted ? 1 : 0,
-        });
-        return v;
-      });
+      // Avoid asking questions when we can infer an existing setup state (unless the user explicitly passed flags).
+      const tailscaleExplicit = flags.has('--tailscale') || flags.has('--no-tailscale');
+      const autostartExplicit = flags.has('--autostart') || flags.has('--no-autostart');
+      const menubarExplicit = flags.has('--menubar') || flags.has('--no-menubar');
+      const authExplicit = flags.has('--auth') || flags.has('--no-auth') || kv.has('--auth');
 
-      if (supportsAutostart) {
-        autostartWanted = await withRl(async (rl) => {
+      // Auth: skip prompt if already configured.
+      const mainAccessKeyPath = getMainStacksAccessKeyPath();
+      const authAlreadyConfigured = existsSync(mainAccessKeyPath);
+      if (!authExplicit && authAlreadyConfigured) {
+        authWanted = false;
+        // eslint-disable-next-line no-console
+        console.log(`${green('✓')} Authentication: already configured ${dim(`(${mainAccessKeyPath})`)}`);
+      }
+      if (!authExplicit && !authAlreadyConfigured) {
+        // Self-host onboarding default: guide login as part of setup.
+        authWanted = true;
+        // eslint-disable-next-line no-console
+        console.log(`${green('✓')} Authentication: will guide you through login ${dim('(recommended)')}`);
+      }
+
+      // Tailscale: skip prompt if already enabled for the main internal URL.
+      let tailscaleDetectedHttps = null;
+      if (!tailscaleExplicit) {
+        try {
+          const port = await resolveMainServerPort();
+          const internal = `http://127.0.0.1:${port}`;
+          tailscaleDetectedHttps = await tailscaleServeHttpsUrlForInternalServerUrl(internal);
+        } catch {
+          tailscaleDetectedHttps = null;
+        }
+        if (tailscaleDetectedHttps) {
+          tailscaleWanted = true;
+          // eslint-disable-next-line no-console
+          console.log(`${green('✓')} Remote access: Tailscale Serve already enabled ${dim('→')} ${cyan(tailscaleDetectedHttps)}`);
+        }
+      }
+
+      if (!tailscaleExplicit && tailscaleDetectedHttps) {
+        // keep tailscaleWanted=true and skip the question
+      } else {
+        tailscaleWanted = await withRl(async (rl) => {
           const v = await promptSelect(rl, {
-            title: `${bold('Autostart')}\n${dim('Optional: start Happy automatically at login (launchd/systemd user service).')}`,
+            title: `${bold('Remote access')}\n${dim('Optional: use Tailscale Serve to get an HTTPS URL for Happy (secure, recommended for phone access).')}`,
             options: [
               { label: 'no (default)', value: false },
-              { label: 'yes', value: true },
+              { label: `yes (${green('recommended for phone')}) — enable Tailscale Serve`, value: true },
             ],
-            defaultIndex: autostartWanted ? 1 : 0,
+            defaultIndex: tailscaleWanted ? 1 : 0,
           });
           return v;
         });
+      }
+
+      if (supportsAutostart) {
+        const a = getDefaultAutostartPaths();
+        const autostartAlreadyInstalled = Boolean(existsSync(a.primaryPlistPath) || existsSync(a.legacyPlistPath));
+        if (!autostartExplicit && autostartAlreadyInstalled) {
+          autostartWanted = false;
+          // eslint-disable-next-line no-console
+          console.log(`${green('✓')} Autostart: already installed ${dim('(leaving as-is)')}`);
+        } else {
+          autostartWanted = await withRl(async (rl) => {
+            const v = await promptSelect(rl, {
+              title: `${bold('Autostart')}\n${dim('Optional: start Happy automatically at login (launchd/systemd user service).')}`,
+              options: [
+                { label: 'no (default)', value: false },
+                { label: 'yes', value: true },
+              ],
+              defaultIndex: autostartWanted ? 1 : 0,
+            });
+            return v;
+          });
+        }
       } else {
         autostartWanted = false;
       }
 
       if (supportsMenubar) {
-        menubarWanted = await withRl(async (rl) => {
-          const v = await promptSelect(rl, {
-            title: `${bold('Menu bar (macOS)')}\n${dim('Optional: install the SwiftBar menu to control stacks quickly.')}`,
-            options: [
-              { label: 'no (default)', value: false },
-              { label: 'yes', value: true },
-            ],
-            defaultIndex: menubarWanted ? 1 : 0,
+        let menubarInstalled = false;
+        if (!menubarExplicit) {
+          const swift = await detectSwiftbarPluginInstalled();
+          menubarInstalled = Boolean(swift.installed);
+          if (menubarInstalled) {
+            menubarWanted = false;
+            // eslint-disable-next-line no-console
+            console.log(`${green('✓')} Menu bar: already installed ${dim('(SwiftBar plugin)')}`);
+          }
+        }
+        if (!menubarExplicit && menubarInstalled) {
+          // skip question
+        } else {
+          menubarWanted = await withRl(async (rl) => {
+            const v = await promptSelect(rl, {
+              title: `${bold('Menu bar (macOS)')}\n${dim('Optional: install the SwiftBar menu to control stacks quickly.')}`,
+              options: [
+                { label: 'no (default)', value: false },
+                { label: 'yes', value: true },
+              ],
+              defaultIndex: menubarWanted ? 1 : 0,
+            });
+            return v;
           });
-          return v;
-        });
+        }
       } else {
         menubarWanted = false;
       }
 
-      startNow = await withRl(async (rl) => {
-        const v = await promptSelect(rl, {
-          title: `${bold('Start now')}\n${dim('Recommended: start Happy immediately so you can verify it works.')}`,
-          options: [
-            { label: 'yes (default)', value: true },
-            { label: 'no', value: false },
-          ],
-          defaultIndex: startNow ? 0 : 1,
-        });
-        return v;
-      });
+      // Self-host onboarding default: start now (end-to-end setup).
+      const startNowExplicit = flags.has('--start-now') || flags.has('--no-start-now');
+      if (!startNowExplicit) {
+        startNow = true;
+      }
 
-      authWanted = await withRl(async (rl) => {
-        const v = await promptSelect(rl, {
-          title: `${bold('Authentication')}\n${dim('Recommended: login now so the daemon can register this machine and you can use Happy from other devices.')}`,
-          options: [
-            { label: `yes (${green('recommended')}) — login now`, value: true },
-            { label: 'no — I will authenticate later', value: false },
-          ],
-          defaultIndex: authWanted ? 0 : 1,
-        });
-        return v;
-      });
+      // No interactive auth prompt here: we either detected it's already configured, or we default to guiding login.
 
       // Auth requires the stack to be running; if you chose "authenticate now", implicitly start.
       if (authWanted) {
@@ -872,27 +978,28 @@ async function cmdSetup({ rootDir, argv }) {
     console.log('');
     // eslint-disable-next-line no-console
     console.log(green('✓ Setup complete'));
+    // Keep this minimal for first-time users. Setup already started + opened the UI.
     // eslint-disable-next-line no-console
-    console.log(dim('Useful commands:'));
+    console.log(dim('Happy is ready. If you need help later, run:'));
     // eslint-disable-next-line no-console
-    console.log('  happys start');
+    console.log(`  ${yellow('happys doctor')}`);
     // eslint-disable-next-line no-console
-    console.log('  happys tailscale enable');
-    // eslint-disable-next-line no-console
-    console.log('  happys service install   # macOS/Linux autostart');
+    console.log(`  ${yellow('happys stop --yes')}`);
   } else {
     // eslint-disable-next-line no-console
     console.log('');
     // eslint-disable-next-line no-console
     console.log(green('✓ Setup complete'));
     // eslint-disable-next-line no-console
-    console.log(dim('Useful commands:'));
+    console.log(dim('Next steps (development):'));
     // eslint-disable-next-line no-console
-    console.log('  happys dev');
+    console.log(`  ${yellow('happys dev')}          ${dim('# run the dev stack (server + daemon + Expo web)')}`);
     // eslint-disable-next-line no-console
-    console.log('  happys wt ...');
+    console.log(`  ${yellow('happys wt new ...')}   ${dim('# create a worktree for a branch/PR')}`);
     // eslint-disable-next-line no-console
-    console.log('  happys stack ...');
+    console.log(`  ${yellow('happys stack new ...')} ${dim('# create an isolated runtime stack')}`);
+    // eslint-disable-next-line no-console
+    console.log(`  ${yellow('happys stack dev <name>')} ${dim('# run a specific stack')}`);
   }
 }
 

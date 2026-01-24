@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { readLastLines } from './utils/fs/tail.mjs';
+import { banner, bullets, cmd as cmdFmt, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 
 /**
  * Manage the autostart service installed by `happys bootstrap -- --autostart`.
@@ -87,11 +89,11 @@ export async function installService() {
   }
   if (process.platform === 'darwin') {
     await ensureMacAutostartEnabled({ rootDir, label, env });
-    console.log('[local] service installed (macOS launchd)');
+    console.log(`${green('✓')} service installed ${dim('(macOS launchd)')}`);
     return;
   }
   await ensureSystemdUserServiceEnabled({ rootDir, label, env });
-  console.log('[local] service installed (Linux systemd --user)');
+  console.log(`${green('✓')} service installed ${dim('(Linux systemd --user)')}`);
 }
 
 export async function uninstallService() {
@@ -103,7 +105,7 @@ export async function uninstallService() {
 
   if (process.platform === 'linux') {
     await ensureSystemdUserServiceDisabled({ remove: true });
-    console.log('[local] service uninstalled (systemd user unit removed)');
+    console.log(`${green('✓')} service uninstalled ${dim('(systemd user unit removed)')}`);
     return;
   }
   const { primaryPlistPath, legacyPlistPath, primaryLabel, legacyLabel } = getDefaultAutostartPaths();
@@ -121,7 +123,7 @@ export async function uninstallService() {
   } catch {
     // ignore
   }
-  console.log('[local] service uninstalled (plist removed)');
+  console.log(`${green('✓')} service uninstalled ${dim('(plist removed)')}`);
 }
 
 function systemdUnitName() {
@@ -453,11 +455,18 @@ async function showStatus() {
   const { plistPath, stdoutPath, stderrPath, label } = getDefaultAutostartPaths();
   const internalUrl = getInternalServerUrl({ env: process.env, defaultPort: 3005 }).internalServerUrl;
 
-  console.log(`label: ${label}`);
-  console.log(`plist: ${plistPath} ${existsSync(plistPath) ? '(present)' : '(missing)'}`);
-  console.log(`logs:`);
-  console.log(`  stdout: ${stdoutPath}`);
-  console.log(`  stderr: ${stderrPath}`);
+  console.log('');
+  console.log(banner('service', { subtitle: 'Autostart (launchd/systemd user).' }));
+  console.log('');
+  console.log(sectionTitle('LaunchAgent (macOS)'));
+  console.log(
+    bullets([
+      kv('label:', cyan(label)),
+      kv('plist:', `${plistPath} ${existsSync(plistPath) ? green('(present)') : yellow('(missing)')}`),
+      kv('stdout:', stdoutPath),
+      kv('stderr:', stderrPath),
+    ])
+  );
 
   try {
     const list = await runCapture('launchctl', ['list']);
@@ -465,9 +474,9 @@ async function showStatus() {
       .split('\n')
       .map((l) => l.trim())
       .find((l) => l.endsWith(` ${label}`) || l === label || l.includes(`\t${label}`));
-    console.log(`launchctl: ${line ? line : '(not listed)'}`);
+    console.log(`${dim('launchctl:')} ${line ? line : dim('(not listed)')}`);
   } catch {
-    console.log('launchctl: (unable to query)');
+    console.log(`${dim('launchctl:')} ${dim('(unable to query)')}`);
   }
 
   // Health can briefly be unavailable right after install/restart; retry a bit.
@@ -476,16 +485,20 @@ async function showStatus() {
     try {
       const res = await fetch(`${internalUrl}/health`, { method: 'GET' });
       const body = await res.text();
-      console.log(`health: ${res.status} ${body.trim()}`);
+      console.log(`${dim('health:')} ${res.ok ? green(String(res.status)) : yellow(String(res.status))} ${dim(body.trim())}`);
       break;
     } catch {
       if (Date.now() >= deadline) {
-        console.log(`health: unreachable (${internalUrl})`);
+        console.log(`${dim('health:')} ${yellow('unreachable')} ${dim('(')}${cyan(internalUrl)}${dim(')')}`);
         break;
       }
       await new Promise((r) => setTimeout(r, 500));
     }
   }
+
+  console.log('');
+  console.log(sectionTitle('Tips'));
+  console.log(bullets([`${dim('Show status:')} ${cmdFmt('happys service status')}`, `${dim('View logs:')} ${cmdFmt('happys service logs')}`]));
 }
 
 async function showLogs(lines = 120) {
@@ -514,17 +527,21 @@ async function main() {
       json,
       data: { commands: ['install', 'uninstall', 'status', 'start', 'stop', 'restart', 'enable', 'disable', 'logs', 'tail'] },
       text: [
-        '[service] usage:',
-        '  happys service install|uninstall [--json]',
-        '  happys service status [--json]',
-        '  happys service start|stop|restart [--json]',
-        '  happys service enable|disable [--json]',
-        '  happys service logs [--json]',
-        '  happys service tail',
+        banner('service', { subtitle: 'Autostart service management (launchd/systemd user).' }),
         '',
-        'legacy aliases:',
-        '  happys service:install|uninstall|status|start|stop|restart|enable|disable',
-        '  happys logs | happys logs:tail',
+        sectionTitle('usage:'),
+        `  ${cyan('happys service')} install|uninstall [--json]`,
+        `  ${cyan('happys service')} status [--json]`,
+        `  ${cyan('happys service')} start|stop|restart [--json]`,
+        `  ${cyan('happys service')} enable|disable [--json]`,
+        `  ${cyan('happys service')} logs [--json]`,
+        `  ${cyan('happys service')} tail`,
+        '',
+        sectionTitle('legacy aliases:'),
+        bullets([
+          dim('happys service:install|uninstall|status|start|stop|restart|enable|disable'),
+          dim('happys logs | happys logs:tail'),
+        ]),
       ].join('\n'),
     });
     return;

@@ -205,6 +205,7 @@ render_component_daemon() {
   print_item "$p2" "State file: $(shorten_path "$state_file" 52)"
 
   if [[ -n "$PNPM_BIN" ]]; then
+    local PNPM_TERM="$HAPPY_LOCAL_DIR/extras/swiftbar/happys-term.sh"
     print_sep "$p2"
     if [[ "$daemon_status" == "auth_required" ]]; then
       # Provide a direct "fix" action for the common first-run problem under launchd.
@@ -227,6 +228,10 @@ render_component_daemon() {
       fi
       print_sep "$p2"
     fi
+
+    print_item "$p2" "Restart daemon | bash=$PNPM_BIN param1=stack param2=daemon param3=$stack_name param4=restart dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+    print_item "$p2" "Show daemon status (CLI) | bash=$PNPM_TERM param1=stack param2=daemon param3=$stack_name param4=status dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"
+
     if ! swiftbar_is_sandboxed; then
       if [[ "$stack_name" == "main" ]]; then
         print_item "$p2" "Restart stack (service) | bash=$PNPM_BIN param1=service:restart dir=$HAPPY_LOCAL_DIR terminal=false refresh=true"

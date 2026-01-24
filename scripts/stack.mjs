@@ -70,6 +70,8 @@ import { isCursorInstalled, openWorkspaceInEditor, writeStackCodeWorkspace } fro
 import { readLastLines } from './utils/fs/tail.mjs';
 import { defaultStackReleaseIdentity } from './utils/mobile/identifiers.mjs';
 import { interactiveEdit, interactiveNew } from './utils/stack/interactive_stack_config.mjs';
+import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
+import { getDaemonEnv, startLocalDaemonWithAuth, stopLocalDaemon } from './daemon.mjs';
 
 function stackNameFromArg(positionals, idx) {
   const name = positionals[idx]?.trim() ? positionals[idx].trim() : '';
@@ -3259,6 +3261,90 @@ async function cmdStackOpen({ rootDir, stackName, json, includeStackDir, include
   await cmdStackCodeOrCursor({ rootDir, stackName, json, editor, includeStackDir, includeAllComponents, includeCliHome });
 }
 
+async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
+  const positionals = argv.filter((a) => a && a !== '--' && !a.startsWith('--'));
+  const action = (positionals[0] ?? 'status').toString().trim();
+
+  if (!action || action === 'help' || action === '--help' || action === '-h') {
+    printResult({
+      json,
+      data: { ok: true, stackName, commands: ['start', 'stop', 'restart', 'status'] },
+      text: [
+        '[stack] usage:',
+        '  happys stack daemon <name> start|stop|restart|status [--json]',
+        '',
+        'example:',
+        `  happys stack daemon ${stackName} restart`,
+      ].join('\n'),
+    });
+    return;
+  }
+
+  if (!['start', 'stop', 'restart', 'status'].includes(action)) {
+    printResult({
+      json,
+      data: { ok: false, error: 'invalid_daemon_subcommand', stackName, action },
+      text: [
+        `[stack] invalid daemon subcommand: ${action}`,
+        '',
+        'usage:',
+        '  happys stack daemon <name> start|stop|restart|status [--json]',
+      ].join('\n'),
+    });
+    process.exit(1);
+  }
+
+  const res = await withStackEnv({
+    stackName,
+    fn: async ({ env }) => {
+      const cliDir =
+        (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim() ||
+        getComponentDir(rootDir, 'happy-cli');
+      const cliBin = join(cliDir, 'bin', 'happy.mjs');
+      const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ?? env.HAPPY_LOCAL_CLI_HOME_DIR ?? join(resolveStackEnvPath(stackName).baseDir, 'cli')).toString();
+      const serverPort = resolveServerPortFromEnv({ env, defaultPort: 3005 });
+      const internalServerUrl = `http://127.0.0.1:${serverPort}`;
+      const { publicServerUrl } = getPublicServerUrlEnvOverride({ env, serverPort, stackName });
+      const daemonEnv = getDaemonEnv({ baseEnv: env, cliHomeDir, internalServerUrl, publicServerUrl });
+
+      if (action === 'start' || action === 'restart') {
+        await startLocalDaemonWithAuth({
+          cliBin,
+          cliHomeDir,
+          internalServerUrl,
+          publicServerUrl,
+          forceRestart: action === 'restart',
+          env,
+          stackName,
+        });
+        const status = await runCapture(process.execPath, [cliBin, 'daemon', 'status'], { cwd: rootDir, env: daemonEnv });
+        return { ok: true, action, status: status.trim() };
+      }
+
+      if (action === 'stop') {
+        await stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir });
+        const status = await runCapture(process.execPath, [cliBin, 'daemon', 'status'], { cwd: rootDir, env: daemonEnv }).catch(() => '');
+        return { ok: true, action, status: status.trim() || null };
+      }
+
+      const status = await runCapture(process.execPath, [cliBin, 'daemon', 'status'], { cwd: rootDir, env: daemonEnv });
+      return { ok: true, action, status: status.trim() };
+    },
+  });
+
+  if (json) {
+    printResult({ json, data: { stackName, ...res } });
+    return;
+  }
+
+  if (res?.status) {
+    console.log(`[stack] daemon: ${res.status}`);
+    return;
+  }
+
+  console.log('[stack] daemon command completed');
+}
+
 async function main() {
   const rootDir = getRootDir(import.meta.url);
   // pnpm (legacy) passes an extra leading `--` when forwarding args into scripts. Normalize it away so
@@ -3290,12 +3376,13 @@ async function main() {
           'archive',
           'duplicate',
           'info',
-          'pr',
-          'create-dev-auth-seed',
-          'happy',
-          'env',
-          'auth',
-          'dev',
+        'pr',
+        'create-dev-auth-seed',
+        'daemon',
+        'happy',
+        'env',
+        'auth',
+        'dev',
           'start',
           'build',
           'review',
@@ -3329,6 +3416,7 @@ async function main() {
         '  happys stack info <name> [--json]',
         '  happys stack pr <name> --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--dev|--start] [--json] [-- ...]',
         '  happys stack create-dev-auth-seed [name] [--server=happy-server|happy-server-light] [--non-interactive] [--json]',
+        '  happys stack daemon <name> start|stop|restart|status [--json]',
         '  happys stack happy <name> [-- ...]',
         '  happys stack env <name> set KEY=VALUE [KEY2=VALUE2...] | unset KEY [KEY2...] | get KEY | list | path [--json]',
         '  happys stack auth <name> status|login|copy-from [--json]',
@@ -3507,6 +3595,10 @@ async function main() {
         await run(process.execPath, [join(rootDir, 'scripts', 'env.mjs'), ...envArgv], { cwd: rootDir, env });
       },
     });
+    return;
+  }
+  if (cmd === 'daemon') {
+    await cmdStackDaemon({ rootDir, stackName, argv: passthrough, json });
     return;
   }
   if (cmd === 'happy') {

@@ -19,6 +19,9 @@ import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { readJsonIfExists } from './utils/fs/json.mjs';
 import { readPackageJsonVersion } from './utils/fs/package_json.mjs';
+import { banner, bullets, cmd, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green, red, yellow } from './utils/ui/ansi.mjs';
+import { detectSwiftbarPluginInstalled } from './utils/menubar/swiftbar.mjs';
 
 /**
  * Doctor script for common happy-stacks failure modes.
@@ -56,21 +59,6 @@ async function fetchHealth(url) {
     return root;
   }
   return health.ok ? health : root;
-}
-
-async function resolveSwiftbarPluginsDir() {
-  if (process.platform !== 'darwin') {
-    return null;
-  }
-  try {
-    const dir = (await runCapture('bash', [
-      '-lc',
-      'DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)"; if [[ -n "$DIR" && -d "$DIR" ]]; then echo "$DIR"; exit 0; fi; D="$HOME/Library/Application Support/SwiftBar/Plugins"; if [[ -d "$D" ]]; then echo "$D"; exit 0; fi; echo ""',
-    ])).trim();
-    return dir || null;
-  } catch {
-    return null;
-  }
 }
 
 async function main() {
@@ -158,43 +146,49 @@ async function main() {
     checks: {},
   };
   if (!json) {
-    console.log('🩺 happy-stacks doctor\n');
-    console.log(`- internal: ${internalServerUrl}`);
-    console.log(`- public:   ${publicServerUrl}`);
-    console.log(`- server:   ${serverComponentName}`);
-    console.log(`- uiBuild:  ${uiBuildDir}`);
-    console.log(`- cliHome:  ${cliHomeDir}`);
-    console.log(`- home:     ${homeDir}`);
-    console.log(`- runtime:  ${runtimeVersion ? `${runtimeDir} (${runtimeVersion})` : `${runtimeDir} (not installed)`}`);
-    console.log(`- workspace:${workspaceDir}`);
+    console.log('');
+    console.log(banner('happy-stacks doctor', { subtitle: 'Diagnose common local setup failure modes.' }));
+    console.log('');
+    console.log(sectionTitle('Details'));
+    console.log(bullets([
+      kv('internal:', cyan(internalServerUrl)),
+      kv('public:', publicServerUrl ? cyan(publicServerUrl) : dim('(none)'),
+      ),
+      kv('server:', cyan(serverComponentName)),
+      kv('uiBuild:', uiBuildDir),
+      kv('cliHome:', cliHomeDir),
+      kv('home:', homeDir),
+      kv('runtime:', runtimeVersion ? `${runtimeDir} (${runtimeVersion})` : `${runtimeDir} (${yellow('not installed')})`),
+      kv('workspace:', workspaceDir),
+    ]));
     console.log('');
   }
 
   if (!(await pathExists(serverDir))) {
     report.checks.serverDir = { ok: false, missing: serverDir };
-    if (!json) console.log(`❌ missing component: ${serverDir}`);
+    if (!json) console.log(`${red('x')} missing component: ${serverDir}`);
   }
   if (!(await pathExists(cliDir))) {
     report.checks.cliDir = { ok: false, missing: cliDir };
-    if (!json) console.log(`❌ missing component: ${cliDir}`);
+    if (!json) console.log(`${red('x')} missing component: ${cliDir}`);
   }
 
   // Server health / port conflicts
   const health = await fetchHealth(internalServerUrl);
   if (health.ok) {
     report.checks.serverHealth = { ok: true, status: health.status, body: health.body };
-    if (!json) console.log(`✅ server health: ${health.status} ${health.body}`);
+    if (!json) console.log(`${green('✓')} server health: ${health.status} ${health.body}`);
   } else {
     report.checks.serverHealth = { ok: false };
-    if (!json) console.log(`❌ server health: unreachable (${internalServerUrl})`);
+    if (!json) console.log(`${red('x')} server health: unreachable (${internalServerUrl})`);
     if (fix) {
       if (stackMode) {
         if (!json) {
-          console.log(`↪ fix skipped: refusing to kill unknown port listeners in stack mode.`);
-          console.log(`↪ Fix: use stack-safe controls instead: happys stack stop ${process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? 'main'} --aggressive`);
+          console.log(`${yellow('!')} fix skipped: refusing to kill unknown port listeners in stack mode.`);
+          console.log(`${dim('Tip:')} use stack-safe controls instead: ${cmd(`happys stack stop ${(process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? 'main').toString()} --aggressive`)}`);
         }
       } else {
-        if (!json) console.log(`↪ attempting fix: freeing tcp:${serverPort}`);
+        if (!json) console.log(`${yellow('!')} attempting fix: freeing tcp:${serverPort}`);
         await killPortListeners(serverPort, { label: 'doctor' });
       }
     }
@@ -204,14 +198,14 @@ async function main() {
   if (serveUi) {
     if (await pathExists(uiBuildDir)) {
       report.checks.uiBuildDir = { ok: true, path: uiBuildDir };
-      if (!json) console.log('✅ ui build dir present');
+      if (!json) console.log(`${green('✓')} ui build dir present`);
     } else {
       report.checks.uiBuildDir = { ok: false, missing: uiBuildDir };
-      if (!json) console.log(`❌ ui build dir missing (${uiBuildDir}) → run: happys build`);
+      if (!json) console.log(`${red('x')} ui build dir missing (${uiBuildDir}) → run: ${cmd('happys build')}`);
     }
   } else {
     report.checks.uiServing = { ok: false, reason: 'disabled (HAPPY_LOCAL_SERVE_UI=0)' };
-    if (!json) console.log('ℹ️ ui serving disabled (HAPPY_LOCAL_SERVE_UI=0)');
+    if (!json) console.log(`${dim('ℹ')} ui serving disabled (HAPPY_LOCAL_SERVE_UI=0)`);
   }
 
   // Daemon status
@@ -224,18 +218,18 @@ async function main() {
     });
     const line = out.split('\n').find((l) => l.includes('Daemon is running'))?.trim();
     report.checks.daemon = { ok: true, line: line || null };
-    if (!json) console.log(`✅ daemon: ${line ? line : 'status ok'}`);
+    if (!json) console.log(`${green('✓')} daemon: ${line ? line : 'status ok'}`);
   } catch (e) {
     const accessKeyPath = join(cliHomeDir, 'access.key');
     const hasAccessKey = existsSync(accessKeyPath);
     report.checks.daemon = { ok: false, hasAccessKey, accessKeyPath };
     if (!json) {
-      console.log('❌ daemon: not running / status failed');
+      console.log(`${red('x')} daemon: not running / status failed`);
       if (!hasAccessKey) {
         const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
-        console.log(`  ↪ likely cause: missing credentials at ${accessKeyPath}`);
-        console.log(`  ↪ fix: authenticate for this stack:`);
-        console.log(`     ${stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`}`);
+        console.log(`  ${dim('↪ likely cause:')} missing credentials at ${accessKeyPath}`);
+        console.log(`  ${dim('↪ fix:')} authenticate for this stack:`);
+        console.log(`    ${cmd(stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`)}`);
       }
     }
   }
@@ -245,10 +239,10 @@ async function main() {
     const status = await tailscaleServeStatus();
     const httpsLine = status.split('\n').find((l) => l.toLowerCase().includes('https://'))?.trim();
     report.checks.tailscaleServe = { ok: true, httpsLine: httpsLine || null };
-    if (!json) console.log(`✅ tailscale serve: ${httpsLine ? httpsLine : 'configured'}`);
+    if (!json) console.log(`${green('✓')} tailscale serve: ${httpsLine ? httpsLine : 'configured'}`);
   } catch {
     report.checks.tailscaleServe = { ok: false };
-    if (!json) console.log('ℹ️ tailscale serve: unavailable (tailscale not installed / not running)');
+    if (!json) console.log(`${dim('ℹ')} tailscale serve: unavailable (tailscale not installed / not running)`);
   }
 
   // macOS LaunchAgent status
@@ -260,23 +254,19 @@ async function main() {
       const legacyLine = list.split('\n').find((l) => l.includes(legacyLabel))?.trim() || null;
       const line = primaryLine || legacyLine;
       report.checks.launchd = { ok: true, line: line || null };
-      if (!json) console.log(`✅ launchd: ${line ? line : 'not loaded'}`);
+      if (!json) console.log(`${green('✓')} launchd: ${line ? line : 'not loaded'}`);
     } catch {
       report.checks.launchd = { ok: false };
-      if (!json) console.log('ℹ️ launchd: unable to query');
+      if (!json) console.log(`${dim('ℹ')} launchd: unable to query`);
     }
   }
 
   // SwiftBar plugin status (macOS)
   if (process.platform === 'darwin') {
-    const pluginsDir = await resolveSwiftbarPluginsDir();
-    const pluginInstalled =
-      pluginsDir && existsSync(pluginsDir)
-        ? Boolean((await runCapture('bash', ['-lc', `ls -1 "${pluginsDir}"/happy-stacks.*.sh 2>/dev/null | head -n 1 || true`])).trim())
-        : false;
-    report.checks.swiftbar = { ok: true, pluginsDir, pluginInstalled };
+    const swift = await detectSwiftbarPluginInstalled();
+    report.checks.swiftbar = { ok: true, pluginsDir: swift.pluginsDir, pluginInstalled: swift.installed };
     if (!json) {
-      console.log(`✅ swiftbar: ${pluginInstalled ? 'plugin installed' : 'not installed'}`);
+      console.log(`${green('✓')} swiftbar: ${swift.installed ? 'plugin installed' : 'not installed'}`);
     }
   }
 
@@ -285,11 +275,11 @@ async function main() {
     const happyPath = await resolveCommandPath('happy');
     if (happyPath) {
       report.checks.happyOnPath = { ok: true, path: happyPath };
-      if (!json) console.log(`✅ happy on PATH: ${happyPath}`);
+      if (!json) console.log(`${green('✓')} happy on PATH: ${happyPath}`);
     }
   } catch {
     report.checks.happyOnPath = { ok: false };
-    if (!json) console.log(`ℹ️ happy on PATH: not found (run: happys init --install-path, or add ${join(getHappyStacksHomeDir(), 'bin')} to PATH)`);
+    if (!json) console.log(`${dim('ℹ')} happy on PATH: not found (run: ${cmd('happys init --install-path')})`);
   }
 
   // happys on PATH
@@ -297,21 +287,21 @@ async function main() {
     const happysPath = await resolveCommandPath('happys');
     if (happysPath) {
       report.checks.happysOnPath = { ok: true, path: happysPath };
-      if (!json) console.log(`✅ happys on PATH: ${happysPath}`);
+      if (!json) console.log(`${green('✓')} happys on PATH: ${happysPath}`);
     }
   } catch {
     report.checks.happysOnPath = { ok: false };
-    if (!json) console.log(`ℹ️ happys on PATH: not found (run: happys init --install-path, or add ${join(getHappyStacksHomeDir(), 'bin')} to PATH)`);
+    if (!json) console.log(`${dim('ℹ')} happys on PATH: not found (run: ${cmd('happys init --install-path')})`);
   }
 
   if (!json) {
     if (!runtimeVersion) {
       console.log('');
-      console.log('Tips:');
-      console.log('- Install a stable runtime (recommended for SwiftBar/services): happys self update');
+      console.log(sectionTitle('Tips'));
+      console.log(`- ${cmd('happys self update')} ${dim('(install a stable runtime; recommended for SwiftBar/services)')}`);
     }
     if (!report.checks.happysOnPath?.ok) {
-      console.log(`- Add shims to PATH: export PATH="${join(getHappyStacksHomeDir(), 'bin')}:$PATH" (or: happys init --install-path)`);
+      console.log(`- Add shims to PATH: ${cmd(`export PATH="${join(getHappyStacksHomeDir(), 'bin')}:$PATH"`)} ${dim(`(or: ${cmd('happys init --install-path')})`)}`);
     }
     console.log('');
   }

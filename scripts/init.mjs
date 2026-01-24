@@ -9,6 +9,8 @@ import { parseDotenv } from './utils/env/dotenv.mjs';
 import { expandHome } from './utils/paths/canonical_home.mjs';
 import { readJsonIfExists } from './utils/fs/json.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { banner, bullets, cmd, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 
 function getCliRootDir() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
@@ -127,19 +129,33 @@ async function main() {
   const bootstrapArgsRaw = sep >= 0 ? rawArgv.slice(sep + 1) : [];
   const bootstrapArgs = bootstrapArgsRaw[0] === '--' ? bootstrapArgsRaw.slice(1) : bootstrapArgsRaw;
   if (argv.includes('--help') || argv.includes('-h') || argv[0] === 'help') {
-    console.log([
-      '[init] usage:',
-      '  happys init [--canonical-home-dir=/path] [--home-dir=/path] [--workspace-dir=/path] [--runtime-dir=/path] [--storage-dir=/path] [--cli-root-dir=/path] [--tailscale-bin=/path] [--tailscale-cmd-timeout-ms=MS] [--tailscale-enable-timeout-ms=MS] [--tailscale-enable-timeout-ms-auto=MS] [--tailscale-reset-timeout-ms=MS] [--install-path] [--no-runtime] [--force-runtime] [--no-bootstrap] [--] [bootstrap args...]',
-      '',
-      'notes:',
-      '  - writes <canonicalHomeDir>/.env (stable pointer file; default: ~/.happy-stacks/.env)',
-      '  - default workspace: <homeDir>/workspace',
-      '  - default runtime: <homeDir>/runtime (recommended for services/SwiftBar)',
-      '  - runtime install is skipped if the same version is already installed (use --force-runtime to reinstall)',
-      '  - set HAPPY_STACKS_INIT_NO_RUNTIME=1 to persist skipping runtime installs on this machine',
-      '  - optional: --install-path adds <homeDir>/bin to your shell PATH (idempotent)',
-      '  - by default, runs `happys bootstrap --interactive` at the end (TTY only) IF components are not already present',
-    ].join('\n'));
+    console.log(
+      [
+        '',
+        banner('init', { subtitle: 'Initialize ~/.happy-stacks (runtime + shims).' }),
+        '',
+        sectionTitle('usage:'),
+        `  ${cyan('happys init')} [--canonical-home-dir=/path] [--home-dir=/path] [--workspace-dir=/path] [--runtime-dir=/path] [--storage-dir=/path] [--cli-root-dir=/path] [--tailscale-bin=/path] [--tailscale-cmd-timeout-ms=MS] [--tailscale-enable-timeout-ms=MS] [--tailscale-enable-timeout-ms-auto=MS] [--tailscale-reset-timeout-ms=MS] [--install-path] [--no-runtime] [--force-runtime] [--no-bootstrap] [--] [bootstrap args...]`,
+        '',
+        sectionTitle('what it does:'),
+        bullets([
+          `${cyan('home')} — stores runtime, shims, caches (default: ${cyan('~/.happy-stacks')})`,
+          `${cyan('workspace')} — where component checkouts live (default: ${cyan('~/.happy-stacks/workspace')})`,
+          `${cyan('runtime')} — stable install used by services/SwiftBar (default: ${cyan('~/.happy-stacks/runtime')})`,
+          `${cyan('shims')} — installs ${cyan('happys')} / ${cyan('happy')} under ${cyan('~/.happy-stacks/bin')}`,
+        ]),
+        '',
+        sectionTitle('notes:'),
+        bullets([
+          `Writes ${cyan('~/.happy-stacks/.env')} as a stable pointer file (helps launchd/SwiftBar find the install).`,
+          `Runtime install is skipped if the same version is already installed (use ${cyan('--force-runtime')} to reinstall).`,
+          `Set ${cyan('HAPPY_STACKS_INIT_NO_RUNTIME=1')} to persist skipping runtime installs on this machine.`,
+          `Optional: ${cyan('--install-path')} adds shims to your shell PATH (idempotent).`,
+          `By default, runs ${cyan('happys bootstrap --interactive')} at the end (TTY only) if components are missing.`,
+        ]),
+        '',
+      ].join('\n')
+    );
     return;
   }
 
@@ -291,14 +307,14 @@ async function main() {
     const sameVersionInstalled = Boolean(cliVersion && cliVersion !== '0.0.0' && runtimeVersion && runtimeVersion === cliVersion);
 
     if (!forceRuntime && sameVersionInstalled) {
-      console.log(`[init] runtime already installed in ${runtimeDir} (happy-stacks@${runtimeVersion})`);
+      console.log(`${green('✓')} runtime already installed ${dim('(')}${cyan(runtimeDir)}${dim(')')} ${dim('happy-stacks@')}${cyan(runtimeVersion)}`);
     } else {
-      console.log(`[init] installing runtime into ${runtimeDir} (${spec})...`);
+      console.log(`${yellow('!')} installing runtime into ${cyan(runtimeDir)} ${dim('(')}${cyan(spec)}${dim(')')}...`);
       let res = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, spec], { stdio: 'inherit' });
       if (res.status !== 0) {
         // Pre-publish developer experience: if the package isn't on npm yet (E404),
         // fall back to installing the local checkout into the runtime prefix.
-        console.log(`[init] runtime install failed; attempting local install from ${cliRootDir}...`);
+        console.log(`${yellow('!')} runtime install failed; attempting local install from ${cyan(cliRootDir)}...`);
         res = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--silent', '--prefix', runtimeDir, cliRootDir], { stdio: 'inherit' });
         if (res.status !== 0) {
           process.exit(res.status ?? 1);
@@ -379,34 +395,34 @@ async function main() {
   let didInstallPath = false;
   if (argv.includes('--install-path')) {
     if (isSandboxed() && !sandboxAllowsGlobalSideEffects()) {
-      console.log('[init] sandbox mode: skipping --install-path (would modify your shell config)');
-      console.log('[init] tip: set HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1 if you really want to test PATH modifications');
+      console.log(`${yellow('!')} sandbox mode: skipping --install-path (would modify your shell config)`);
+      console.log(`${dim('Tip:')} set ${cyan('HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1')} if you really want to test PATH modifications`);
     } else {
       const res = await ensurePathInstalled({ homeDir });
       didInstallPath = true;
       if (res.updated) {
-        console.log(`[init] added ${homeDir}/bin to PATH via ${res.path}`);
+        console.log(`${green('✓')} added ${cyan(join(homeDir, 'bin'))} to PATH via ${cyan(res.path)}`);
       } else {
-        console.log(`[init] PATH already configured in ${res.path}`);
+        console.log(`${green('✓')} PATH already configured in ${cyan(res.path)}`);
       }
     }
   }
 
   const invokedBySetup = (process.env.HAPPY_STACKS_SETUP_CHILD ?? '').trim() === '1';
 
-  console.log('[init] complete');
-  console.log(`[init] home:      ${homeDir}`);
-  console.log(`[init] workspace:  ${workspaceDir}`);
-  console.log(`[init] shims:     ${homeDir}/bin`);
+  console.log('');
+  console.log(`${green('✓')} init complete`);
+  console.log(bullets([kv('home:', cyan(homeDir)), kv('workspace:', cyan(workspaceDir)), kv('shims:', cyan(join(homeDir, 'bin')))]));
   console.log('');
 
   if (!argv.includes('--install-path') || !didInstallPath) {
-    console.log('[init] note: to use `happys` / `happy` from any terminal, add shims to PATH:');
-    console.log(`  export PATH="${homeDir}/bin:$PATH"`);
-    console.log('  (or re-run: happys init --install-path)');
+    console.log(sectionTitle('PATH'));
+    console.log(dim('To use `happys` / `happy` from any terminal, add shims to PATH:'));
+    console.log(cmd(`export PATH="${join(homeDir, 'bin')}:$PATH"`));
+    console.log(dim(`(or re-run: ${cmd('happys init --install-path')})`));
     console.log('');
   } else {
-    console.log('[init] note: restart your terminal (or source your shell config) to pick up PATH changes.');
+    console.log(dim('Note: restart your terminal (or source your shell config) to pick up PATH changes.'));
     console.log('');
   }
 
@@ -423,7 +439,7 @@ async function main() {
     if (!bootstrapExplicit && isTty && !nextArgs.includes('--interactive') && !nextArgs.includes('-i')) {
       nextArgs.unshift('--interactive');
     }
-    console.log('[init] running bootstrap...');
+    console.log(`${yellow('!')} running bootstrap...`);
     const res = spawnSync(process.execPath, [join(cliRootDir, 'scripts', 'install.mjs'), ...nextArgs], {
       stdio: 'inherit',
       env: process.env,
@@ -436,8 +452,8 @@ async function main() {
   }
 
   if (wantBootstrap && alreadyBootstrapped && !bootstrapExplicit) {
-    console.log('[init] bootstrap: already set up; skipping');
-    console.log('[init] tip: for guided onboarding: happys setup');
+    console.log(`${green('✓')} bootstrap already set up; skipping`);
+    console.log(`${dim('Tip: for guided onboarding run:')} ${cmd('happys setup')}`);
     console.log('');
   }
 
@@ -446,9 +462,8 @@ async function main() {
     return;
   }
 
-  console.log('[init] next steps:');
-  console.log(`  export PATH=\"${homeDir}/bin:$PATH\"`);
-  console.log('  happys setup');
+  console.log(sectionTitle('Next steps'));
+  console.log(bullets([cmd(`export PATH="${join(homeDir, 'bin')}:$PATH"`), cmd('happys setup')]));
 }
 
 main().catch((err) => {

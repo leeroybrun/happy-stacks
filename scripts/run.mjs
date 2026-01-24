@@ -26,6 +26,8 @@ import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stac
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
 import { resolveServerUiEnv } from './utils/server/ui_env.mjs';
+import { cmd, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 
 /**
  * Run the local stack in "production-like" mode:
@@ -150,10 +152,13 @@ async function main() {
   const uiBuildDirExists = await pathExists(uiBuildDir);
   if (serveUi && !uiBuildDirExists) {
     if (serverComponentName === 'happy-server-light') {
-      throw new Error(`[local] UI build directory not found at ${uiBuildDir}. Run: happys build (legacy in a cloned repo: pnpm build)`);
+      throw new Error(
+        `[local] UI build directory not found at ${uiBuildDir}. ` +
+          `Run: ${cmd('happys build')} (legacy in a cloned repo: pnpm build)`
+      );
     }
     // For happy-server, UI serving is optional.
-    console.log(`[local] UI build directory not found at ${uiBuildDir}; UI serving will be disabled`);
+    console.log(`${yellow('!')} UI build directory not found at ${uiBuildDir}; UI serving will be disabled`);
   }
 
   const children = [];
@@ -192,7 +197,12 @@ async function main() {
   const serverAlreadyRunning = await isHappyServerRunning(internalServerUrl);
   const daemonAlreadyRunning = startDaemon ? isDaemonRunning(cliHomeDir) : false;
   if (!restart && serverAlreadyRunning && (!startDaemon || daemonAlreadyRunning)) {
-    console.log(`[local] start: stack already running (server=${internalServerUrl}${startDaemon ? ` daemon=${daemonAlreadyRunning ? 'running' : 'stopped'}` : ''})`);
+    console.log(
+      `${green('✓')} start: already running ${dim('(')}` +
+        `${dim('server=')}${cyan(internalServerUrl)}` +
+        `${startDaemon ? ` ${dim('daemon=')}${daemonAlreadyRunning ? green('running') : dim('stopped')}` : ''}` +
+        `${dim(')')}`
+    );
     return;
   }
 
@@ -328,7 +338,7 @@ async function main() {
       }
       await waitForServerReady(internalServerUrl);
     } else {
-      console.log(`[local] server already running at ${internalServerUrl}`);
+      console.log(`${green('✓')} server: already running at ${cyan(internalServerUrl)}`);
     }
   }
 
@@ -337,32 +347,34 @@ async function main() {
       const status = await runCapture(process.execPath, [join(rootDir, 'scripts', 'tailscale.mjs'), 'status']);
       const line = status.split('\n').find((l) => l.toLowerCase().includes('https://'))?.trim();
       if (line) {
-        console.log(`[local] tailscale serve: ${line}`);
+        console.log(`${green('✓')} tailscale serve: ${cyan(line)}`);
       } else {
-        console.log('[local] tailscale serve enabled');
+        console.log(`${green('✓')} tailscale serve enabled`);
       }
     } catch {
-      console.log('[local] tailscale serve enabled');
+      console.log(`${green('✓')} tailscale serve enabled`);
     }
   }
 
   if (serveUi) {
     const localUi = effectiveInternalServerUrl.replace(/\/+$/, '') + '/';
-    console.log(`[local] ui served locally at ${localUi}`);
+    console.log('');
+    console.log(sectionTitle('Web UI'));
+    console.log(`${green('✓')} local:  ${cyan(localUi)}`);
     if (publicServerUrl && publicServerUrl !== effectiveInternalServerUrl && publicServerUrl !== localUi && publicServerUrl !== defaultPublicUrl) {
       const pubUi = publicServerUrl.replace(/\/+$/, '') + '/';
-      console.log(`[local] public url: ${pubUi}`);
+      console.log(`${green('✓')} public: ${cyan(pubUi)}`);
     }
     if (enableTailscaleServe) {
-      console.log('[local] tip: use the HTTPS *.ts.net URL for remote access');
+      console.log(`${dim('Tip:')} use the HTTPS *.ts.net URL for remote access`);
     }
 
-    console.log(
-      `[local] tip: to run 'happy' from your terminal *against this local server* (and have sessions show up in the UI), use:\n` +
-      `export HAPPY_SERVER_URL=\"${effectiveInternalServerUrl}\"\n` +
-      `export HAPPY_HOME_DIR=\"${cliHomeDir}\"\n` +
-      `export HAPPY_WEBAPP_URL=\"${publicServerUrl}\"\n`
-    );
+    console.log('');
+    console.log(sectionTitle('Terminal usage'));
+    console.log(dim(`To run ${cyan('happy')} against this stack (and have sessions appear in the UI), export:`));
+    console.log(cmd(`export HAPPY_SERVER_URL="${effectiveInternalServerUrl}"`));
+    console.log(cmd(`export HAPPY_HOME_DIR="${cliHomeDir}"`));
+    console.log(cmd(`export HAPPY_WEBAPP_URL="${publicServerUrl}"`));
 
     // Auto-open UI (interactive only) using the stack-scoped hostname when applicable.
     const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY);

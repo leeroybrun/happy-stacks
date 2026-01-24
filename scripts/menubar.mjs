@@ -10,6 +10,9 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { normalizeProfile } from './utils/cli/normalize.mjs';
+import { banner, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green } from './utils/ui/ansi.mjs';
+import { detectSwiftbarPluginInstalled } from './utils/menubar/swiftbar.mjs';
 
 async function ensureSwiftbarAssets({ cliRootDir }) {
   const homeDir = getHappyStacksHomeDir();
@@ -72,17 +75,19 @@ async function main() {
       json,
       data: { commands: ['install', 'uninstall', 'open', 'mode', 'status'] },
       text: [
-        '[menubar] usage:',
-        '  happys menubar install [--json]',
-        '  happys menubar uninstall [--json]',
-        '  happys menubar open [--json]',
-        '  happys menubar mode <selfhost|dev> [--json]',
-        '  happys menubar status [--json]',
+        banner('menubar', { subtitle: 'SwiftBar menu bar plugin (macOS).' }),
         '',
-        'notes:',
-        '  - installs SwiftBar plugin into the active SwiftBar plugin folder',
-        '  - keeps plugin source under <homeDir>/extras/swiftbar for stability',
-        '  - sandbox mode: install/uninstall are disabled by default (set HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1 to override)',
+        sectionTitle('usage:'),
+        `  ${cyan('happys menubar')} install [--json]`,
+        `  ${cyan('happys menubar')} uninstall [--json]`,
+        `  ${cyan('happys menubar')} open [--json]`,
+        `  ${cyan('happys menubar')} mode <selfhost|dev> [--json]`,
+        `  ${cyan('happys menubar')} status [--json]`,
+        '',
+        sectionTitle('notes:'),
+        `- ${dim('Installs the SwiftBar plugin into the active SwiftBar plugin folder')}`,
+        `- ${dim('Keeps plugin source under <homeDir>/extras/swiftbar for stability')}`,
+        `- ${dim('Sandbox mode: install/uninstall are disabled by default (set HAPPY_STACKS_SANDBOX_ALLOW_GLOBAL=1 to override)')}`,
       ].join('\n'),
     });
     return;
@@ -114,7 +119,17 @@ async function main() {
 
   if (cmd === 'status') {
     const mode = (process.env.HAPPY_STACKS_MENUBAR_MODE ?? process.env.HAPPY_LOCAL_MENUBAR_MODE ?? 'dev').trim() || 'dev';
-    printResult({ json, data: { ok: true, mode }, text: `[menubar] mode: ${mode}` });
+    const swift = await detectSwiftbarPluginInstalled();
+    printResult({
+      json,
+      data: { ok: true, mode, pluginsDir: swift.pluginsDir, installed: swift.installed },
+      text: [
+        sectionTitle('Menubar'),
+        `- ${kv('mode:', cyan(mode))}`,
+        `- ${kv('swiftbar plugin:', swift.installed ? green('installed') : dim('not installed'))}`,
+        swift.pluginsDir ? `- ${kv('plugins dir:', swift.pluginsDir)}` : null,
+      ].filter(Boolean).join('\n'),
+    });
     return;
   }
 

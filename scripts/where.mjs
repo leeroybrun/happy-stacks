@@ -10,6 +10,8 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { getCanonicalHomeDir, getCanonicalHomeEnvPath } from './utils/env/config.mjs';
 import { getSandboxDir } from './utils/env/sandbox.mjs';
+import { banner, bullets, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim } from './utils/ui/ansi.mjs';
 
 function getHomeEnvPaths() {
   const homeDir = getHappyStacksHomeDir();
@@ -83,24 +85,38 @@ async function main() {
       },
     },
     text: [
-      `[where] root:      ${rootDir}`,
-      sandboxDir ? `[where] sandbox:   ${sandboxDir}` : null,
-      `[where] canonical: ${canonicalHomeDir}`,
-      `[where] home:      ${homeDir}`,
-      `[where] runtime:   ${runtimeDir}`,
-      `[where] workspace: ${workspaceDir}`,
-      `[where] components:${componentsDir}`,
       '',
-      `[where] stack:     ${stackName} (${stackLabel})`,
-      `[where] env (canonical pointer): ${existsSync(canonicalEnv) ? canonicalEnv : `${canonicalEnv} (missing)`}`,
-      `[where] env (home defaults): ${existsSync(homeEnv) ? homeEnv : `${homeEnv} (missing)`}`,
-      `[where] env (home overrides): ${existsSync(homeLocal) ? homeLocal : `${homeLocal} (missing)`}`,
-      `[where] env (active): ${resolvedActiveEnv?.envPath ? resolvedActiveEnv.envPath : '(none)'}`,
-      `[where] env (main):   ${resolvedMainEnv.envPath}`,
+      banner('where', { subtitle: 'Resolved paths and env sources.' }),
       '',
-      ...componentNames.map((n) => `[where] component ${n}: ${componentDirs[n]}`),
+      sectionTitle('Paths'),
+      bullets([
+        kv('root:', rootDir),
+        sandboxDir ? kv('sandbox:', sandboxDir) : null,
+        kv('canonical:', canonicalHomeDir),
+        kv('home:', homeDir),
+        kv('runtime:', runtimeDir),
+        kv('workspace:', workspaceDir),
+        kv('components:', componentsDir),
+      ].filter(Boolean)),
       '',
-      `[where] update cache: ${updateCachePath}`,
+      sectionTitle('Active stack'),
+      bullets([kv('stack:', `${cyan(stackName)} (${stackLabel})`)]),
+      '',
+      sectionTitle('Env files'),
+      bullets([
+        kv('canonical pointer:', existsSync(canonicalEnv) ? canonicalEnv : `${canonicalEnv} ${dim('(missing)')}`),
+        kv('home defaults:', existsSync(homeEnv) ? homeEnv : `${homeEnv} ${dim('(missing)')}`),
+        kv('home overrides:', existsSync(homeLocal) ? homeLocal : `${homeLocal} ${dim('(missing)')}`),
+        kv('active:', resolvedActiveEnv?.envPath ? resolvedActiveEnv.envPath : dim('(none)')),
+        kv('main:', resolvedMainEnv.envPath),
+      ]),
+      '',
+      sectionTitle('Components'),
+      bullets(componentNames.map((n) => kv(n + ':', componentDirs[n]))),
+      '',
+      sectionTitle('Update'),
+      bullets([kv('cache:', updateCachePath)]),
+      '',
     ].join('\n'),
   });
 }

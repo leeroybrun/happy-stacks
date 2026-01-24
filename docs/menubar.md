@@ -13,6 +13,7 @@ SwiftBar runs a script on an interval and renders its output as native macOS men
   - Tailscale Serve status / URL (if configured)
 - **Quick controls**
   - Start / stop / restart the stack
+  - Restart just the daemon (stack-safe)
   - Install / enable / disable / uninstall autostart
   - Enable / disable Tailscale Serve
 - **Details**
@@ -160,7 +161,6 @@ Controls and settings:
   - “Refresh now (main components)”
   - “Refresh now (all stacks/components)”
   - or “Refresh now (this stack)” from a stack’s Components menu
-- **TTL**: `HAPPY_STACKS_SWIFTBAR_GIT_TTL_SEC` (default `3600` seconds)
 - **TTL**: `HAPPY_STACKS_SWIFTBAR_GIT_TTL_SEC` (default `21600` seconds = 6 hours)
 - **Mode**: `HAPPY_STACKS_SWIFTBAR_GIT_MODE=cached|live` (default `cached`)
 - (Optional) **Background auto-refresh**: `HAPPY_STACKS_SWIFTBAR_GIT_AUTO_REFRESH_SCOPE=main|all|off` (default `main`)

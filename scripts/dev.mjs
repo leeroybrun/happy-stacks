@@ -26,6 +26,8 @@ import { getAccountCountForServerComponent, resolveAutoCopyFromMainEnabled } fro
 import { maybeRunInteractiveStackAuthSetup } from './utils/auth/interactive_stack_auth.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
 import { daemonStartGate, formatDaemonAuthRequiredError } from './utils/auth/daemon_gate.mjs';
+import { cmd, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green } from './utils/ui/ansi.mjs';
 
 /**
  * Dev mode stack:
@@ -182,11 +184,12 @@ async function main() {
 
   if (!restart && serverAlreadyRunning && (!startDaemon || daemonAlreadyRunning) && (!startExpo || expoAlreadyRunning)) {
     console.log(
-      `[local] dev: stack already running (server=${internalServerUrl}` +
-        `${startDaemon ? ` daemon=${daemonAlreadyRunning ? 'running' : 'stopped'}` : ''}` +
-        `${startUi ? ` ui=${expoAlreadyRunning ? 'running' : 'stopped'}` : ''}` +
-        `${startMobile ? ` mobile=${expoAlreadyRunning ? 'running' : 'stopped'}` : ''}` +
-        `)`
+      `${green('✓')} dev: already running ${dim('(')}` +
+        `${dim('server=')}${cyan(internalServerUrl)}` +
+        `${startDaemon ? ` ${dim('daemon=')}${daemonAlreadyRunning ? green('running') : dim('stopped')}` : ''}` +
+        `${startUi ? ` ${dim('ui=')}${expoAlreadyRunning ? green('running') : dim('stopped')}` : ''}` +
+        `${startMobile ? ` ${dim('mobile=')}${expoAlreadyRunning ? green('running') : dim('stopped')}` : ''}` +
+        `${dim(')')}`
     );
     return;
   }
@@ -224,16 +227,16 @@ async function main() {
   });
 
   if (!serverAlreadyRunning || restart) {
-    console.log(`[local] server ready at ${internalServerUrl}`);
+    console.log(`${green('✓')} server: ready at ${cyan(internalServerUrl)}`);
   } else {
-    console.log(`[local] server already running at ${internalServerUrl}`);
+    console.log(`${green('✓')} server: already running at ${cyan(internalServerUrl)}`);
   }
-  console.log(
-    `[local] tip: to run 'happy' from your terminal *against this local server* (and have sessions show up in the UI), use:\n` +
-    `export HAPPY_SERVER_URL=\"${internalServerUrl}\"\n` +
-      `export HAPPY_HOME_DIR=\"${cliHomeDir}\"\n` +
-    `export HAPPY_WEBAPP_URL=\"${publicServerUrl}\"\n`
-  );
+  console.log('');
+  console.log(sectionTitle('Terminal usage'));
+  console.log(dim(`To run ${cyan('happy')} against this stack (and have sessions appear in the UI), export:`));
+  console.log(cmd(`export HAPPY_SERVER_URL="${internalServerUrl}"`));
+  console.log(cmd(`export HAPPY_HOME_DIR="${cliHomeDir}"`));
+  console.log(cmd(`export HAPPY_WEBAPP_URL="${publicServerUrl}"`));
 
   // Reliability before daemon start:
   // - Ensure schema exists (server-light: prisma migrate deploy; happy-server: migrate deploy if tables missing)

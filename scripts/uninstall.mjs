@@ -12,6 +12,9 @@ import { getHappyStacksHomeDir, getRootDir, getStacksStorageRoot } from './utils
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { getCanonicalHomeEnvPath } from './utils/env/config.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
+import { removeSwiftbarPlugins, resolveSwiftbarPluginsDir } from './utils/menubar/swiftbar.mjs';
+import { banner, bullets, cmd, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 
 function resolveWorkspaceDir({ rootDir, homeDir }) {
   // Uninstall should never default to deleting the repo root (getWorkspaceDir() can fall back to cliRootDir).
@@ -21,43 +24,6 @@ function resolveWorkspaceDir({ rootDir, homeDir }) {
   }
   void rootDir;
   return join(homeDir, 'workspace');
-}
-
-function resolveSwiftbarPluginsDir() {
-  // Same logic as extras/swiftbar/install.sh.
-  const s =
-    'DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null)"; if [[ -n "$DIR" && -d "$DIR" ]]; then echo "$DIR"; exit 0; fi; D="$HOME/Library/Application Support/SwiftBar/Plugins"; if [[ -d "$D" ]]; then echo "$D"; exit 0; fi; echo ""';
-  const res = spawnSync('bash', ['-lc', s], { encoding: 'utf-8' });
-  const out = String(res.stdout ?? '').trim();
-  return out || null;
-}
-
-async function removeSwiftbarPluginFiles() {
-  if (process.platform !== 'darwin') {
-    return { ok: true, removed: 0, pluginsDir: null };
-  }
-  const pluginsDir = resolveSwiftbarPluginsDir();
-  if (!pluginsDir) {
-    return { ok: true, removed: 0, pluginsDir: null };
-  }
-
-  let removed = 0;
-  const patterns = ['happy-stacks.*.sh', 'happy-local.*.sh'];
-  for (const pat of patterns) {
-    const res = spawnSync('bash', ['-lc', `rm -f "${pluginsDir}"/${pat} 2>/dev/null || true`], { stdio: 'ignore' });
-    void res;
-    // best-effort count: if directory exists, we can scan remaining files; skip precise counts
-  }
-
-  // Count remaining matches (best-effort).
-  const check = spawnSync('bash', ['-lc', `ls -1 "${pluginsDir}"/happy-stacks.*.sh 2>/dev/null | wc -l | tr -d ' '`], {
-    encoding: 'utf-8',
-  });
-  const remaining = Number(String(check.stdout ?? '').trim());
-  if (Number.isFinite(remaining) && remaining === 0) {
-    removed = 1;
-  }
-  return { ok: true, removed, pluginsDir };
 }
 
 async function main() {
@@ -96,6 +62,15 @@ async function main() {
 
   const dryRun = !yes;
 
+  if (!json) {
+    // eslint-disable-next-line no-console
+    console.log('');
+    // eslint-disable-next-line no-console
+    console.log(banner('uninstall', { subtitle: 'Remove happy-stacks runtime + shims (and optionally workspace/stacks).' }));
+    // eslint-disable-next-line no-console
+    console.log('');
+  }
+
   // 1) Stop/uninstall services best-effort.
   if (!dryRun && (!isSandboxed() || allowGlobal)) {
     try {
@@ -112,10 +87,10 @@ async function main() {
   // 2) Remove SwiftBar plugin files best-effort.
   const menubar =
     isSandboxed() && !allowGlobal
-      ? { ok: true, removed: 0, pluginsDir: null, skipped: 'sandbox' }
+      ? { ok: true, removed: false, pluginsDir: null, skipped: 'sandbox' }
       : dryRun
-        ? { ok: true, removed: 0, pluginsDir: resolveSwiftbarPluginsDir() }
-        : await removeSwiftbarPluginFiles().catch(() => ({ ok: false, removed: 0, pluginsDir: null }));
+        ? { ok: true, removed: false, pluginsDir: resolveSwiftbarPluginsDir() }
+        : await removeSwiftbarPlugins().catch(() => ({ ok: false, removed: false, pluginsDir: null }));
 
   // 3) Remove home-managed runtime + shims + extras + cache + env pointers.
   const canonicalEnv = getCanonicalHomeEnvPath();
@@ -179,13 +154,19 @@ async function main() {
       dryRun,
     },
     text: [
-      dryRun ? '[uninstall] dry run (no changes made)' : '[uninstall] complete',
-      dryRun ? '[uninstall] re-run with --yes to apply removals' : null,
-      `[uninstall] home: ${homeDir}`,
-      `[uninstall] removed: ${removedPaths.length ? removedPaths.join(', ') : '(nothing)'}`,
-      menubar?.pluginsDir ? `[uninstall] SwiftBar plugins dir: ${menubar.pluginsDir}` : null,
-      removeWorkspace ? `[uninstall] workspace removed: ${workspaceDir}` : `[uninstall] workspace kept: ${workspaceDir}`,
-      removeStacks ? `[uninstall] stacks removed: ${getStacksStorageRoot()}` : `[uninstall] stacks kept: ${getStacksStorageRoot()}`,
+      dryRun ? `${yellow('!')} dry run (no changes made)` : `${green('✓')} complete`,
+      dryRun ? `${dim('Re-run with')} ${cmd('happys uninstall --yes')} ${dim('to apply removals.')}` : null,
+      '',
+      sectionTitle('Plan'),
+      bullets([
+        kv('home:', cyan(homeDir)),
+        kv('workspace:', removeWorkspace ? `${cyan(workspaceDir)} ${dim('(will remove)')}` : `${cyan(workspaceDir)} ${dim('(keep)')}`),
+        kv('stacks:', removeStacks ? `${cyan(getStacksStorageRoot())} ${dim('(will remove)')}` : `${cyan(getStacksStorageRoot())} ${dim('(keep)')}`),
+        menubar?.pluginsDir ? kv('swiftbar:', `${menubar.pluginsDir}${menubar?.skipped ? ` ${dim('(skipped)')}` : ''}`) : null,
+      ].filter(Boolean)),
+      '',
+      sectionTitle('Removed'),
+      removedPaths.length ? bullets(removedPaths.map((p) => p)) : dim('(nothing)'),
     ]
       .filter(Boolean)
       .join('\n'),

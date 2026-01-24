@@ -435,7 +435,7 @@ export async function stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir })
 
   try {
     await new Promise((resolve) => {
-      const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], env, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawnProc('daemon', process.execPath, [cliBin, 'daemon', 'stop'], env, { stdio: ['ignore', 'pipe', 'pipe'] });
       proc.on('exit', () => resolve());
     });
   } catch {
@@ -522,7 +522,7 @@ export async function startLocalDaemonWithAuth({
   // Stop any existing daemon for THIS stack home dir.
   try {
     await new Promise((resolve) => {
-      const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawnProc('daemon', process.execPath, [cliBin, 'daemon', 'stop'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
       proc.on('exit', () => resolve());
     });
   } catch {
@@ -534,7 +534,7 @@ export async function startLocalDaemonWithAuth({
     const legacyEnv = { ...daemonEnv, HAPPY_HOME_DIR: join(homedir(), '.happy') };
     try {
       await new Promise((resolve) => {
-        const proc = spawnProc('daemon', cliBin, ['daemon', 'stop'], legacyEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
+        const proc = spawnProc('daemon', process.execPath, [cliBin, 'daemon', 'stop'], legacyEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
         proc.on('exit', () => resolve());
       });
     } catch {
@@ -555,7 +555,7 @@ export async function startLocalDaemonWithAuth({
 
   const startOnce = async () => {
     const exitCode = await new Promise((resolve) => {
-      const proc = spawnProc('daemon', cliBin, ['daemon', 'start'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const proc = spawnProc('daemon', process.execPath, [cliBin, 'daemon', 'start'], daemonEnv, { stdio: ['ignore', 'pipe', 'pipe'] });
       proc.on('exit', (code) => resolve(code ?? 0));
     });
 

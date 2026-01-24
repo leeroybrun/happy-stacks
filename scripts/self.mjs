@@ -13,6 +13,8 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { readJsonIfExists } from './utils/fs/json.mjs';
 import { readPackageJsonVersion } from './utils/fs/package_json.mjs';
+import { banner, bullets, cmd, kv, sectionTitle } from './utils/ui/layout.mjs';
+import { cyan, dim, green, yellow } from './utils/ui/ansi.mjs';
 
 function cachePaths() {
   const home = getHappyStacksHomeDir();
@@ -120,10 +122,19 @@ async function cmdStatus({ rootDir, argv }) {
       update: { cachedLatest: cached?.latest ?? null, latest, checkedAt, updateAvailable },
     },
     text: [
-      `[self] invoker: ${invokerVersion ?? 'unknown'} (${rootDir})`,
-      `[self] runtime: ${runtimeVersion ? runtimeVersion : 'not installed'} (${runtimeDir})`,
-      latest ? `[self] latest:  ${latest}${updateAvailable ? ' (update available)' : ''}` : `[self] latest:  unknown`,
-      checkedAt ? `[self] checked: ${new Date(checkedAt).toISOString()}` : null,
+      '',
+      banner('self', { subtitle: 'Runtime install + self-update.' }),
+      '',
+      sectionTitle('Versions'),
+      bullets([
+        kv('invoker:', invokerVersion ? cyan(invokerVersion) : dim('unknown')),
+        kv('runtime:', runtimeVersion ? cyan(runtimeVersion) : `${yellow('not installed')} ${dim(`(${runtimeDir})`)}`),
+        kv('latest:', latest ? cyan(latest) : dim('unknown')),
+        checkedAt ? kv('checked:', dim(new Date(checkedAt).toISOString())) : null,
+      ].filter(Boolean)),
+      updateAvailable ? `\n${yellow('!')} update available: ${cyan(runtimeVersion || invokerVersion || 'current')} → ${cyan(latest)}` : null,
+      updateAvailable ? `${dim('Run:')} ${cmd('happys self update')}` : null,
+      '',
     ]
       .filter(Boolean)
       .join('\n'),
@@ -189,7 +200,7 @@ async function cmdUpdate({ rootDir, argv }) {
   printResult({
     json,
     data: { ok: true, runtimeDir, version: runtimeVersionAfter ?? null, spec },
-    text: `[self] updated runtime in ${runtimeDir} (${runtimeVersionAfter ?? spec})`,
+    text: `${green('✓')} updated runtime in ${cyan(runtimeDir)} ${dim('(')}${cyan(runtimeVersionAfter ?? spec)}${dim(')')}`,
   });
 }
 
@@ -228,7 +239,11 @@ async function cmdCheck({ rootDir, argv }) {
   printResult({
     json,
     data: { ok: true, current: current || null, latest, updateAvailable },
-    text: latest ? (updateAvailable ? `[self] update available: ${current} -> ${latest}` : `[self] up to date (${current})`) : '[self] unable to check latest version',
+    text: latest
+      ? updateAvailable
+        ? `${yellow('!')} update available: ${cyan(current)} → ${cyan(latest)}\n${dim('Run:')} ${cmd('happys self update')}`
+        : `${green('✓')} up to date ${dim('(')}${cyan(current)}${dim(')')}`
+      : `${yellow('!')} unable to check latest version`,
   });
 }
 
@@ -245,10 +260,12 @@ async function main() {
       json,
       data: { commands: ['status', 'update', 'check'], flags: ['--no-check', '--to=<version>', '--quiet'] },
       text: [
-        '[self] usage:',
-        '  happys self status [--no-check] [--json]',
-        '  happys self update [--to=<version>] [--json]',
-        '  happys self check [--quiet] [--json]',
+        banner('self', { subtitle: 'Runtime install + self-update.' }),
+        '',
+        sectionTitle('usage:'),
+        `  ${cyan('happys self')} status [--no-check] [--json]`,
+        `  ${cyan('happys self')} update [--to=<version>] [--json]`,
+        `  ${cyan('happys self')} check [--quiet] [--json]`,
       ].join('\n'),
     });
     return;

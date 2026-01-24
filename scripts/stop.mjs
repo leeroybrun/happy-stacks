@@ -6,6 +6,8 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { cmd, sectionTitle } from './utils/ui/layout.mjs';
+import { dim, green, yellow } from './utils/ui/ansi.mjs';
 
 function usage() {
   return [
@@ -79,9 +81,11 @@ async function main() {
   if (!yes) {
     // Simple confirm prompt (avoid importing wizard/rl here).
     // eslint-disable-next-line no-console
-    console.log(`[stop] will stop stacks: ${targets.join(', ')}`);
+    console.log('');
+    console.log(sectionTitle('Stop stacks'));
+    console.log(`${yellow('!')} ${dim('will stop:')} ${targets.join(', ')}`);
     // eslint-disable-next-line no-console
-    console.log('[stop] re-run with --yes to proceed');
+    console.log(`${dim('Re-run with')} ${cmd('happys stop --yes')} ${dim('to proceed.')}`);
     process.exit(1);
   }
 
@@ -137,7 +141,7 @@ async function main() {
 
   // eslint-disable-next-line no-console
   console.log(
-    `[stop] done (stopped=${results.length}${skipped.length ? ` skipped=${skipped.length}` : ''}${errors.length ? ` errors=${errors.length}` : ''})`
+    `${green('✓')} done ${dim('(')}stopped=${results.length}${skipped.length ? ` skipped=${skipped.length}` : ''}${errors.length ? ` errors=${errors.length}` : ''}${dim(')')}`
   );
   if (skipped.length) {
     for (const s of skipped) {

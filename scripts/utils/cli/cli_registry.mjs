@@ -332,6 +332,8 @@ export function commandHelpArgs(cmd) {
   return c.helpArgs ?? ['--help'];
 }
 
+import { ansiEnabled, bold, cyan, dim } from '../ui/ansi.mjs';
+
 export function renderHappysRootHelp() {
   const { commands } = getHappysRegistry();
   const visible = commands.filter((c) => !c.hidden);
@@ -349,24 +351,28 @@ export function renderHappysRootHelp() {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const pad = rows.reduce((m, r) => Math.max(m, r.name.length), 0);
-  const commandsLines = rows.map((r) => `  ${r.name.padEnd(pad)}  ${r.desc}`);
+  const commandsLines = rows.map((r) => {
+    const name = ansiEnabled() ? cyan(r.name) : r.name;
+    const desc = ansiEnabled() ? dim(r.desc) : r.desc;
+    return `  ${name.padEnd(pad + (ansiEnabled() ? 9 : 0))}  ${desc}`;
+  });
 
   return [
-    'happys - Happy Stacks CLI',
+    ansiEnabled() ? bold(`${cyan('happys')} — Happy Stacks CLI`) : 'happys - Happy Stacks CLI',
     '',
-    'global flags:',
-    '  --sandbox-dir PATH   Run fully isolated under PATH (no writes to your real ~/.happy-stacks or ~/.happy/stacks)',
+    ansiEnabled() ? bold('global flags:') : 'global flags:',
+    `  ${ansiEnabled() ? cyan('--sandbox-dir') : '--sandbox-dir'} PATH   ${ansiEnabled() ? dim('Run fully isolated under PATH (no writes to your real ~/.happy-stacks or ~/.happy/stacks)') : 'Run fully isolated under PATH (no writes to your real ~/.happy-stacks or ~/.happy/stacks)'}`,
     '',
-    'usage:',
+    ansiEnabled() ? bold('usage:') : 'usage:',
     ...usageLines.map((l) => `  ${l}`),
     '',
-    'stack shorthand:',
+    ansiEnabled() ? bold('stack shorthand:') : 'stack shorthand:',
     '  happys <stack> <command> ...   (equivalent to: happys stack <command> <stack> ...)',
     '',
-    'commands:',
+    ansiEnabled() ? bold('commands:') : 'commands:',
     ...commandsLines,
     '',
-    'help:',
+    ansiEnabled() ? bold('help:') : 'help:',
     '  happys help [command]',
   ].join('\n');
 }

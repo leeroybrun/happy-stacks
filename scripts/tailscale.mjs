@@ -7,6 +7,8 @@ import { getInternalServerUrl } from './utils/server/urls.mjs';
 import { resolveCommandPath } from './utils/proc/commands.mjs';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
+import { banner } from './utils/ui/layout.mjs';
+import { bold, cyan, dim, green } from './utils/ui/ansi.mjs';
 
 /**
  * Manage Tailscale Serve for exposing the local UI/API over HTTPS (secure context).
@@ -359,17 +361,19 @@ async function main() {
       json,
       data: { commands: ['status', 'enable', 'disable', 'reset', 'url'] },
       text: [
-        '[tailscale] usage:',
-        '  happys tailscale status [--json]',
-        '  happys tailscale enable [--json]',
-        '  happys tailscale disable [--json]',
-        '  happys tailscale url [--json]',
+        banner('tailscale', { subtitle: 'Tailscale Serve (HTTPS secure context)' }),
         '',
-        'legacy (cloned repo):',
-        '  pnpm tailscale:status [--json]',
+        bold('usage:'),
+        `  ${cyan('happys tailscale')} status [--json]`,
+        `  ${cyan('happys tailscale')} enable [--json]`,
+        `  ${cyan('happys tailscale')} disable [--json]`,
+        `  ${cyan('happys tailscale')} url [--json]`,
         '',
-        'advanced:',
-        '  node scripts/tailscale.mjs enable --upstream=<url> --path=/ [--json]',
+        bold('legacy (cloned repo):'),
+        `  ${dim('pnpm tailscale:status [--json]')}`,
+        '',
+        bold('advanced:'),
+        `  ${dim('node scripts/tailscale.mjs enable --upstream=<url> --path=/ [--json]')}`,
       ].join('\n'),
     });
     return;
@@ -415,14 +419,16 @@ async function main() {
         printResult({
           json,
           data: { ok: true, httpsUrl: null, enableUrl: res.enableUrl },
-          text: `[local] tailscale serve is not enabled for this tailnet. Opened:\n${res.enableUrl}`,
+          text:
+            `${green('✓')} tailscale serve needs one-time approval in your tailnet.\n` +
+            `${dim('Open:')} ${cyan(res.enableUrl)}`,
         });
         return;
       }
       printResult({
         json,
         data: { ok: true, httpsUrl: res.httpsUrl ?? null },
-        text: res.httpsUrl ? `[local] tailscale serve enabled: ${res.httpsUrl}` : '[local] tailscale serve enabled',
+        text: res.httpsUrl ? `${green('✓')} tailscale serve enabled: ${cyan(res.httpsUrl)}` : `${green('✓')} tailscale serve enabled`,
       });
       return;
     }
@@ -436,7 +442,7 @@ async function main() {
         );
       }
       await tailscaleServeReset();
-      printResult({ json, data: { ok: true }, text: '[local] tailscale serve reset' });
+      printResult({ json, data: { ok: true }, text: `${green('✓')} tailscale serve reset` });
       return;
     }
     default:
