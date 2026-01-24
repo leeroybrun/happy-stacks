@@ -361,6 +361,39 @@ async function withStackEnv({ stackName, fn, extraEnv = {} }) {
     'HAPPY_LOCAL_DAEMON_WAIT_FOR_AUTH',
     'HAPPY_STACKS_AUTH_FLOW',
     'HAPPY_LOCAL_AUTH_FLOW',
+
+    // Safe global defaults that should apply inside stack wrappers unless overridden by the stack env file.
+    // This is important for VM/CI/sandbox environments where users want predictable port ranges without
+    // pinning every stack env explicitly.
+    'HAPPY_STACKS_STACK_PORT_START',
+    'HAPPY_LOCAL_STACK_PORT_START',
+
+    'HAPPY_STACKS_BIND_MODE',
+    'HAPPY_LOCAL_BIND_MODE',
+    'HAPPY_STACKS_EXPO_HOST',
+    'HAPPY_LOCAL_EXPO_HOST',
+
+    // Expo dev-server port strategy (web + dev-client share the same Metro process).
+    'HAPPY_STACKS_EXPO_DEV_PORT',
+    'HAPPY_LOCAL_EXPO_DEV_PORT',
+    'HAPPY_STACKS_EXPO_DEV_PORT_STRATEGY',
+    'HAPPY_LOCAL_EXPO_DEV_PORT_STRATEGY',
+    'HAPPY_STACKS_EXPO_DEV_PORT_BASE',
+    'HAPPY_LOCAL_EXPO_DEV_PORT_BASE',
+    'HAPPY_STACKS_EXPO_DEV_PORT_RANGE',
+    'HAPPY_LOCAL_EXPO_DEV_PORT_RANGE',
+
+    // Back-compat knobs (older names still accepted by metro_ports.mjs).
+    'HAPPY_STACKS_UI_DEV_PORT',
+    'HAPPY_LOCAL_UI_DEV_PORT',
+    'HAPPY_STACKS_UI_DEV_PORT_BASE',
+    'HAPPY_LOCAL_UI_DEV_PORT_BASE',
+    'HAPPY_STACKS_UI_DEV_PORT_RANGE',
+    'HAPPY_LOCAL_UI_DEV_PORT_RANGE',
+    'HAPPY_STACKS_MOBILE_DEV_PORT',
+    'HAPPY_LOCAL_MOBILE_DEV_PORT',
+    'HAPPY_STACKS_MOBILE_PORT',
+    'HAPPY_LOCAL_MOBILE_PORT',
   ]);
   for (const k of Object.keys(cleaned)) {
     if (keepPrefixed.has(k)) continue;
@@ -2190,7 +2223,11 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
         const quietAuthFlow = verbosity === 0;
         const steps = createStepPrinter({ enabled: quietAuthFlow });
 
-        const serverPort = await pickNextFreeTcpPort(3005, { host: '127.0.0.1' });
+        // Pick a temporary server port for the guided login flow.
+        // Respect HAPPY_STACKS_STACK_PORT_START so VM/CI environments can avoid host port collisions
+        // without pinning stack env ports explicitly.
+        const serverPortStart = getDefaultPortStart(name);
+        const serverPort = await pickNextFreeTcpPort(serverPortStart, { host: '127.0.0.1' });
         const internalServerUrl = `http://127.0.0.1:${serverPort}`;
         const publicServerUrl = await preferStackLocalhostUrl(`http://localhost:${serverPort}`, { stackName: name });
 
