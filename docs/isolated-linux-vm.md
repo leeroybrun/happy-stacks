@@ -12,28 +12,74 @@ This avoids Docker/container UX issues (browser opening, Expo networking, file w
 brew install lima
 ```
 
-### 2) Create a VM
+### 2) Create + configure a VM (recommended script)
+
+On your macOS host (this repo):
+
+```bash
+./scripts/provision/macos-lima-happy-vm.sh happy-test
+```
+
+This creates the VM if needed and configures **localhost port forwarding** for the port ranges used by our VM defaults.
+(This is important because the Expo web app uses WebCrypto and needs a secure context like `http://localhost`.)
+
+### 2b) Manual setup (if you prefer)
 
 ```bash
 limactl create --name happy-pr --tty=false template://ubuntu-24.04
+limactl start happy-pr
+```
+
+### 2c) Host access (ports + browser URLs)
+
+When you want to open Happy/Expo URLs in your macOS browser, **use localhost port forwarding**.
+
+Why this matters: the Expo web app uses WebCrypto (`crypto.subtle`) via `expo-crypto` for things like key derivation.
+Browsers only expose WebCrypto in **secure contexts**:
+- `https://...`
+- `http://localhost`, `http://127.0.0.1`, and `http://*.localhost`
+
+If you open the UI via a VM LAN IP like `http://192.168.x.y:PORT`, the browser treats it as **insecure** and you can hit errors like:
+`TypeError: Cannot read properties of undefined (reading 'digest')`.
+
+#### Configure port forwarding (recommended)
+
+Edit the instance config on the **macOS host**:
+
+```bash
+limactl stop happy-pr || true
+open -a TextEdit ~/.lima/happy-pr/lima.yaml
+```
+
+Add a `portForwards` section to forward the Happy Stacks VM port ranges to your host `localhost`:
+
+```yaml
+portForwards:
+  # Stack/server ports (default VM range from our provision script)
+  - guestPortRange: [13000, 13999]
+    hostPortRange:  [13000, 13999]
+
+  # Expo dev-server (web) ports (default VM range from our provision script)
+  - guestPortRange: [18000, 19099]
+    hostPortRange:  [18000, 19099]
+```
+
+Then restart the VM:
+
+```bash
+limactl start happy-pr
+```
+
+#### Optional: IP-based access (only when you need LAN)
+
+If you explicitly need to access guest services by VM IP (e.g. for testing from another device), you can enable `vzNAT`:
+
+```bash
+limactl stop happy-pr || true
 limactl start happy-pr --network vzNAT
 ```
 
-### 2b) Host access (ports + browser URLs)
-
-When you want to open Happy/Expo URLs in your macOS browser, the simplest approach is:
-
-- Start the VM with a host-reachable network: `--network vzNAT`
-- Run Happy Stacks with `--bind=lan` so it prints LAN-reachable URLs (VM IP)
-
-Inside the VM, you can see your IP with:
-
-```bash
-ip -4 addr show lima0 || true
-hostname -I || true
-```
-
-Note: Some environments disable localhost port forwarding; using `vzNAT` avoids relying on forwarding.
+Note: IP-based URLs (like `http://192.168...`) may break web-only crypto flows unless you use HTTPS or a browser dev override.
 
 ### 3) Provision the VM (Node + build deps)
 
@@ -56,7 +102,7 @@ export NVM_DIR="$HOME/.nvm"
 If your goal is to **work on changes** (not just review a PR), you can run the dev profile:
 
 ```bash
-npx --yes happy-stacks@latest setup --profile=dev
+npx --yes happy-stacks@latest setup --profile=dev --bind=loopback
 ```
 
 Notes:
@@ -73,7 +119,7 @@ npx --yes happy-stacks@latest review-pr \
   --no-mobile \
   --keep-sandbox \
   --verbose \
-  -- --bind=lan
+  -- --bind=loopback
 ```
 
 Notes:

@@ -118,6 +118,10 @@ fi
 
 cat <<'EOF'
 [provision] tip: If you want to open Happy/Expo URLs in your macOS browser:
-- Start the VM with a host-reachable network (recommended): `limactl start <name> --network vzNAT`
-- Run happy-stacks commands with: `--bind=lan` (prints LAN-reachable URLs)
+- Prefer localhost port forwarding (secure context) instead of opening `http://<vm-ip>:<port>`
+  (Expo web uses WebCrypto and may fail on insecure origins).
+- On the macOS host, add `portForwards` for the VM port ranges in `~/.lima/<name>/lima.yaml`,
+  then restart the VM.
+- Then run happy-stacks with: `--bind=loopback` (or omit `--bind`) and open the `http://localhost/...`
+  or `http://*.localhost/...` URLs.
 EOF
