@@ -7,10 +7,31 @@ import { pathExists } from './utils/fs/fs.mjs';
 import { run } from './utils/proc/proc.mjs';
 import { detectPackageManagerCmd, pickFirstScript, readPackageJsonScripts } from './utils/proc/package_scripts.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 const EXTRA_COMPONENTS = ['stacks'];
 const VALID_COMPONENTS = [...DEFAULT_COMPONENTS, ...EXTRA_COMPONENTS];
+
+async function collectTestFiles(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = [];
+  for (const e of entries) {
+    // Avoid dot-dirs and dot-files (e.g. .DS_Store).
+    if (e.name.startsWith('.')) continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) {
+      files.push(...(await collectTestFiles(p)));
+      continue;
+    }
+    if (!e.isFile()) continue;
+    if (!e.name.endsWith('.test.mjs')) continue;
+    files.push(p);
+  }
+  files.sort();
+  return files;
+}
 
 function pickTestScript(scripts) {
   const candidates = [
@@ -86,8 +107,15 @@ async function main() {
       try {
         // eslint-disable-next-line no-console
         console.log('[test] stacks: running node --test (happy-stacks unit tests)');
-        // Restrict to explicit *.test.mjs files to avoid accidentally executing scripts/test.mjs.
-        await run('sh', ['-lc', 'node --test "scripts/**/*.test.mjs"'], { cwd: rootDir, env: process.env });
+        // Note: do not rely on shell glob expansion here.
+        // Node 20 does not expand globs for `--test`, and bash/sh won't expand globs inside quotes.
+        // Enumerate files ourselves so this works reliably in CI.
+        const scriptsDir = join(rootDir, 'scripts');
+        const testFiles = await collectTestFiles(scriptsDir);
+        if (testFiles.length === 0) {
+          throw new Error(`[test] stacks: no test files found under ${scriptsDir}`);
+        }
+        await run(process.execPath, ['--test', ...testFiles], { cwd: rootDir, env: process.env });
         results.push({ component, ok: true, skipped: false, dir: rootDir, pm: 'node', script: '--test' });
       } catch (e) {
         results.push({ component, ok: false, skipped: false, dir: rootDir, pm: 'node', script: '--test', error: String(e?.message ?? e) });
