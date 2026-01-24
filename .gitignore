@@ -32,3 +32,4 @@ env.local
 /.agent-diffs
 /.cache
 /.home
+/docs/commit-audits
