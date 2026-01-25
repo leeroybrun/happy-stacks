@@ -3896,11 +3896,65 @@ async function main() {
     return;
   }
   if (cmd === 'happy') {
-    const args = passthrough[0] === '--' ? passthrough.slice(1) : passthrough;
+    // Allow stack-scoped CLI identity selection:
+    // - `happys stack happy <name> --identity=account-a -- <happy-cli args...>`
+    // - (no passthrough args) `happys stack happy <name> --identity=account-a`
+    //
+    // Implementation detail: we set HAPPY_HOME_DIR (highest precedence) so anything that uses
+    // the CLI home dir (credentials, daemon control, logs, etc.) uses the selected identity.
+    const sepIdx = passthrough.indexOf('--');
+    const wrapperArgs = sepIdx === -1 ? passthrough : passthrough.slice(0, sepIdx);
+    const forwardedArgsRaw = sepIdx === -1 ? passthrough : passthrough.slice(sepIdx + 1);
+
+    // If there is no explicit `--`, treat `--identity=...` tokens as wrapper flags (since there are no
+    // unambiguous happy-cli args to separate).
+    const { kv } = parseArgs(wrapperArgs);
+    const identityRaw = (kv.get('--identity') ?? '').toString().trim();
+    const identity = identityRaw ? parseCliIdentityOrThrow(identityRaw) : null;
+
+    const forwardedArgs =
+      sepIdx === -1
+        ? forwardedArgsRaw.filter((a) => !(identity && typeof a === 'string' && a.trim().startsWith('--identity=')))
+        : forwardedArgsRaw;
+
     await withStackEnv({
       stackName,
       fn: async ({ env }) => {
-        await run(process.execPath, [join(rootDir, 'scripts', 'happy.mjs'), ...args], { cwd: rootDir, env });
+        // NOTE: resolve cli home using the *stack env* we just loaded, not the outer process env.
+        // If identity is set, prefer our explicit HAPPY_HOME_DIR override.
+        const baseCliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ??
+          env.HAPPY_LOCAL_CLI_HOME_DIR ??
+          join(resolveStackEnvPath(stackName).baseDir, 'cli')).toString();
+        const cliHomeDirForIdentity = identity
+          ? resolveCliHomeDirForIdentity({ cliHomeDir: baseCliHomeDir, identity })
+          : baseCliHomeDir;
+        const envForHappy = identity
+          ? {
+              ...env,
+              HAPPY_STACKS_CLI_IDENTITY: identity,
+              HAPPY_LOCAL_CLI_IDENTITY: identity,
+              // Highest-precedence signal for happy-cli: identity-scoped home dir.
+              HAPPY_HOME_DIR: cliHomeDirForIdentity,
+              // Keep stack helpers consistent too (some scripts use *_CLI_HOME_DIR).
+              HAPPY_STACKS_CLI_HOME_DIR: cliHomeDirForIdentity,
+              HAPPY_LOCAL_CLI_HOME_DIR: cliHomeDirForIdentity,
+            }
+          : env;
+
+        // Passthrough: preserve happy-cli output and exit code; avoid wrapper stack traces.
+        const child = spawn(process.execPath, [join(rootDir, 'scripts', 'happy.mjs'), ...forwardedArgs], {
+          cwd: rootDir,
+          env: envForHappy,
+          stdio: 'inherit',
+          shell: false,
+        });
+
+        const exitCode = await new Promise((resolvePromise) => {
+          child.on('error', () => resolvePromise(1));
+          child.on('exit', (code) => resolvePromise(code ?? 1));
+        });
+
+        process.exit(exitCode);
       },
     });
     return;
@@ -4129,6 +4183,10 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('[stack] failed:', err);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error('[stack] failed:', message);
+  if (process.env.DEBUG && err instanceof Error && err.stack) {
+    console.error(err.stack);
+  }
   process.exit(1);
 });

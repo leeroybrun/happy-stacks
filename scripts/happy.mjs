@@ -1,5 +1,5 @@
 import './utils/env/env.mjs';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
@@ -43,7 +43,9 @@ async function main() {
   const cliDir = getComponentDir(rootDir, 'happy-cli');
   const entrypoint = join(cliDir, 'dist', 'index.mjs');
   if (!existsSync(entrypoint)) {
-    throw new Error(`[happy] missing happy-cli build at: ${entrypoint}\nRun: happys bootstrap`);
+    console.error(`[happy] missing happy-cli build at: ${entrypoint}`);
+    console.error('Run: happys bootstrap');
+    process.exit(1);
   }
 
   const env = { ...process.env };
@@ -51,14 +53,25 @@ async function main() {
   env.HAPPY_SERVER_URL = env.HAPPY_SERVER_URL || internalServerUrl;
   env.HAPPY_WEBAPP_URL = env.HAPPY_WEBAPP_URL || publicServerUrl;
 
-  execFileSync(process.execPath, ['--no-warnings', '--no-deprecation', entrypoint, ...argv], {
+  const res = spawnSync(process.execPath, ['--no-warnings', '--no-deprecation', entrypoint, ...argv], {
     stdio: 'inherit',
     env,
   });
+
+  if (res.error) {
+    const msg = res.error instanceof Error ? res.error.message : String(res.error);
+    console.error(`[happy] failed to run happy-cli: ${msg}`);
+    process.exit(1);
+  }
+
+  process.exit(res.status ?? 1);
 }
 
 main().catch((err) => {
-  console.error('[happy] failed:', err);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error('[happy] failed:', message);
+  if (process.env.DEBUG && err instanceof Error && err.stack) {
+    console.error(err.stack);
+  }
   process.exit(1);
 });
-

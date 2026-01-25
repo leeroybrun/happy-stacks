@@ -38,6 +38,21 @@ async function writeStubHappyCli({ root, message }) {
   return cliDir;
 }
 
+async function writeFailingStubHappyCli({ root, errorMessage }) {
+  const cliDir = join(root, 'happy-cli');
+  await mkdir(join(cliDir, 'dist'), { recursive: true });
+  await writeFile(
+    join(cliDir, 'dist', 'index.mjs'),
+    [
+      `console.error(${JSON.stringify(errorMessage)});`,
+      `process.exit(1);`,
+      '',
+    ].join('\n'),
+    'utf-8'
+  );
+  return cliDir;
+}
+
 test('happys stack happy <name> runs happy-cli under that stack env', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
@@ -79,6 +94,53 @@ test('happys stack happy <name> runs happy-cli under that stack env', async () =
   assert.equal(out.stack, stackName);
   assert.ok(String(out.envFile).endsWith(`/${stackName}/env`), `expected envFile to end with /${stackName}/env, got: ${out.envFile}`);
   assert.equal(out.homeDir, stackCliHome);
+  assert.equal(out.serverUrl, 'http://127.0.0.1:3999');
+});
+
+test('happys stack happy <name> --identity=<name> uses identity-scoped HAPPY_HOME_DIR', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-happy-identity-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp-test';
+  const identity = 'account-a';
+
+  const stubRoot = join(tmp, 'stub-components');
+  const cliDir = await writeStubHappyCli({ root: stubRoot, message: 'identity' });
+
+  const stackCliHome = join(storageDir, stackName, 'cli');
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await writeFile(
+    envPath,
+    [
+      `HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI=${cliDir}`,
+      `HAPPY_STACKS_CLI_HOME_DIR=${stackCliHome}`,
+      `HAPPY_STACKS_SERVER_PORT=3999`,
+      '',
+    ].join('\n'),
+    'utf-8'
+  );
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+    HAPPY_STACKS_CLI_ROOT_DISABLE: '1',
+  };
+
+  const res = await runNode(
+    [join(rootDir, 'bin', 'happys.mjs'), 'stack', 'happy', stackName, `--identity=${identity}`],
+    { cwd: rootDir, env: baseEnv }
+  );
+  assert.equal(res.code, 0, `expected exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+
+  const out = JSON.parse(res.stdout.trim());
+  assert.equal(out.message, 'identity');
+  assert.equal(out.stack, stackName);
+  assert.equal(out.homeDir, join(storageDir, stackName, 'cli-identities', identity));
   assert.equal(out.serverUrl, 'http://127.0.0.1:3999');
 });
 
@@ -124,3 +186,46 @@ test('happys <stack> happy ... shorthand runs happy-cli under that stack env', a
   assert.equal(out.serverUrl, 'http://127.0.0.1:4101');
 });
 
+test('happys stack happy <name> does not print wrapper stack traces on happy-cli failure', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-happy-fail-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp-test';
+
+  const stubRoot = join(tmp, 'stub-components');
+  const cliDir = await writeFailingStubHappyCli({ root: stubRoot, errorMessage: 'stub failure' });
+
+  const stackCliHome = join(storageDir, stackName, 'cli');
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await writeFile(
+    envPath,
+    [
+      `HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI=${cliDir}`,
+      `HAPPY_STACKS_CLI_HOME_DIR=${stackCliHome}`,
+      `HAPPY_STACKS_SERVER_PORT=3999`,
+      '',
+    ].join('\n'),
+    'utf-8'
+  );
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+    HAPPY_STACKS_CLI_ROOT_DISABLE: '1',
+  };
+
+  const res = await runNode([join(rootDir, 'bin', 'happys.mjs'), 'stack', 'happy', stackName, 'attach', 'abc'], {
+    cwd: rootDir,
+    env: baseEnv,
+  });
+  assert.equal(res.code, 1, `expected exit 1, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+  assert.ok(res.stderr.includes('stub failure'), `expected stderr to include stub failure, got:\n${res.stderr}`);
+  assert.ok(!res.stderr.includes('[happy] failed:'), `expected no [happy] failed stack trace, got:\n${res.stderr}`);
+  assert.ok(!res.stderr.includes('[stack] failed:'), `expected no [stack] failed stack trace, got:\n${res.stderr}`);
+  assert.ok(!res.stderr.includes('node:internal'), `expected no node:internal stack trace, got:\n${res.stderr}`);
+});
