@@ -20,6 +20,7 @@ import { ensureDir } from './utils/fs/ops.mjs';
 import { copyFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { runCapture } from './utils/proc/proc.mjs';
+import { withDetachedWorktree } from './utils/review/detached_worktree.mjs';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 const VALID_COMPONENTS = DEFAULT_COMPONENTS;
@@ -225,32 +226,6 @@ async function mergeBase({ cwd, a, b, env }) {
 
 async function listCommitsBetween({ cwd, base, head, env }) {
   return await gitLines({ cwd, env, args: ['rev-list', '--reverse', `${base}..${head}`] });
-}
-
-async function withDetachedWorktree({ repoDir, headCommit, label, env }, fn) {
-  const root = (await runCapture('git', ['rev-parse', '--show-toplevel'], { cwd: repoDir, env })).toString().trim();
-  if (!root) throw new Error('[review] failed to resolve git toplevel');
-
-  const safeLabel = String(label ?? 'worktree')
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  const short = String(headCommit).slice(0, 12);
-  const dir = join(root, '.project', 'review-worktrees', `${safeLabel}-${short}`);
-
-  await ensureDir(join(root, '.project', 'review-worktrees'));
-
-  try {
-    await runCapture('git', ['worktree', 'add', '--detach', dir, headCommit], { cwd: repoDir, env });
-    return await fn(dir);
-  } finally {
-    try {
-      await runCapture('git', ['worktree', 'remove', '--force', dir], { cwd: repoDir, env });
-      await runCapture('git', ['worktree', 'prune'], { cwd: repoDir, env });
-    } catch {
-      // best-effort cleanup; leave an orphaned worktree if needed
-    }
-  }
 }
 
 async function pickCoderabbitBaseCommitForMaxFiles({ cwd, baseRef, maxFiles, env }) {
