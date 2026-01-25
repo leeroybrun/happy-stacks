@@ -13,6 +13,8 @@ import { runWithConcurrencyLimit } from './utils/proc/parallel.mjs';
 import { runCodeRabbitReview } from './utils/review/runners/coderabbit.mjs';
 import { extractCodexReviewFromJsonl, runCodexReview } from './utils/review/runners/codex.mjs';
 import { formatTriageMarkdown, parseCodeRabbitPlainOutput, parseCodexReviewText } from './utils/review/findings.mjs';
+import { runSlicedJobs } from './utils/review/sliced_runner.mjs';
+import { seedCodeRabbitHomeFromRealHome } from './utils/review/tool_home_seed.mjs';
 import { join } from 'node:path';
 import { ensureDir } from './utils/fs/ops.mjs';
 import { copyFile, writeFile } from 'node:fs/promises';
@@ -88,6 +90,16 @@ function tailLines(text, n) {
     .join('\n')
     .trimEnd();
   return lines;
+}
+
+function detectCodeRabbitAuthError({ stdout, stderr }) {
+  const combined = `${stdout ?? ''}\n${stderr ?? ''}`;
+  return combined.includes('Authentication required') && combined.includes("coderabbit auth login");
+}
+
+function detectCodexUsageLimit({ stdout, stderr }) {
+  const combined = `${stdout ?? ''}\n${stderr ?? ''}`.toLowerCase();
+  return combined.includes('usage limit') || combined.includes('http 429') || combined.includes('status code: 429');
 }
 
 function printReviewOperatorGuidance() {
@@ -363,6 +375,18 @@ async function main() {
       process.env[coderabbitHomeKey] = join(rootDir, '.project', 'coderabbit-home');
     }
     await ensureDir(process.env[coderabbitHomeKey]);
+
+    // Seed CodeRabbit auth/config into the isolated home dir so review runs can be non-interactive.
+    // We never print or inspect auth contents.
+    try {
+      const realHome = (process.env.HOME ?? '').toString().trim();
+      const overrideHome = (process.env[coderabbitHomeKey] ?? '').toString().trim();
+      if (realHome && overrideHome && realHome !== overrideHome) {
+        await seedCodeRabbitHomeFromRealHome({ realHomeDir: realHome, isolatedHomeDir: overrideHome });
+      }
+    } catch {
+      // ignore (coderabbit will surface auth issues if seeding fails)
+    }
   }
 
   if (reviewers.includes('codex')) {
@@ -445,13 +469,16 @@ async function main() {
       });
 
       const maxFiles = Number.isFinite(chunkMaxFiles) && chunkMaxFiles > 0 ? chunkMaxFiles : 300;
+      const sliceConcurrency = Math.max(1, Math.floor(limit / Math.max(1, reviewers.length)));
       const wantChunksCoderabbit = coderabbitChunksOverride ?? globalChunks;
       const wantChunksCodex = codexChunksOverride ?? globalChunks;
       const effectiveChunking = chunkingMode === 'auto' ? (monorepo ? 'head-slice' : 'commit-window') : chunkingMode;
 
       if (monorepo && stream) {
         // eslint-disable-next-line no-console
-        console.log(`[review] monorepo detected at ${repoDir}; running a single unified review (chunking=${effectiveChunking}).`);
+        console.log(
+          `[review] monorepo detected at ${repoDir}; running a single unified review (chunking=${effectiveChunking}, concurrency=${sliceConcurrency}).`
+        );
       }
 
       const perReviewer = await Promise.all(
@@ -470,49 +497,58 @@ async function main() {
               const ops = await getChangedOps({ cwd: repoDir, baseRef: baseCommit, headRef: headCommit, env: process.env });
               const slices = planPathSlices({ changedPaths: Array.from(ops.all), maxFiles });
 
-              const sliceResults = [];
-              for (let i = 0; i < slices.length; i += 1) {
-                const slice = slices[i];
-                const logFile = join(runDir, 'raw', `coderabbit-slice-${i + 1}-of-${slices.length}-${sanitizeLabel(slice.label)}.log`);
-                // eslint-disable-next-line no-await-in-loop
-                const rr = await withDetachedWorktree(
-                  { repoDir, headCommit: baseCommit, label: `coderabbit-${i + 1}-of-${slices.length}`, env: process.env },
-                  async (worktreeDir) => {
-                    const { baseSliceCommit } = await createHeadSliceCommits({
-                      cwd: worktreeDir,
-                      env: process.env,
-                      baseRef: baseCommit,
-                      headCommit,
-                      ops,
-                      slicePaths: slice.paths,
-                      label: slice.label.replace(/\/+$/g, ''),
-                    });
-                    return await runCodeRabbitReview({
-                      repoDir: worktreeDir,
-                      baseRef: null,
-                      baseCommit: baseSliceCommit,
-                      env: process.env,
-                      type: coderabbitType,
-                      configFiles: coderabbitConfigFiles,
-                      streamLabel: stream ? `monorepo:coderabbit:${i + 1}/${slices.length}` : undefined,
-                      teeFile: logFile,
-                      teeLabel: `monorepo:coderabbit:${i + 1}/${slices.length}`,
-                    });
-                  }
-                );
-                sliceResults.push({
-                  index: i + 1,
-                  of: slices.length,
-                  slice: slice.label,
-                  fileCount: slice.paths.length,
-                  logFile,
-                  ok: Boolean(rr.ok),
-                  exitCode: rr.exitCode,
-                  signal: rr.signal,
-                  durationMs: rr.durationMs,
-                  stdout: rr.stdout ?? '',
-                  stderr: rr.stderr ?? '',
-                });
+              const sliceItems = slices.map((slice, i) => ({ slice, index: i + 1, of: slices.length }));
+              const sliceResults = await runSlicedJobs({
+                items: sliceItems,
+                limit: sliceConcurrency,
+                run: async ({ slice, index, of }) => {
+                  const logFile = join(runDir, 'raw', `coderabbit-slice-${index}-of-${of}-${sanitizeLabel(slice.label)}.log`);
+                  const rr = await withDetachedWorktree(
+                    { repoDir, headCommit: baseCommit, label: `coderabbit-${index}-of-${of}`, env: process.env },
+                    async (worktreeDir) => {
+                      const { baseSliceCommit } = await createHeadSliceCommits({
+                        cwd: worktreeDir,
+                        env: process.env,
+                        baseRef: baseCommit,
+                        headCommit,
+                        ops,
+                        slicePaths: slice.paths,
+                        label: slice.label.replace(/\/+$/g, ''),
+                      });
+                      return await runCodeRabbitReview({
+                        repoDir: worktreeDir,
+                        baseRef: null,
+                        baseCommit: baseSliceCommit,
+                        env: process.env,
+                        type: coderabbitType,
+                        configFiles: coderabbitConfigFiles,
+                        streamLabel: stream ? `monorepo:coderabbit:${index}/${of}` : undefined,
+                        teeFile: logFile,
+                        teeLabel: `monorepo:coderabbit:${index}/${of}`,
+                      });
+                    }
+                  );
+                  return {
+                    index,
+                    of,
+                    slice: slice.label,
+                    fileCount: slice.paths.length,
+                    logFile,
+                    ok: Boolean(rr.ok),
+                    exitCode: rr.exitCode,
+                    signal: rr.signal,
+                    durationMs: rr.durationMs,
+                    stdout: rr.stdout ?? '',
+                    stderr: rr.stderr ?? '',
+                  };
+                },
+                shouldAbortEarly: (r) => detectCodeRabbitAuthError({ stdout: r?.stdout, stderr: r?.stderr }),
+              });
+
+              if (sliceResults.length === 1 && detectCodeRabbitAuthError(sliceResults[0])) {
+                const msg = `[review] coderabbit auth required: run 'coderabbit auth login' in an interactive session, then re-run this review.`;
+                // eslint-disable-next-line no-console
+                console.error(msg);
               }
 
               const okAll = sliceResults.every((r) => r.ok);
@@ -658,51 +694,64 @@ async function main() {
               const ops = await getChangedOps({ cwd: repoDir, baseRef: baseCommit, headRef: headCommit, env: process.env });
               const slices = planPathSlices({ changedPaths: Array.from(ops.all), maxFiles });
 
-              const sliceResults = [];
-              for (let i = 0; i < slices.length; i += 1) {
-                const slice = slices[i];
-                const logFile = join(runDir, 'raw', `codex-slice-${i + 1}-of-${slices.length}-${sanitizeLabel(slice.label)}.log`);
-                // eslint-disable-next-line no-await-in-loop
-                const rr = await withDetachedWorktree(
-                  { repoDir, headCommit: baseCommit, label: `codex-${i + 1}-of-${slices.length}`, env: process.env },
-                  async (worktreeDir) => {
-                    const { baseSliceCommit } = await createHeadSliceCommits({
-                      cwd: worktreeDir,
-                      env: process.env,
-                      baseRef: baseCommit,
-                      headCommit,
-                      ops,
-                      slicePaths: slice.paths,
-                      label: slice.label.replace(/\/+$/g, ''),
-                    });
-                    const prompt = buildCodexMonorepoSlicePrompt({ sliceLabel: slice.label, baseCommit: baseSliceCommit, baseRef: base.baseRef });
-                    return await runCodexReview({
-                      repoDir: worktreeDir,
-                      baseRef: null,
-                      env: process.env,
-                      jsonMode,
-                      prompt,
-                      streamLabel: stream && !jsonMode ? `monorepo:codex:${i + 1}/${slices.length}` : undefined,
-                      teeFile: logFile,
-                      teeLabel: `monorepo:codex:${i + 1}/${slices.length}`,
-                    });
-                  }
-                );
-                const extracted = jsonMode ? extractCodexReviewFromJsonl(rr.stdout ?? '') : null;
-                sliceResults.push({
-                  index: i + 1,
-                  of: slices.length,
-                  slice: slice.label,
-                  fileCount: slice.paths.length,
-                  logFile,
-                  ok: Boolean(rr.ok),
-                  exitCode: rr.exitCode,
-                  signal: rr.signal,
-                  durationMs: rr.durationMs,
-                  stdout: rr.stdout ?? '',
-                  stderr: rr.stderr ?? '',
-                  review_output: extracted,
-                });
+              const sliceItems = slices.map((slice, i) => ({ slice, index: i + 1, of: slices.length }));
+              const sliceResults = await runSlicedJobs({
+                items: sliceItems,
+                limit: sliceConcurrency,
+                run: async ({ slice, index, of }) => {
+                  const logFile = join(runDir, 'raw', `codex-slice-${index}-of-${of}-${sanitizeLabel(slice.label)}.log`);
+                  const rr = await withDetachedWorktree(
+                    { repoDir, headCommit: baseCommit, label: `codex-${index}-of-${of}`, env: process.env },
+                    async (worktreeDir) => {
+                      const { baseSliceCommit } = await createHeadSliceCommits({
+                        cwd: worktreeDir,
+                        env: process.env,
+                        baseRef: baseCommit,
+                        headCommit,
+                        ops,
+                        slicePaths: slice.paths,
+                        label: slice.label.replace(/\/+$/g, ''),
+                      });
+                      const prompt = buildCodexMonorepoSlicePrompt({
+                        sliceLabel: slice.label,
+                        baseCommit: baseSliceCommit,
+                        baseRef: base.baseRef,
+                      });
+                      return await runCodexReview({
+                        repoDir: worktreeDir,
+                        baseRef: null,
+                        env: process.env,
+                        jsonMode,
+                        prompt,
+                        streamLabel: stream && !jsonMode ? `monorepo:codex:${index}/${of}` : undefined,
+                        teeFile: logFile,
+                        teeLabel: `monorepo:codex:${index}/${of}`,
+                      });
+                    }
+                  );
+                  const extracted = jsonMode ? extractCodexReviewFromJsonl(rr.stdout ?? '') : null;
+                  return {
+                    index,
+                    of,
+                    slice: slice.label,
+                    fileCount: slice.paths.length,
+                    logFile,
+                    ok: Boolean(rr.ok),
+                    exitCode: rr.exitCode,
+                    signal: rr.signal,
+                    durationMs: rr.durationMs,
+                    stdout: rr.stdout ?? '',
+                    stderr: rr.stderr ?? '',
+                    review_output: extracted,
+                  };
+                },
+                shouldAbortEarly: (r) => detectCodexUsageLimit({ stdout: r?.stdout, stderr: r?.stderr }),
+              });
+
+              if (sliceResults.length === 1 && detectCodexUsageLimit(sliceResults[0])) {
+                const msg = `[review] codex usage limit detected; resolve Codex credits/limits, then re-run this review.`;
+                // eslint-disable-next-line no-console
+                console.error(msg);
               }
 
               const okAll = sliceResults.every((r) => r.ok);
