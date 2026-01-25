@@ -18,6 +18,14 @@ function runNode(args, { cwd, env }) {
   });
 }
 
+async function writeDummyAuth({ cliHomeDir }) {
+  // For these tests, we don't care about the auth format—only that credentials exist.
+  // Happy Stacks will short-circuit daemon start when access.key is missing.
+  await mkdir(cliHomeDir, { recursive: true });
+  await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
+  await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
+}
+
 async function writeStubHappyCli({ cliDir }) {
   await mkdir(join(cliDir, 'bin'), { recursive: true });
   await mkdir(join(cliDir, 'dist'), { recursive: true });
@@ -107,6 +115,7 @@ test('happys stack daemon <name> restart restarts only the daemon', async () => 
   const cliDir = await writeStubHappyCli({ cliDir: join(tmp, 'stub-happy-cli') });
   const stackCliHome = join(storageDir, stackName, 'cli');
   await mkdir(stackCliHome, { recursive: true });
+  await writeDummyAuth({ cliHomeDir: stackCliHome });
 
   const envPath = join(storageDir, stackName, 'env');
   await mkdir(dirname(envPath), { recursive: true });
@@ -159,6 +168,194 @@ test('happys stack daemon <name> restart restarts only the daemon', async () => 
 
   // Cleanup: stop the spawned background daemon process (best-effort via our stub).
   await runNode([join(rootDir, 'bin', 'happys.mjs'), 'stack', 'daemon', stackName, 'stop', '--json'], { cwd: rootDir, env: baseEnv });
+  await rm(tmp, { recursive: true, force: true });
+});
+
+test('happys stack <name> daemon start works (stack name first)', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-daemon-name-first-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp-test';
+
+  const cliDir = await writeStubHappyCli({ cliDir: join(tmp, 'stub-happy-cli') });
+  const stackCliHome = join(storageDir, stackName, 'cli');
+  await mkdir(stackCliHome, { recursive: true });
+  await writeDummyAuth({ cliHomeDir: stackCliHome });
+
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await writeFile(
+    envPath,
+    [
+      `HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI=${cliDir}`,
+      `HAPPY_STACKS_CLI_HOME_DIR=${stackCliHome}`,
+      `HAPPY_STACKS_SERVER_PORT=4101`,
+      '',
+    ].join('\n'),
+    'utf-8'
+  );
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+    HAPPY_STACKS_CLI_ROOT_DISABLE: '1',
+  };
+
+  const startRes = await runNode([join(rootDir, 'bin', 'happys.mjs'), 'stack', stackName, 'daemon', 'start', '--json'], {
+    cwd: rootDir,
+    env: baseEnv,
+  });
+  assert.equal(
+    startRes.code,
+    0,
+    `expected start exit 0, got ${startRes.code}\nstdout:\n${startRes.stdout}\nstderr:\n${startRes.stderr}`
+  );
+  assert.ok(!startRes.stdout.includes('[stack] unknown command'), `unexpected unknown command output\n${startRes.stdout}`);
+
+  const logPath = join(stackCliHome, 'stub-daemon.log');
+  const logText = await (await import('node:fs/promises')).readFile(logPath, 'utf-8').then(String);
+  assert.ok(logText.includes('start'), `expected stub daemon start to be called\n${logText}`);
+
+  await runNode([join(rootDir, 'bin', 'happys.mjs'), 'stack', stackName, 'daemon', 'stop', '--json'], { cwd: rootDir, env: baseEnv });
+  await rm(tmp, { recursive: true, force: true });
+});
+
+test('happys stack daemon <name> start/stop with --identity uses an isolated cli home dir', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-daemon-identity-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp-test';
+  const identity = 'account-b';
+
+  const cliDir = await writeStubHappyCli({ cliDir: join(tmp, 'stub-happy-cli') });
+  const stackCliHome = join(storageDir, stackName, 'cli');
+  await mkdir(stackCliHome, { recursive: true });
+  const identityHome = join(storageDir, stackName, 'cli-identities', identity);
+  await writeDummyAuth({ cliHomeDir: identityHome });
+
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await writeFile(
+    envPath,
+    [
+      `HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI=${cliDir}`,
+      `HAPPY_STACKS_CLI_HOME_DIR=${stackCliHome}`,
+      `HAPPY_STACKS_SERVER_PORT=4101`,
+      '',
+    ].join('\n'),
+    'utf-8'
+  );
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+    HAPPY_STACKS_CLI_ROOT_DISABLE: '1',
+  };
+
+  const startRes = await runNode(
+    [join(rootDir, 'bin', 'happys.mjs'), 'stack', 'daemon', stackName, 'start', `--identity=${identity}`, '--json'],
+    { cwd: rootDir, env: baseEnv }
+  );
+  assert.equal(
+    startRes.code,
+    0,
+    `expected start exit 0, got ${startRes.code}\nstdout:\n${startRes.stdout}\nstderr:\n${startRes.stderr}`
+  );
+
+  const logPath = join(identityHome, 'stub-daemon.log');
+  const logText = await (await import('node:fs/promises')).readFile(logPath, 'utf-8').then(String);
+  assert.ok(logText.includes('start'), `expected stub daemon start to be called in identity home\n${logText}`);
+
+  const stopRes = await runNode(
+    [join(rootDir, 'bin', 'happys.mjs'), 'stack', 'daemon', stackName, 'stop', `--identity=${identity}`, '--json'],
+    { cwd: rootDir, env: baseEnv }
+  );
+  assert.equal(
+    stopRes.code,
+    0,
+    `expected stop exit 0, got ${stopRes.code}\nstdout:\n${stopRes.stdout}\nstderr:\n${stopRes.stderr}`
+  );
+
+  const logTextAfter = await (await import('node:fs/promises')).readFile(logPath, 'utf-8').then(String);
+  assert.ok(logTextAfter.includes('stop'), `expected stub daemon stop to be called for identity\n${logTextAfter}`);
+
+  await rm(tmp, { recursive: true, force: true });
+});
+
+test('happys stack auth <name> login --identity=<name> --print prints identity-scoped HAPPY_HOME_DIR', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const rootDir = dirname(scriptsDir);
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-auth-identity-'));
+
+  const storageDir = join(tmp, 'storage');
+  const homeDir = join(tmp, 'home');
+  const stackName = 'exp-test';
+  const identity = 'account-b';
+
+  const cliDir = await writeStubHappyCli({ cliDir: join(tmp, 'stub-happy-cli') });
+  const stackCliHome = join(storageDir, stackName, 'cli');
+  await mkdir(stackCliHome, { recursive: true });
+  await writeDummyAuth({ cliHomeDir: stackCliHome });
+
+  const envPath = join(storageDir, stackName, 'env');
+  await mkdir(dirname(envPath), { recursive: true });
+  await writeFile(
+    envPath,
+    [
+      `HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI=${cliDir}`,
+      `HAPPY_STACKS_CLI_HOME_DIR=${stackCliHome}`,
+      `HAPPY_STACKS_SERVER_PORT=4101`,
+      '',
+    ].join('\n'),
+    'utf-8'
+  );
+
+  const baseEnv = {
+    ...process.env,
+    HAPPY_STACKS_HOME_DIR: homeDir,
+    HAPPY_STACKS_STORAGE_DIR: storageDir,
+    HAPPY_STACKS_CLI_ROOT_DISABLE: '1',
+  };
+
+  const res = await runNode(
+    [
+      join(rootDir, 'bin', 'happys.mjs'),
+      'stack',
+      'auth',
+      stackName,
+      'login',
+      `--identity=${identity}`,
+      '--no-open',
+      '--print',
+      '--json',
+    ],
+    { cwd: rootDir, env: baseEnv }
+  );
+  assert.equal(
+    res.code,
+    0,
+    `expected auth login --print exit 0, got ${res.code}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`
+  );
+
+  const parsed = JSON.parse(res.stdout.trim());
+  assert.equal(parsed?.cliIdentity, identity);
+  assert.ok(
+    parsed?.cmd?.includes(`HAPPY_HOME_DIR="${join(storageDir, stackName, 'cli-identities', identity)}"`),
+    `expected printed cmd to include identity home dir\n${parsed?.cmd}`
+  );
+  assert.ok(
+    parsed?.cmd?.includes('--no-open'),
+    `expected printed cmd to include --no-open\n${parsed?.cmd}`
+  );
+
   await rm(tmp, { recursive: true, force: true });
 });
 

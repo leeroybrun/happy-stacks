@@ -2,7 +2,7 @@ import './utils/env/env.mjs';
 import { spawn } from 'node:child_process';
 import { chmod, copyFile, mkdir, open, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 // NOTE: random bytes usage centralized in scripts/utils/crypto/tokens.mjs
 import { homedir } from 'node:os';
 import { ensureDir, readTextIfExists, readTextOrEmpty } from './utils/fs/ops.mjs';
@@ -64,6 +64,7 @@ import {
 } from './utils/stack/runtime_state.mjs';
 import { killPid } from './utils/expo/expo.mjs';
 import { getCliHomeDirFromEnvOrDefault, getServerLightDataDirFromEnvOrDefault } from './utils/stack/dirs.mjs';
+import { parseCliIdentityOrThrow, resolveCliHomeDirForIdentity } from './utils/stack/cli_identities.mjs';
 import { randomToken } from './utils/crypto/tokens.mjs';
 import { killPidOwnedByStack, killProcessGroupOwnedByStack } from './utils/proc/ownership.mjs';
 import { sanitizeSlugPart } from './utils/git/refs.mjs';
@@ -3376,27 +3377,30 @@ async function cmdStackOpen({ rootDir, stackName, json, includeStackDir, include
 }
 
 async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
-  const { flags } = parseArgs(argv);
+  const { flags, kv } = parseArgs(argv);
   const wantsHelpFlag = wantsHelp(argv, { flags });
 
   const positionals = argv.filter((a) => a && a !== '--' && !a.startsWith('--'));
   const action = (positionals[0] ?? 'status').toString().trim();
+  const identity = parseCliIdentityOrThrow((kv.get('--identity') ?? '').trim());
+  const noOpen = flags.has('--no-open') || flags.has('--no-browser') || flags.has('--no-browser-open');
 
   if (wantsHelpFlag || !action || action === 'help') {
     printResult({
       json,
-      data: { ok: true, stackName, commands: ['start', 'stop', 'restart', 'status'] },
+      data: { ok: true, stackName, commands: ['start', 'stop', 'restart', 'status'], flags: ['--identity=<name>'] },
       text: [
         banner('stack daemon', { subtitle: `Manage the happy-cli daemon for stack ${cyan(stackName || 'main')}.` }),
         '',
         sectionTitle('usage:'),
-        `  ${cyan('happys stack daemon')} <name> status [--json]`,
-        `  ${cyan('happys stack daemon')} <name> start [--json]`,
-        `  ${cyan('happys stack daemon')} <name> stop [--json]`,
-        `  ${cyan('happys stack daemon')} <name> restart [--json]`,
+        `  ${cyan('happys stack daemon')} <name> status [--identity=<name>] [--json]`,
+        `  ${cyan('happys stack daemon')} <name> start [--identity=<name>] [--json]`,
+        `  ${cyan('happys stack daemon')} <name> stop [--identity=<name>] [--json]`,
+        `  ${cyan('happys stack daemon')} <name> restart [--identity=<name>] [--json]`,
         '',
         sectionTitle('example:'),
         `  ${cmdFmt(`happys stack daemon ${stackName || 'main'} restart`)}`,
+        `  ${cmdFmt(`happys stack daemon ${stackName || 'main'} start --identity=account-b`)}`,
       ].join('\n'),
     });
     return;
@@ -3423,37 +3427,106 @@ async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
         (env.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI ?? env.HAPPY_LOCAL_COMPONENT_DIR_HAPPY_CLI ?? '').toString().trim() ||
         getComponentDir(rootDir, 'happy-cli');
       const cliBin = join(cliDir, 'bin', 'happy.mjs');
-      const cliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ??
+      const baseCliHomeDir = (env.HAPPY_STACKS_CLI_HOME_DIR ??
         env.HAPPY_LOCAL_CLI_HOME_DIR ??
         join(resolveStackEnvPath(stackName).baseDir, 'cli')).toString();
+      const cliHomeDir = resolveCliHomeDirForIdentity({ cliHomeDir: baseCliHomeDir, identity });
       const serverPort = resolveServerPortFromEnv({ env, defaultPort: 3005 });
       const urls = await resolveServerUrls({ env, serverPort, allowEnable: false });
       const internalServerUrl = urls.internalServerUrl;
       const publicServerUrl = urls.publicServerUrl;
-      const daemonEnv = getDaemonEnv({ baseEnv: env, cliHomeDir, internalServerUrl, publicServerUrl });
+      const envForIdentity = {
+        ...env,
+        HAPPY_STACKS_CLI_IDENTITY: identity,
+        HAPPY_LOCAL_CLI_IDENTITY: identity,
+        ...(identity !== 'default'
+          ? {
+              HAPPY_STACKS_MIGRATE_CREDENTIALS: '0',
+              HAPPY_LOCAL_MIGRATE_CREDENTIALS: '0',
+              HAPPY_STACKS_AUTO_AUTH_SEED: '0',
+              HAPPY_LOCAL_AUTO_AUTH_SEED: '0',
+            }
+          : {}),
+      };
+      await mkdir(cliHomeDir, { recursive: true }).catch(() => {});
+      const daemonEnv = getDaemonEnv({ baseEnv: envForIdentity, cliHomeDir, internalServerUrl, publicServerUrl });
 
       if (action === 'start' || action === 'restart') {
+        // UX: if this identity is not authenticated yet and we're in a real TTY, offer to run the
+        // guided login flow inline (instead of failing or asking for a second terminal).
+        //
+        // Important: never prompt in --json mode (automation must not hang).
+        const accessKeyPath = join(cliHomeDir, 'access.key');
+        const hasCreds = (() => {
+          try {
+            if (!existsSync(accessKeyPath)) return false;
+            return readFileSync(accessKeyPath, 'utf-8').trim().length > 0;
+          } catch {
+            return false;
+          }
+        })();
+
+        if (!hasCreds) {
+          if (json) {
+            const loginCmd = `happys stack auth ${stackName} login${identity !== 'default' ? ` --identity=${identity} --no-open` : ''}`;
+            return { ok: false, action, error: 'auth_required', cliIdentity: identity, cliHomeDir, loginCmd };
+          }
+
+          if (isTty()) {
+            const choice = await withRl(async (rl) => {
+              return await promptSelect(rl, {
+                title:
+                  `Daemon identity "${identity}" is not authenticated yet.\n` +
+                  `Authenticate now? (recommended)\n`,
+                options: [
+                  { label: 'yes (run guided login now)', value: 'yes' },
+                  { label: 'no (show command and exit)', value: 'no' },
+                ],
+                defaultIndex: 0,
+              });
+            });
+
+            if (choice === 'yes') {
+              const authArgs = [
+                'login',
+                ...(identity !== 'default' ? [`--identity=${identity}`] : []),
+                ...(identity !== 'default' || noOpen ? ['--no-open'] : []),
+              ];
+              await run(process.execPath, [join(rootDir, 'scripts', 'auth.mjs'), ...authArgs], {
+                cwd: rootDir,
+                env: envForIdentity,
+                stdio: 'inherit',
+              });
+            } else {
+              const loginCmd = `happys stack auth ${stackName} login${identity !== 'default' ? ` --identity=${identity} --no-open` : ''}`;
+              throw new Error(`[stack] daemon auth required. Run:\n${loginCmd}`);
+            }
+          }
+        }
+
         await startLocalDaemonWithAuth({
           cliBin,
           cliHomeDir,
           internalServerUrl,
           publicServerUrl,
+          isShuttingDown: () => false,
           forceRestart: action === 'restart',
-          env,
+          env: envForIdentity,
           stackName,
+          cliIdentity: identity,
         });
         const status = await runCapture(process.execPath, [cliBin, 'daemon', 'status'], { cwd: rootDir, env: daemonEnv });
-        return { ok: true, action, status: status.trim() };
+        return { ok: true, action, cliIdentity: identity, cliHomeDir, status: status.trim() };
       }
 
       if (action === 'stop') {
         await stopLocalDaemon({ cliBin, internalServerUrl, cliHomeDir });
         const status = await runCapture(process.execPath, [cliBin, 'daemon', 'status'], { cwd: rootDir, env: daemonEnv }).catch(() => '');
-        return { ok: true, action, status: status.trim() || null };
+        return { ok: true, action, cliIdentity: identity, cliHomeDir, status: status.trim() || null };
       }
 
       const status = await runCapture(process.execPath, [cliBin, 'daemon', 'status'], { cwd: rootDir, env: daemonEnv });
-      return { ok: true, action, status: status.trim() };
+      return { ok: true, action, cliIdentity: identity, cliHomeDir, status: status.trim() };
     },
   });
 
@@ -3472,12 +3545,91 @@ async function cmdStackDaemon({ rootDir, stackName, argv, json }) {
   console.log(`${green('✓')} daemon command completed`);
 }
 
+const STACK_NAME_FIRST_SUPPORTED_COMMANDS = new Set([
+  'help',
+  'new',
+  'edit',
+  'list',
+  'migrate',
+  'audit',
+  'archive',
+  'duplicate',
+  'info',
+  'pr',
+  'create-dev-auth-seed',
+  'daemon',
+  'happy',
+  'env',
+  'auth',
+  'dev',
+  'start',
+  'build',
+  'review',
+  'typecheck',
+  'lint',
+  'test',
+  'doctor',
+  'mobile',
+  'mobile:install',
+  'mobile-dev-client',
+  'resume',
+  'stop',
+  'code',
+  'cursor',
+  'open',
+  'srv',
+  'wt',
+  'service',
+]);
+
+function isKnownStackCommandToken(token) {
+  const t = (token ?? '').toString().trim();
+  if (!t) return false;
+  if (t.startsWith('service:')) return true;
+  if (t.startsWith('tailscale:')) return true;
+  return STACK_NAME_FIRST_SUPPORTED_COMMANDS.has(t);
+}
+
+function normalizeStackNameFirstArgs(argv) {
+  // Back-compat UX:
+  // Allow `happys stack <name> <command> ...` (stack name first) as a shortcut for:
+  //   `happys stack <command> <name> ...`
+  //
+  // We only apply this rewrite when the first positional is *not* a known stack subcommand,
+  // but *is* an existing stack name.
+  const args = Array.isArray(argv) ? argv : [];
+  const positionalIdx = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a) continue;
+    if (a === '--') continue;
+    if (a.startsWith('-')) continue;
+    positionalIdx.push(i);
+    if (positionalIdx.length >= 2) break;
+  }
+  if (positionalIdx.length < 2) return args;
+
+  const [i0, i1] = positionalIdx;
+  const first = args[i0];
+  const second = args[i1];
+
+  if (isKnownStackCommandToken(first)) return args;
+  if (!isKnownStackCommandToken(second)) return args;
+  if (!stackExistsSync(first)) return args;
+
+  const next = [...args];
+  next[i0] = second;
+  next[i1] = first;
+  return next;
+}
+
 async function main() {
   const rootDir = getRootDir(import.meta.url);
   // pnpm (legacy) passes an extra leading `--` when forwarding args into scripts. Normalize it away so
   // positional slicing behaves consistently.
   const rawArgv = process.argv.slice(2);
-  const argv = rawArgv[0] === '--' ? rawArgv.slice(1) : rawArgv;
+  const argv0 = rawArgv[0] === '--' ? rawArgv.slice(1) : rawArgv;
+  const argv = normalizeStackNameFirstArgs(argv0);
 
   const { flags } = parseArgs(argv);
   const positionals = argv.filter((a) => !a.startsWith('--'));

@@ -312,9 +312,29 @@ happys stack auth <stack> login
 ```
 
 Notes:
+- You can run **multiple daemons for the same stack** on **different accounts** using `--identity=<name>`.
+  - `default` (no flag): `~/.happy/stacks/<stack>/cli/...`
+  - `--identity=account-b`: `~/.happy/stacks/<stack>/cli-identities/account-b/...`
+- To authenticate an identity without auto-opening a browser, use `--no-open` (it prints the URL so you can open it
+  in the browser profile/incognito window you want):
+
+```bash
+happys stack auth <stack> login --identity=account-a --no-open
+happys stack auth <stack> login --identity=account-b --no-open
+```
+
+- To start/stop an identity’s daemon explicitly:
+
+```bash
+happys stack daemon <stack> start --identity=account-a
+happys stack daemon <stack> stop  --identity=account-a
+```
+
 - For the **main** stack, use `<stack>=main` and the default `<port>=3005` (unless you changed it).
 - If you use Tailscale Serve, `HAPPY_WEBAPP_URL` should be your HTTPS URL (what you get from `happys tailscale url`).
-- Logs live under `~/.happy/stacks/<stack>/cli/logs/`.
+- Logs live under:
+  - default identity: `~/.happy/stacks/<stack>/cli/logs/`
+  - named identities: `~/.happy/stacks/<stack>/cli-identities/<identity>/logs/`
 
 ## JSON mode
 

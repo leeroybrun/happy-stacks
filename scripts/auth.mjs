@@ -28,6 +28,7 @@ import { resolveHandyMasterSecretFromStack } from './utils/auth/handy_master_sec
 import { ensureDir, readTextIfExists } from './utils/fs/ops.mjs';
 import { stackExistsSync } from './utils/stack/stacks.mjs';
 import { checkDaemonState } from './daemon.mjs';
+import { parseCliIdentityOrThrow, resolveCliHomeDirForIdentity } from './utils/stack/cli_identities.mjs';
 import {
   getCliHomeDirFromEnvOrDefault,
   getServerLightDataDirFromEnvOrDefault,
@@ -737,6 +738,9 @@ async function cmdCopyFrom({ argv, json }) {
 async function cmdStatus({ json }) {
   const rootDir = getRootDir(import.meta.url);
   const stackName = getStackName();
+  const argv = process.argv.slice(2);
+  const { kv } = parseArgs(argv);
+  const identity = parseCliIdentityOrThrow((kv.get('--identity') ?? '').trim());
 
   const { port, url: internalServerUrl } = getInternalServerUrlCompat();
   const { defaultPublicUrl, envPublicUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort: port, stackName });
@@ -748,7 +752,7 @@ async function cmdStatus({ json }) {
     stackName,
   });
 
-  const cliHomeDir = resolveCliHomeDir();
+  const cliHomeDir = resolveCliHomeDirForIdentity({ cliHomeDir: resolveCliHomeDir(), identity });
   const accessKeyPath = join(cliHomeDir, 'access.key');
   const settingsPath = join(cliHomeDir, 'settings.json');
 
@@ -773,6 +777,7 @@ async function cmdStatus({ json }) {
     internalServerUrl,
     publicServerUrl,
     cliHomeDir,
+    cliIdentity: identity,
     auth,
     daemon,
     serverHealth: health,
@@ -844,11 +849,13 @@ async function cmdLogin({ argv, json }) {
   const webappUrl = await preferStackLocalhostUrl(webappUrlRaw, { stackName });
   const webappUrlSource = expoWebappUrl ? 'expo' : envWebappUrl ? 'stack env override' : 'server';
 
-  const cliHomeDir = resolveCliHomeDir();
+  const identity = parseCliIdentityOrThrow((kv.get('--identity') ?? '').trim());
+  const cliHomeDir = resolveCliHomeDirForIdentity({ cliHomeDir: resolveCliHomeDir(), identity });
   const cliBin = join(getComponentDir(rootDir, 'happy-cli'), 'bin', 'happy.mjs');
 
   const force = !argv.includes('--no-force');
   const wantPrint = argv.includes('--print');
+  const noOpen = flags.has('--no-open') || flags.has('--no-browser') || flags.has('--no-browser-open');
   const contextRaw =
     (kv.get('--context') ?? process.env.HAPPY_STACKS_AUTH_LOGIN_CONTEXT ?? process.env.HAPPY_LOCAL_AUTH_LOGIN_CONTEXT ?? '')
       .toString()
@@ -859,18 +866,29 @@ async function cmdLogin({ argv, json }) {
   if (force || argv.includes('--force')) {
     nodeArgs.push('--force');
   }
+  if (noOpen) {
+    nodeArgs.push('--no-open');
+  }
 
   const env = {
     ...process.env,
     HAPPY_HOME_DIR: cliHomeDir,
     HAPPY_SERVER_URL: internalServerUrl,
     HAPPY_WEBAPP_URL: webappUrl,
+    ...(noOpen ? { HAPPY_NO_BROWSER_OPEN: '1' } : {}),
   };
 
   if (wantPrint) {
-    const cmd = `HAPPY_HOME_DIR="${cliHomeDir}" HAPPY_SERVER_URL="${internalServerUrl}" HAPPY_WEBAPP_URL="${webappUrl}" node "${cliBin}" auth login${nodeArgs.includes('--force') ? ' --force' : ''}`;
+    const cmd =
+      `HAPPY_HOME_DIR="${cliHomeDir}" ` +
+      `HAPPY_SERVER_URL="${internalServerUrl}" ` +
+      `HAPPY_WEBAPP_URL="${webappUrl}" ` +
+      (noOpen ? `HAPPY_NO_BROWSER_OPEN="1" ` : '') +
+      `node "${cliBin}" auth login` +
+      (nodeArgs.includes('--force') ? ' --force' : '') +
+      (noOpen ? ' --no-open' : '');
     if (json) {
-      printResult({ json, data: { ok: true, stackName, cmd } });
+      printResult({ json, data: { ok: true, stackName, cliIdentity: identity, cmd } });
     } else {
       console.log(cmd);
     }
@@ -959,7 +977,7 @@ async function main() {
         sectionTitle('Usage (global)'),
         bullets([
           `${dim('status:')} ${cmdFmt('happys auth status')} ${dim('[--json]')}`,
-          `${dim('login:')}  ${cmdFmt('happys auth login')} ${dim('[--force] [--print] [--json]')}`,
+          `${dim('login:')}  ${cmdFmt('happys auth login')} ${dim('[--identity=<name>] [--no-open] [--force] [--print] [--json]')}`,
           `${dim('seed:')}   ${cmdFmt('happys auth copy-from <sourceStack|legacy> --all')} ${dim('[--except=main,dev-auth] [--force] [--with-infra] [--link] [--json]')}`,
           `${dim('dev key:')} ${cmdFmt('happys auth dev-key')} ${dim('[--print] [--format=base64url|backup] [--set=<secret>] [--clear] [--json]')}`,
         ]),
@@ -967,7 +985,7 @@ async function main() {
         sectionTitle('Usage (stack-scoped)'),
         bullets([
           `${dim('status:')} ${cmdFmt('happys stack auth <name> status')} ${dim('[--json]')}`,
-          `${dim('login:')}  ${cmdFmt('happys stack auth <name> login')} ${dim('[--force] [--print] [--json]')}`,
+          `${dim('login:')}  ${cmdFmt('happys stack auth <name> login')} ${dim('[--identity=<name>] [--no-open] [--force] [--print] [--json]')}`,
           `${dim('seed:')}   ${cmdFmt('happys stack auth <name> copy-from <sourceStack|legacy>')} ${dim('[--force] [--with-infra] [--link] [--json]')}`,
         ]),
         '',

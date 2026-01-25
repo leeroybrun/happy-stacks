@@ -193,28 +193,37 @@ function resolveHappyCliDistEntrypoint(cliBin) {
 async function ensureHappyCliDistExists({ cliBin }) {
   const distEntrypoint = resolveHappyCliDistEntrypoint(cliBin);
   if (!distEntrypoint) return { ok: false, distEntrypoint: null, built: false, reason: 'unknown_cli_bin' };
-  if (existsSync(distEntrypoint)) return { ok: true, distEntrypoint, built: false, reason: 'exists' };
+  const cliDir = join(dirname(cliBin), '..');
 
   // Try to recover automatically: missing dist is a common first-run worktree issue.
   // We build in-place using the cliDir that owns this cliBin (../ from bin/).
-  const cliDir = join(dirname(cliBin), '..');
   const buildCli =
     (process.env.HAPPY_STACKS_CLI_BUILD ?? process.env.HAPPY_LOCAL_CLI_BUILD ?? '1').toString().trim() !== '0';
   if (!buildCli) {
     return { ok: false, distEntrypoint, built: false, reason: 'build_disabled' };
   }
 
+  let buildRes = null;
   try {
-    // eslint-disable-next-line no-console
-    console.warn(`[local] happy-cli build output missing; rebuilding (${cliDir})...`);
-    await ensureCliBuilt(cliDir, { buildCli: true });
+    // In auto mode, ensureCliBuilt() is a fast no-op when nothing changed.
+    buildRes = await ensureCliBuilt(cliDir, { buildCli: true });
+    if (buildRes?.built) {
+      // eslint-disable-next-line no-console
+      console.warn(`[local] happy-cli: rebuilt (${cliDir})`);
+    }
   } catch (e) {
     return { ok: false, distEntrypoint, built: false, reason: String(e?.message ?? e) };
   }
 
-  return existsSync(distEntrypoint)
-    ? { ok: true, distEntrypoint, built: true, reason: 'rebuilt' }
-    : { ok: false, distEntrypoint, built: true, reason: 'rebuilt_but_missing' };
+  if (existsSync(distEntrypoint)) {
+    return {
+      ok: true,
+      distEntrypoint,
+      built: Boolean(buildRes?.built),
+      reason: buildRes?.built ? (buildRes.reason ?? 'rebuilt') : 'exists',
+    };
+  }
+  return { ok: false, distEntrypoint, built: Boolean(buildRes?.built), reason: buildRes?.built ? 'rebuilt_but_missing' : 'missing' };
 }
 
 function excerptIndicatesMissingAuth(excerpt) {
@@ -243,14 +252,17 @@ function allowDaemonWaitForAuthWithoutTty() {
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'y';
 }
 
-function authLoginHint() {
-  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
-  return stackName === 'main' ? 'happys auth login' : `happys stack auth ${stackName} login`;
+function authLoginHint({ stackName, cliIdentity }) {
+  const id = (cliIdentity ?? '').toString().trim();
+  const suffix = id && id !== 'default' ? ` --identity=${id} --no-open` : '';
+  return stackName === 'main' ? `happys auth login${suffix}` : `happys stack auth ${stackName} login${suffix}`;
 }
 
-function authCopyFromSeedHint() {
-  const stackName = (process.env.HAPPY_STACKS_STACK ?? process.env.HAPPY_LOCAL_STACK ?? '').trim() || 'main';
+function authCopyFromSeedHint({ stackName, cliIdentity }) {
   if (stackName === 'main') return null;
+  // For multi-identity daemons, copying credentials defeats the purpose (multiple accounts).
+  const id = (cliIdentity ?? '').toString().trim();
+  if (id && id !== 'default') return null;
   const seed = resolveAuthSeedFromEnv(process.env);
   return `happys stack auth ${stackName} copy-from ${seed}`;
 }
@@ -456,11 +468,16 @@ export async function startLocalDaemonWithAuth({
   forceRestart = false,
   env = process.env,
   stackName = null,
+  cliIdentity = 'default',
 }) {
   const resolvedStackName =
     (stackName ?? '').toString().trim() ||
     (env.HAPPY_STACKS_STACK ?? env.HAPPY_LOCAL_STACK ?? '').toString().trim() ||
     'main';
+  const resolvedCliIdentity =
+    (cliIdentity ?? '').toString().trim() ||
+    (env.HAPPY_STACKS_CLI_IDENTITY ?? env.HAPPY_LOCAL_CLI_IDENTITY ?? '').toString().trim() ||
+    'default';
   const baseEnv = { ...env };
   const daemonEnv = getDaemonEnv({ baseEnv, cliHomeDir, internalServerUrl, publicServerUrl });
 
@@ -497,7 +514,7 @@ export async function startLocalDaemonWithAuth({
     return;
   }
 
-  if (!forceRestart && (existing.status === 'running' || existing.status === 'starting')) {
+  if (!forceRestart && existing.status === 'running') {
     const pid = existing.pid;
     const matches = await daemonEnvMatches({ pid, cliHomeDir, internalServerUrl, publicServerUrl });
     if (matches === true) {
@@ -517,6 +534,12 @@ export async function startLocalDaemonWithAuth({
       console.warn(`[local] daemon status is running but could not verify env; not restarting (pid=${pid})`);
       return;
     }
+  }
+  if (!forceRestart && existing.status === 'starting') {
+    // A lock file without a stable daemon.state.json usually means the daemon never finished starting
+    // (common when auth is required but daemon start is non-interactive). Attempt a safe restart.
+    // eslint-disable-next-line no-console
+    console.warn(`[local] daemon appears stuck starting for stack home (pid=${existing.pid}); restarting...`);
   }
 
   // Stop any existing daemon for THIS stack home dir.
@@ -569,7 +592,7 @@ export async function startLocalDaemonWithAuth({
     // daemon status separately.
     await delay(500);
     const stateAfter = checkDaemonState(cliHomeDir);
-    if (stateAfter.status === 'running' || stateAfter.status === 'starting') {
+    if (stateAfter.status === 'running') {
       return { ok: true, exitCode, excerpt: null, logPath: null };
     }
 
@@ -590,11 +613,11 @@ export async function startLocalDaemonWithAuth({
 
     if (excerptIndicatesMissingAuth(first.excerpt)) {
       const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY) || allowDaemonWaitForAuthWithoutTty();
-      const copyHint = authCopyFromSeedHint();
+      const copyHint = authCopyFromSeedHint({ stackName: resolvedStackName, cliIdentity: resolvedCliIdentity });
       const hint =
         `[local] daemon is not authenticated yet (expected on first run).\n` +
         `[local] In another terminal, run:\n` +
-        `${authLoginHint()}\n` +
+        `${authLoginHint({ stackName: resolvedStackName, cliIdentity: resolvedCliIdentity })}\n` +
         (copyHint ? `[local] Or (recommended if main is already logged in):\n${copyHint}\n` : '');
       if (!isInteractive) {
         throw new Error(`${hint}[local] Non-interactive mode: refusing to wait for credentials.`);
@@ -629,12 +652,12 @@ export async function startLocalDaemonWithAuth({
       try {
         await maybeAutoReseedInvalidAuth({ stackName });
       } catch (e) {
-        const copyHint = authCopyFromSeedHint();
+        const copyHint = authCopyFromSeedHint({ stackName: resolvedStackName, cliIdentity: resolvedCliIdentity });
         console.error(
           `[local] daemon credentials were rejected by the server (401).\n` +
             `[local] Fix:\n` +
             (copyHint ? `- ${copyHint}\n` : '') +
-            `- ${authLoginHint()}`
+            `- ${authLoginHint({ stackName: resolvedStackName, cliIdentity: resolvedCliIdentity })}`
         );
         throw e;
       }
@@ -648,13 +671,13 @@ export async function startLocalDaemonWithAuth({
         throw new Error('Failed to start daemon (after auth re-seed)');
       }
     } else {
-      const copyHint = authCopyFromSeedHint();
+      const copyHint = authCopyFromSeedHint({ stackName: resolvedStackName, cliIdentity: resolvedCliIdentity });
       console.error(
         `[local] daemon failed to start (server returned an error).\n` +
           `[local] Try:\n` +
           `- happys doctor\n` +
           (copyHint ? `- ${copyHint}\n` : '') +
-          `- ${authLoginHint()}`
+          `- ${authLoginHint({ stackName: resolvedStackName, cliIdentity: resolvedCliIdentity })}`
       );
       throw new Error('Failed to start daemon');
     }

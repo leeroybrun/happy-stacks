@@ -131,7 +131,9 @@ See: `docs/server-flavors.md`.
   - Prefer `happys stack <stack> ...` commands (typecheck/lint/build/test/dev/start).
   - To run `happy-cli` against a specific stack: `happys stack happy <stack> -- <happy args...>` (stack shorthand: `happys <stack> happy ...`).
 - **Do not “kill all daemons”**
-  - Multiple stack daemons are expected. Stop stacks explicitly (`happys stack stop …` or `happys stop …`).
+  - Multiple stack daemons are expected.
+  - If you use stack daemon **identities** (`--identity=<name>`), multiple daemons for the *same stack* can also be intentional.
+  - Stop stacks explicitly (`happys stack stop …` or `happys stop …`), or stop a specific daemon identity (`happys stack daemon <stack> stop --identity=<name>`).
 - **Main stack safety**
   - Avoid repointing `main` stack component dirs to worktrees. Use a new stack.
   - `happys wt use …` will warn/refuse for `main` unless you pass `--force`.
@@ -746,6 +748,21 @@ Login (interactive):
 
 ```bash
 happys stack auth <stack> login
+```
+
+Multiple accounts on one stack (optional): use an identity and disable auto browser open so you can choose the
+browser profile/account you authenticate as:
+
+```bash
+happys stack auth <stack> login --identity=account-a --no-open
+happys stack auth <stack> login --identity=account-b --no-open
+```
+
+Start/stop a specific identity daemon:
+
+```bash
+happys stack daemon <stack> start --identity=account-a
+happys stack daemon <stack> stop  --identity=account-a
 ```
 
 Non-interactive repair (copy credentials + seed accounts from `main`):
