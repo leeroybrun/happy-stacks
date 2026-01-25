@@ -14,7 +14,7 @@ import { runCodeRabbitReview } from './utils/review/runners/coderabbit.mjs';
 import { extractCodexReviewFromJsonl, runCodexReview } from './utils/review/runners/codex.mjs';
 import { formatTriageMarkdown, parseCodeRabbitPlainOutput, parseCodexReviewText } from './utils/review/findings.mjs';
 import { runSlicedJobs } from './utils/review/sliced_runner.mjs';
-import { seedCodeRabbitHomeFromRealHome } from './utils/review/tool_home_seed.mjs';
+import { seedCodeRabbitHomeFromRealHome, seedCodexHomeFromRealHome } from './utils/review/tool_home_seed.mjs';
 import { join } from 'node:path';
 import { ensureDir } from './utils/fs/ops.mjs';
 import { copyFile, writeFile } from 'node:fs/promises';
@@ -406,12 +406,7 @@ async function main() {
       const realHome = (process.env.HOME ?? '').toString().trim();
       const overrideHome = process.env[codexHomeKey];
       if (realHome && overrideHome && realHome !== overrideHome) {
-        const srcAuth = join(realHome, '.codex', 'auth.json');
-        const srcCfg = join(realHome, '.codex', 'config.toml');
-        const destAuth = join(overrideHome, 'auth.json');
-        const destCfg = join(overrideHome, 'config.toml');
-        if (existsSync(srcAuth) && !existsSync(destAuth)) await copyFile(srcAuth, destAuth);
-        if (existsSync(srcCfg) && !existsSync(destCfg)) await copyFile(srcCfg, destCfg);
+        await seedCodexHomeFromRealHome({ realHomeDir: realHome, isolatedHomeDir: overrideHome });
       }
     } catch {
       // ignore (codex will surface auth issues if seeding fails)

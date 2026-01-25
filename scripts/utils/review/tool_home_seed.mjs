@@ -58,3 +58,22 @@ export async function seedCodeRabbitHomeFromRealHome({ realHomeDir, isolatedHome
     destFile: join(isolated, '.coderabbit', 'auth.json'),
   });
 }
+
+/**
+ * Best-effort: seed Codex auth/config into an isolated CODEX_HOME directory.
+ *
+ * Codex stores auth/config under `CODEX_HOME` (default: ~/.codex). In stack review runs we
+ * use a per-repo isolated home (e.g. .project/codex-home) to avoid polluting ~/.codex and
+ * to keep sandboxed runs self-contained.
+ *
+ * We do not read or print any auth contents; we only copy the on-disk state when present.
+ */
+export async function seedCodexHomeFromRealHome({ realHomeDir, isolatedHomeDir } = {}) {
+  const real = String(realHomeDir ?? '').trim();
+  const isolated = String(isolatedHomeDir ?? '').trim();
+  if (!real || !isolated || real === isolated) return;
+
+  // Codex uses CODEX_HOME/{auth.json,config.toml,...}
+  await copyFileIfNewer({ srcFile: join(real, '.codex', 'auth.json'), destFile: join(isolated, 'auth.json') });
+  await copyFileIfNewer({ srcFile: join(real, '.codex', 'config.toml'), destFile: join(isolated, 'config.toml') });
+}
