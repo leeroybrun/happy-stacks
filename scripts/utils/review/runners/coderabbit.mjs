@@ -27,8 +27,15 @@ export function buildCodeRabbitEnv({ env, homeDir }) {
   const dir = String(homeDir ?? '').trim();
   if (!dir) return merged;
 
-  merged.HOME = dir;
-  merged.USERPROFILE = dir;
+  // IMPORTANT:
+  // Do not override HOME/USERPROFILE here.
+  //
+  // CodeRabbit uses OS credential storage (e.g. macOS Keychain). If HOME is pointed at
+  // an isolated directory (like .project/coderabbit-home), the underlying keychain
+  // lookup can fail with "Keychain Not Found" and auth will not work in the wrapper.
+  //
+  // We still isolate CodeRabbit's on-disk config/cache under the provided homeDir via
+  // CODERABBIT_HOME + XDG dirs.
   merged.CODERABBIT_HOME = join(dir, '.coderabbit');
   merged.XDG_CONFIG_HOME = join(dir, '.config');
   merged.XDG_CACHE_HOME = join(dir, '.cache');
