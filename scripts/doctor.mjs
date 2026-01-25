@@ -63,7 +63,7 @@ async function fetchHealth(url) {
 
 async function main() {
   const argv = process.argv.slice(2);
-  const { flags, kv } = parseArgs(argv);
+  const { flags, kv: argsKv } = parseArgs(argv);
   const fix = flags.has('--fix');
   const json = wantsJson(argv, { flags });
 
@@ -117,7 +117,7 @@ async function main() {
     ? process.env.HAPPY_LOCAL_UI_BUILD_DIR.trim()
     : join(autostart.baseDir, 'ui');
 
-  const serverComponentName = getServerComponentName({ kv });
+  const serverComponentName = getServerComponentName({ kv: argsKv });
   if (serverComponentName === 'both') {
     throw new Error(`[doctor] --server=both is not supported (pick one: happy-server-light or happy-server)`);
   }
