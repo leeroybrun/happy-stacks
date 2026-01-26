@@ -64,6 +64,25 @@ test('parseCodexReviewText extracts findings JSON trailer', () => {
   assert.equal(findings[0].severity, 'major');
 });
 
+test('parseCodexReviewText falls back to parsing [P#] bullet lines', () => {
+  const review = [
+    '[monorepo:codex:2/21] Review comment:',
+    '[monorepo:codex:2/21] - [P1] Fix thing one — /Users/me/repo/.project/review-worktrees/codex-2-of-21-abc/cli/src/foo.ts:10-12',
+    '[monorepo:codex:2/21] - [P3] Fix thing two — /Users/me/repo/.project/review-worktrees/codex-2-of-21-abc/expo-app/sources/bar.tsx:7',
+  ].join('\n');
+
+  const findings = parseCodexReviewText(review);
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].file, 'cli/src/foo.ts');
+  assert.deepEqual(findings[0].lines, { start: 10, end: 12 });
+  assert.equal(findings[0].severity, 'blocker');
+  assert.equal(findings[0].title, 'Fix thing one');
+  assert.equal(findings[1].file, 'expo-app/sources/bar.tsx');
+  assert.deepEqual(findings[1].lines, { start: 7, end: 7 });
+  assert.equal(findings[1].severity, 'minor');
+  assert.equal(findings[1].title, 'Fix thing two');
+});
+
 test('formatTriageMarkdown includes required workflow fields', () => {
   const md = formatTriageMarkdown({
     runLabel: 'review-123',
@@ -82,4 +101,3 @@ test('formatTriageMarkdown includes required workflow fields', () => {
   assert.match(md, /Verified in validation worktree:/);
   assert.match(md, /Commit:/);
 });
-

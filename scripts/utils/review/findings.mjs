@@ -95,27 +95,96 @@ export function parseCodexReviewText(reviewText) {
   const s = String(reviewText ?? '');
   const marker = '===FINDINGS_JSON===';
   const idx = s.indexOf(marker);
-  if (idx < 0) return [];
-  const jsonText = s.slice(idx + marker.length).trim();
-  if (!jsonText) return [];
+  if (idx >= 0) {
+    const jsonText = s.slice(idx + marker.length).trim();
+    if (!jsonText) return [];
 
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return [];
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((x) => ({
+        reviewer: 'codex',
+        severity: x?.severity ?? null,
+        file: x?.file ?? null,
+        lines: x?.lines ?? null,
+        title: x?.title ?? null,
+        recommendation: x?.recommendation ?? null,
+        needsDiscussion: Boolean(x?.needsDiscussion),
+      }))
+      .filter((x) => x.file && x.title);
   }
-  if (!Array.isArray(parsed)) return [];
-  return parsed
-    .map((x) => ({
+
+  // Fallback: Codex sometimes returns a human-readable list like:
+  // - [P2] Thing — /abs/path/.project/review-worktrees/codex-.../cli/src/foo.ts:10-12
+  //
+  // Parse these into structured findings so they appear in triage even when the
+  // JSON trailer is missing.
+  const priorityToSeverity = { 1: 'blocker', 2: 'major', 3: 'minor', 4: 'nit' };
+  const lines = s.split('\n');
+  const findings = [];
+  const seen = new Set();
+
+  function stripPrefix(line) {
+    return String(line ?? '').replace(/^\[[^\]]+\]\s*/g, '').trim();
+  }
+
+  function normalizePath(rawPath) {
+    const p = String(rawPath ?? '').trim();
+    const marker2 = '/.project/review-worktrees/';
+    const i = p.indexOf(marker2);
+    if (i < 0) return p;
+    const rest = p.slice(i + marker2.length);
+    const slash = rest.indexOf('/');
+    if (slash < 0) return p;
+    return rest.slice(slash + 1);
+  }
+
+  for (const rawLine of lines) {
+    const line = stripPrefix(rawLine);
+    const m = line.match(/^- \[P([1-4])\]\s+(.+?)\s+—\s+(.+)$/);
+    if (!m) continue;
+
+    const priority = Number(m[1]);
+    const title = String(m[2]).trim();
+    const pathPart = String(m[3]).trim();
+
+    let file = pathPart;
+    let range = null;
+
+    const lastColon = pathPart.lastIndexOf(':');
+    if (lastColon > 0) {
+      const suffix = pathPart.slice(lastColon + 1).trim();
+      const rm = suffix.match(/^(\d+)(?:-(\d+))?$/);
+      if (rm) {
+        const start = Number(rm[1]);
+        const end = Number(rm[2] ?? rm[1]);
+        range = { start, end };
+        file = pathPart.slice(0, lastColon);
+      }
+    }
+
+    const normalizedFile = normalizePath(file);
+    const severity = priorityToSeverity[priority] ?? null;
+    const key = `${normalizedFile}:${range?.start ?? ''}-${range?.end ?? ''}:${title}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    findings.push({
       reviewer: 'codex',
-      severity: x?.severity ?? null,
-      file: x?.file ?? null,
-      title: x?.title ?? null,
-      recommendation: x?.recommendation ?? null,
-      needsDiscussion: Boolean(x?.needsDiscussion),
-    }))
-    .filter((x) => x.file && x.title);
+      severity,
+      file: normalizedFile,
+      lines: range,
+      title,
+      recommendation: null,
+      needsDiscussion: false,
+    });
+  }
+
+  return findings.filter((x) => x.file && x.title);
 }
 
 export function formatTriageMarkdown({ runLabel, baseRef, findings }) {
