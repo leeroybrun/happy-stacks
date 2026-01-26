@@ -45,7 +45,9 @@ export function parseCodeRabbitPlainOutput(text) {
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    const trimmed = line.trimEnd();
+    // The raw log files written by the review runner prefix each line with "[label] ".
+    // Strip that prefix so we can parse both prefixed logs and unprefixed stdout.
+    const trimmed = line.trimEnd().replace(/^\[[^\]]+\]\s*/g, '');
 
     if (trimmed.startsWith('============================================================================')) {
       flush();
@@ -103,20 +105,21 @@ export function parseCodexReviewText(reviewText) {
     try {
       parsed = JSON.parse(jsonText);
     } catch {
-      return [];
+      parsed = null;
     }
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((x) => ({
-        reviewer: 'codex',
-        severity: x?.severity ?? null,
-        file: x?.file ?? null,
-        lines: x?.lines ?? null,
-        title: x?.title ?? null,
-        recommendation: x?.recommendation ?? null,
-        needsDiscussion: Boolean(x?.needsDiscussion),
-      }))
-      .filter((x) => x.file && x.title);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((x) => ({
+          reviewer: 'codex',
+          severity: x?.severity ?? null,
+          file: x?.file ?? null,
+          lines: x?.lines ?? null,
+          title: x?.title ?? null,
+          recommendation: x?.recommendation ?? null,
+          needsDiscussion: Boolean(x?.needsDiscussion),
+        }))
+        .filter((x) => x.file && x.title);
+    }
   }
 
   // Fallback: Codex sometimes returns a human-readable list like:

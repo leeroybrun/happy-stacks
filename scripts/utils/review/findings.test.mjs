@@ -83,6 +83,21 @@ test('parseCodexReviewText falls back to parsing [P#] bullet lines', () => {
   assert.equal(findings[1].title, 'Fix thing two');
 });
 
+test('parseCodexReviewText falls back when marker exists but JSON is missing/invalid', () => {
+  const review = [
+    'instructions...',
+    '===FINDINGS_JSON===',
+    'this is not json',
+    '[monorepo:codex:2/21] - [P2] Fix thing — /Users/me/repo/.project/review-worktrees/codex-2-of-21-abc/server/src/x.ts:1-2',
+  ].join('\n');
+
+  const findings = parseCodexReviewText(review);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, 'server/src/x.ts');
+  assert.deepEqual(findings[0].lines, { start: 1, end: 2 });
+  assert.equal(findings[0].severity, 'major');
+});
+
 test('formatTriageMarkdown includes required workflow fields', () => {
   const md = formatTriageMarkdown({
     runLabel: 'review-123',
