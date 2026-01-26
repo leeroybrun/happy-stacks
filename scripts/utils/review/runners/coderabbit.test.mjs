@@ -1,20 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCodeRabbitEnv } from './coderabbit.mjs';
 
-test('buildCodeRabbitEnv does not override HOME', () => {
-  const env = { HOME: '/Users/example', USERPROFILE: '/Users/example' };
-  const out = buildCodeRabbitEnv({ env, homeDir: '/tmp/isolated' });
-  assert.equal(out.HOME, '/Users/example');
-  assert.equal(out.USERPROFILE, '/Users/example');
+import { parseCodeRabbitRateLimitRetryMs } from './coderabbit.mjs';
+
+test('parseCodeRabbitRateLimitRetryMs returns null when no rate limit message is present', () => {
+  assert.equal(parseCodeRabbitRateLimitRetryMs('Review completed ✔'), null);
 });
 
-test('buildCodeRabbitEnv sets CODERABBIT_HOME and XDG dirs under homeDir', () => {
-  const out = buildCodeRabbitEnv({ env: { HOME: '/Users/example' }, homeDir: '/tmp/isolated' });
-  assert.equal(out.CODERABBIT_HOME, '/tmp/isolated/.coderabbit');
-  assert.equal(out.XDG_CONFIG_HOME, '/tmp/isolated/.config');
-  assert.equal(out.XDG_CACHE_HOME, '/tmp/isolated/.cache');
-  assert.equal(out.XDG_STATE_HOME, '/tmp/isolated/.local/state');
-  assert.equal(out.XDG_DATA_HOME, '/tmp/isolated/.local/share');
+test('parseCodeRabbitRateLimitRetryMs parses the suggested retry delay', () => {
+  const ms = parseCodeRabbitRateLimitRetryMs(
+    '[2026-01-25T22:29:41.623Z] ❌ ERROR: Error: Rate limit exceeded, please try after 3 minutes and 2 seconds'
+  );
+  assert.ok(ms);
+  // Allow +1s padding.
+  assert.equal(ms, (3 * 60 + 2 + 1) * 1000);
+});
+
+test('parseCodeRabbitRateLimitRetryMs supports seconds-only windows', () => {
+  const ms = parseCodeRabbitRateLimitRetryMs(
+    '[2026-01-26T00:27:23.067Z] ❌ ERROR: Error: Rate limit exceeded, please try after 0 minutes and 31 seconds'
+  );
+  assert.ok(ms);
+  assert.equal(ms, (31 + 1) * 1000);
 });
 

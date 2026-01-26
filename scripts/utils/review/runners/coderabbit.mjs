@@ -1,11 +1,25 @@
 import { runCaptureResult } from '../../proc/proc.mjs';
 import { join } from 'node:path';
+import { appendFile } from 'node:fs/promises';
 
 function normalizeType(raw) {
   const t = String(raw ?? '').trim().toLowerCase();
   if (!t) return 'committed';
   if (t === 'all' || t === 'committed' || t === 'uncommitted') return t;
   throw new Error(`[review] invalid coderabbit type: ${raw} (expected: all|committed|uncommitted)`);
+}
+
+export function parseCodeRabbitRateLimitRetryMs(text) {
+  const s = String(text ?? '');
+  const m = s.match(/Rate limit exceeded,\s*please try after\s+(\d+)\s+minutes?\s+and\s+(\d+)\s+seconds?/i);
+  if (!m) return null;
+  const minutes = Number(m[1]);
+  const seconds = Number(m[2]);
+  if (!Number.isFinite(minutes) || minutes < 0) return null;
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  // Add +1s padding to avoid retrying too early.
+  const totalSeconds = minutes * 60 + seconds + 1;
+  return Math.max(1000, totalSeconds * 1000);
 }
 
 export function buildCodeRabbitReviewArgs({ repoDir, baseRef, baseCommit, type, configFiles }) {
@@ -57,12 +71,35 @@ export async function runCodeRabbitReview({
 }) {
   const homeDir = (env?.HAPPY_STACKS_CODERABBIT_HOME_DIR ?? env?.HAPPY_LOCAL_CODERABBIT_HOME_DIR ?? '').toString().trim();
   const args = buildCodeRabbitReviewArgs({ repoDir, baseRef, baseCommit, type, configFiles });
-  const res = await runCaptureResult('coderabbit', args, {
-    cwd: repoDir,
-    env: buildCodeRabbitEnv({ env, homeDir }),
-    streamLabel,
-    teeFile,
-    teeLabel,
-  });
-  return { ...res, stdout: res.out, stderr: res.err };
+  const maxAttempts = 50;
+  let last = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await runCaptureResult('coderabbit', args, {
+      cwd: repoDir,
+      env: buildCodeRabbitEnv({ env, homeDir }),
+      streamLabel,
+      teeFile,
+      teeLabel,
+    });
+    last = res;
+    if (res.ok) return { ...res, stdout: res.out, stderr: res.err };
+
+    const retryMs = parseCodeRabbitRateLimitRetryMs(`${res.out ?? ''}\n${res.err ?? ''}`);
+    if (!retryMs) return { ...res, stdout: res.out, stderr: res.err };
+
+    const seconds = Math.ceil(retryMs / 1000);
+    const msg = `[review] coderabbit rate limited; retrying in ${seconds}s (attempt ${attempt}/${maxAttempts})\n`;
+    try {
+      if (teeFile) await appendFile(teeFile, msg);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line no-console
+    console.warn(msg.trimEnd());
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, retryMs));
+  }
+
+  return { ...last, stdout: last?.out ?? '', stderr: last?.err ?? '' };
 }
