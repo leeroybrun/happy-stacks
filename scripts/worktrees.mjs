@@ -26,6 +26,7 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
 import { ensureEnvFilePruned, ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { isSandboxed } from './utils/env/sandbox.mjs';
+import { applyStackCacheEnv } from './utils/proc/pm.mjs';
 import { existsSync } from 'node:fs';
 import { getHomeEnvLocalPath, getHomeEnvPath, resolveUserConfigEnvPath } from './utils/env/config.mjs';
 import { detectServerComponentDirMismatch } from './utils/server/validate.mjs';
@@ -417,6 +418,8 @@ async function installDependencies({ dir }) {
     return { installed: false, reason: 'no package manager detected (no package.json)' };
   }
 
+  const env = await applyStackCacheEnv(process.env);
+
   // IMPORTANT:
   // When a caller requests --json, stdout must be reserved for JSON output only.
   // Package managers (especially Yarn) write progress to stdout, which would corrupt JSON parsing
@@ -424,7 +427,7 @@ async function installDependencies({ dir }) {
   const jsonMode = Boolean((process.argv ?? []).includes('--json'));
   const runForJson = async (cmd, args) => {
     try {
-      const out = await runCapture(cmd, args, { cwd: dir });
+      const out = await runCapture(cmd, args, { cwd: dir, env });
       if (out) process.stderr.write(out);
     } catch (e) {
       const out = String(e?.out ?? '');
@@ -439,7 +442,7 @@ async function installDependencies({ dir }) {
     if (jsonMode) {
       await runForJson('pnpm', ['install', '--frozen-lockfile']);
     } else {
-      await run('pnpm', ['install', '--frozen-lockfile'], { cwd: dir });
+      await run('pnpm', ['install', '--frozen-lockfile'], { cwd: dir, env });
     }
     return { installed: true, reason: null };
   }
@@ -448,7 +451,7 @@ async function installDependencies({ dir }) {
     if (jsonMode) {
       await runForJson('yarn', ['install', '--frozen-lockfile']);
     } else {
-      await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir });
+      await run('yarn', ['install', '--frozen-lockfile'], { cwd: dir, env });
     }
     return { installed: true, reason: null };
   }
@@ -457,13 +460,13 @@ async function installDependencies({ dir }) {
     if (jsonMode) {
       await runForJson('npm', ['ci']);
     } else {
-      await run('npm', ['ci'], { cwd: dir });
+      await run('npm', ['ci'], { cwd: dir, env });
     }
   } else {
     if (jsonMode) {
       await runForJson('npm', ['install']);
     } else {
-      await run('npm', ['install'], { cwd: dir });
+      await run('npm', ['install'], { cwd: dir, env });
     }
   }
   return { installed: true, reason: null };

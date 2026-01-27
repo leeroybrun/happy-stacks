@@ -105,7 +105,7 @@ function resolveStackCacheBaseDirFromEnv(env) {
   }
 }
 
-async function applyStackCacheEnv(baseEnv) {
+export async function applyStackCacheEnv(baseEnv) {
   const env = { ...(baseEnv && typeof baseEnv === 'object' ? baseEnv : process.env) };
   const envFile = (env.HAPPY_STACKS_ENV_FILE ?? env.HAPPY_LOCAL_ENV_FILE ?? '').toString().trim();
   const stackCacheBase = resolveStackCacheBaseDirFromEnv(env);
