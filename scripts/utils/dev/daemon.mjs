@@ -47,7 +47,9 @@ export async function prepareDaemonAuthSeed({
     serverComponentName,
     serverDir,
     env: serverEnv,
-    bestEffort: serverComponentName === 'happy-server',
+    // This probe is used only for auth seeding heuristics (and should never block stack startup).
+    // For unified server-light, running migrations here can race the running server and lock SQLite.
+    bestEffort: true,
   });
   return await prepareDaemonAuthSeedIfNeeded({
     rootDir,

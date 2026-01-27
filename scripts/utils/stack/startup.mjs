@@ -16,6 +16,11 @@ function looksLikeAlreadyExistsError(msg) {
   return s.includes('already exists') || s.includes('duplicate') || s.includes('constraint failed');
 }
 
+function looksLikeDatabaseLockedError(msg) {
+  const s = String(msg ?? '').toLowerCase();
+  return s.includes('database is locked') || s.includes('sqlite database error');
+}
+
 function looksLikeMissingGeneratedSqliteClientError(err) {
   const code = err && typeof err === 'object' ? err.code : '';
   if (code !== 'ERR_MODULE_NOT_FOUND') return false;
@@ -123,7 +128,7 @@ export function resolveAuthSeedFromEnv(env) {
   return seed || 'main';
 }
 
-export async function ensureServerLightSchemaReady({ serverDir, env }) {
+export async function ensureServerLightSchemaReady({ serverDir, env, bestEffort = false }) {
   await ensureDepsInstalled(serverDir, 'happy-server-light', { env });
 
   const dataDir = (env?.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').toString().trim();
@@ -151,11 +156,19 @@ export async function ensureServerLightSchemaReady({ serverDir, env }) {
   // Unified server-light (monorepo): ensure deterministic migrations are applied (idempotent).
   // Legacy server-light (single schema.prisma with db push): do NOT run `prisma migrate deploy`,
   // because it commonly fails with P3005 when the DB was created by `prisma db push` and no migrations exist.
-  if (isUnified) {
+  //
+  // IMPORTANT:
+  // In dev/start flows the server process may already be running and holding the SQLite DB open.
+  // Running `prisma migrate deploy` concurrently will fail with "database is locked".
+  // When bestEffort=true (used for auth seeding heuristics), skip migrations and only probe.
+  if (isUnified && !bestEffort) {
     try {
       await pmExecBin({ dir: serverDir, bin: 'prisma', args: resolveServerLightPrismaMigrateDeployArgs({ serverDir }), env });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (looksLikeDatabaseLockedError(msg) && bestEffort) {
+        return { ok: false, migrated: true, accountCount: null, error: msg };
+      }
       // If the SQLite DB was created before migrations existed (historical db push era),
       // `migrate deploy` can fail because tables already exist. Best-effort: baseline-resolve
       // the first migration, then retry deploy.
@@ -185,13 +198,27 @@ export async function ensureServerLightSchemaReady({ serverDir, env }) {
   } catch (e) {
     if (looksLikeMissingGeneratedSqliteClientError(e)) {
       await pmExecBin({ dir: serverDir, bin: 'prisma', args: ['generate', ...schemaArgs], env });
-      const accountCount = await probe();
-      return { ok: true, migrated: isUnified, accountCount };
+      try {
+        const accountCount = await probe();
+        return { ok: true, migrated: isUnified, accountCount };
+      } catch (e2) {
+        const msg = e2 instanceof Error ? e2.message : String(e2);
+        if (bestEffort && looksLikeDatabaseLockedError(msg)) {
+          return { ok: false, migrated: isUnified, accountCount: null, error: msg };
+        }
+        throw e2;
+      }
     }
     const msg = e instanceof Error ? e.message : String(e);
+    if (bestEffort && looksLikeDatabaseLockedError(msg)) {
+      return { ok: false, migrated: isUnified, accountCount: null, error: msg };
+    }
     if (looksLikeMissingTableError(msg)) {
       if (isUnified) {
-        // Tables still missing after migrate deploy; fail closed with a clear error.
+        // Tables still missing after migrate deploy (or probe without migrations); fail closed unless best-effort.
+        if (bestEffort) {
+          return { ok: false, migrated: true, accountCount: null, error: 'sqlite schema not ready (missing tables)' };
+        }
         throw new Error(`[server-light] sqlite schema not ready after prisma migrate deploy (missing tables).`);
       }
       // Legacy server-light: schema is typically applied via `prisma db push` in the component's dev/start scripts.
@@ -201,6 +228,9 @@ export async function ensureServerLightSchemaReady({ serverDir, env }) {
     if (!isUnified) {
       // Legacy server-light: probing is best-effort (don't make stack dev fail closed here).
       return { ok: true, migrated: false, accountCount: 0 };
+    }
+    if (bestEffort) {
+      return { ok: false, migrated: true, accountCount: null, error: msg };
     }
     throw e;
   }
@@ -226,8 +256,16 @@ export async function ensureHappyServerSchemaReady({ serverDir, env }) {
 
 export async function getAccountCountForServerComponent({ serverComponentName, serverDir, env, bestEffort = false }) {
   if (serverComponentName === 'happy-server-light') {
-    const ready = await ensureServerLightSchemaReady({ serverDir, env });
-    return { ok: true, accountCount: Number.isFinite(ready.accountCount) ? ready.accountCount : 0 };
+    try {
+      const ready = await ensureServerLightSchemaReady({ serverDir, env, bestEffort });
+      if (!ready?.ok) {
+        return { ok: false, accountCount: null, error: String(ready?.error ?? 'server-light schema probe failed') };
+      }
+      return { ok: true, accountCount: Number.isFinite(ready.accountCount) ? ready.accountCount : 0 };
+    } catch (e) {
+      if (!bestEffort) throw e;
+      return { ok: false, accountCount: null, error: e instanceof Error ? e.message : String(e) };
+    }
   }
   if (serverComponentName === 'happy-server') {
     try {

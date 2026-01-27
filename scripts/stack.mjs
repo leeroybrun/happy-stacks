@@ -1433,10 +1433,12 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
           return;
         }
 
+        let exit = { code: null, sig: null, ok: false };
         try {
           await new Promise((resolvePromise, rejectPromise) => {
             child.on('error', rejectPromise);
             child.on('exit', (code, sig) => {
+              exit = { code: code ?? null, sig: sig ?? null, ok: code === 0 };
               if (code === 0) return resolvePromise();
               return rejectPromise(new Error(`stack ${scriptPath} exited (code=${code ?? 'null'}, sig=${sig ?? 'null'})`));
             });
@@ -1444,7 +1446,26 @@ async function cmdRunScript({ rootDir, stackName, scriptPath, args, extraEnv = {
         } finally {
           const cur = await readStackRuntimeStateFile(runtimeStatePath);
           if (Number(cur?.ownerPid) === Number(child.pid)) {
-            await deleteStackRuntimeStateFile(runtimeStatePath);
+            // Only delete runtime state when we're confident no child processes are left behind.
+            // If the runner crashes but a child (server/expo/daemon) stays alive, keeping stack.runtime.json
+            // allows `happys stack stop --aggressive` to kill the recorded PIDs safely.
+            const processes = cur?.processes && typeof cur.processes === 'object' ? cur.processes : {};
+            const anyAlive = Object.values(processes)
+              .map((p) => Number(p))
+              .some((pid) => Number.isFinite(pid) && pid > 1 && isPidAlive(pid));
+            const portRaw = cur?.ports && typeof cur.ports === 'object' ? cur.ports.server : null;
+            const port = Number(portRaw);
+            const portOccupied =
+              Number.isFinite(port) && port > 0 ? !(await isTcpPortFree(port, { host: '127.0.0.1' }).catch(() => true)) : false;
+
+            if (!anyAlive && !portOccupied) {
+              await deleteStackRuntimeStateFile(runtimeStatePath);
+            } else if (!wantsJson) {
+              console.warn(
+                `[stack] ${stackName}: preserving ${runtimeStatePath} after runner exit (child processes still alive). ` +
+                  `Run: happys stack stop ${stackName} --yes --aggressive`
+              );
+            }
           }
         }
         return;

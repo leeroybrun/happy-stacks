@@ -271,11 +271,12 @@ async function main() {
       : `file:${join(dataDir, 'happy-server-light.sqlite')}`;
 
     // Reliability: ensure DB schema exists before daemon hits /v1/machines (health checks don't cover DB readiness).
+    // If the server is already running and we are not restarting, do NOT run migrations here (SQLite can lock).
     const acct = await getAccountCountForServerComponent({
       serverComponentName,
       serverDir,
       env: serverEnv,
-      bestEffort: false,
+      bestEffort: Boolean(serverAlreadyRunning && !restart),
     });
     serverLightAccountCount = typeof acct.accountCount === 'number' ? acct.accountCount : null;
   }
