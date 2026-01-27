@@ -217,9 +217,7 @@ test('happys stack happy <name> does not print wrapper stack traces on happy-cli
     HAPPY_STACKS_HOME_DIR: homeDir,
     HAPPY_STACKS_STORAGE_DIR: storageDir,
     HAPPY_STACKS_CLI_ROOT_DISABLE: '1',
-  };
-
-  const res = await runNode([join(rootDir, 'bin', 'happys.mjs'), 'stack', 'happy', stackName, 'attach', 'abc'], {
+  };  const res = await runNode([join(rootDir, 'bin', 'happys.mjs'), 'stack', 'happy', stackName, 'attach', 'abc'], {
     cwd: rootDir,
     env: baseEnv,
   });

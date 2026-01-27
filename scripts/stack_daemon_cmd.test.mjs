@@ -358,4 +358,3 @@ test('happys stack auth <name> login --identity=<name> --print prints identity-s
 
   await rm(tmp, { recursive: true, force: true });
 });
-

@@ -3130,7 +3130,7 @@ async function cmdPrStack({ rootDir, argv }) {
 
   // Monorepo shortcut:
   // If `--happy=<pr>` was provided and the local checkout is the slopus/happy monorepo, pin
-  // happy-cli and (optionally) happy-server to that same worktree without fetching separate PRs.
+  // happy-cli and server flavors to that same worktree without fetching separate PRs.
   if (happyMonorepoActive && prHappy) {
     const happyWt = worktrees.find((w) => w?.component === 'happy');
     const happyPath = String(happyWt?.path ?? '').trim();
@@ -3148,11 +3148,26 @@ async function cmdPrStack({ rootDir, argv }) {
     const derivedComponents = [
       'happy-cli',
       ...(serverComponent === 'happy-server' ? ['happy-server'] : []),
+      // If the user didn't explicitly provide a separate server-light PR, prefer the monorepo server/ dir.
+      ...(serverComponent === 'happy-server-light' && !prServerLight ? ['happy-server-light'] : []),
     ];
 
     for (const c of derivedComponents) {
       const p = derive(c);
       if (!p) continue;
+      if (c === 'happy-server-light') {
+        const hasSqliteSchema =
+          existsSync(join(p, 'prisma', 'sqlite', 'schema.prisma')) || existsSync(join(p, 'prisma', 'schema.sqlite.prisma'));
+        if (!hasSqliteSchema) {
+          throw new Error(
+            '[stack] pr: happy-server-light was requested, but the monorepo server checkout does not include sqlite schema support.\n' +
+              `- expected one of:\n` +
+              `  - ${join(p, 'prisma', 'sqlite', 'schema.prisma')}\n` +
+              `  - ${join(p, 'prisma', 'schema.sqlite.prisma')}\n` +
+              'Fix: either switch to the full server flavor (--server=happy-server), or provide an explicit --happy-server-light=<pr>.'
+          );
+        }
+      }
       if (!isComponentWorktreePath({ rootDir, component: c, dir: p, env: process.env })) {
         throw new Error(`[stack] pr: refusing to pin ${c} because the derived path is not a worktree: ${p}`);
       }
