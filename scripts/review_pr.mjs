@@ -22,6 +22,13 @@ function usage() {
     '[review-pr] usage:',
     '  happys review-pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>] [--name=<stack>] [--dev|--start] [--mobile|--no-mobile] [--forks|--upstream] [--seed-auth|--no-seed-auth] [--copy-auth-from=<stack>] [--link-auth|--copy-auth] [--update] [--force] [--keep-sandbox] [--json] [-- <stack dev/start args...>]',
     '',
+    'VM port forwarding (optional):',
+    '- `--vm-ports`: convenience preset for port-forwarded VMs (stack ports ~13xxx, Expo ports ~18xxx)',
+    '- `--stack-port-start=<n>`: sets HAPPY_STACKS_STACK_PORT_START inside the sandbox',
+    '- `--expo-dev-port-strategy=stable|ephemeral`: sets HAPPY_STACKS_EXPO_DEV_PORT_STRATEGY inside the sandbox',
+    '- `--expo-dev-port-base=<n>` / `--expo-dev-port-range=<n>`: stable Expo port hashing params',
+    '- `--expo-dev-port=<n>`: force the Expo dev (Metro) port inside the sandbox',
+    '',
     'What it does:',
     '- creates a temporary sandbox dir',
     '- runs `happys setup-pr ...` inside that sandbox (fully isolated state)',
@@ -68,6 +75,64 @@ function kvValue(argv, names) {
     }
   }
   return null;
+}
+
+function stripArgv(argv, names) {
+  const out = [];
+  for (const a of argv) {
+    let keep = true;
+    for (const n of names) {
+      if (a === n || a.startsWith(`${n}=`)) {
+        keep = false;
+        break;
+      }
+    }
+    if (keep) out.push(a);
+  }
+  return out;
+}
+
+function resolveSandboxPortEnvOverrides(argv) {
+  const overrides = {};
+
+  // Convenience preset for VM review flows (pairs with Lima port-forward ranges in docs).
+  if (argvHasFlag(argv, ['--vm-ports'])) {
+    overrides.HAPPY_STACKS_STACK_PORT_START = '13005';
+    overrides.HAPPY_LOCAL_STACK_PORT_START = '13005';
+
+    // Keep Expo dev ports stable per stack so forwarded ports remain predictable.
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT_STRATEGY = 'stable';
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT_BASE = '18081';
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT_RANGE = '1000';
+  }
+
+  const stackPortStart = (kvValue(argv, ['--stack-port-start']) ?? '').trim();
+  if (stackPortStart) {
+    overrides.HAPPY_STACKS_STACK_PORT_START = stackPortStart;
+    overrides.HAPPY_LOCAL_STACK_PORT_START = stackPortStart;
+  }
+
+  const expoStrategy = (kvValue(argv, ['--expo-dev-port-strategy']) ?? '').trim().toLowerCase();
+  if (expoStrategy === 'stable' || expoStrategy === 'ephemeral') {
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT_STRATEGY = expoStrategy;
+  }
+
+  const expoBase = (kvValue(argv, ['--expo-dev-port-base']) ?? '').trim();
+  if (expoBase) {
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT_BASE = expoBase;
+  }
+
+  const expoRange = (kvValue(argv, ['--expo-dev-port-range']) ?? '').trim();
+  if (expoRange) {
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT_RANGE = expoRange;
+  }
+
+  const expoForced = (kvValue(argv, ['--expo-dev-port']) ?? '').trim();
+  if (expoForced) {
+    overrides.HAPPY_STACKS_EXPO_DEV_PORT = expoForced;
+  }
+
+  return Object.keys(overrides).length ? overrides : null;
 }
 
 async function main() {
@@ -244,9 +309,20 @@ async function main() {
     const hasNameFlag = argvWithDefaults.some((a) => a === '--name' || a.startsWith('--name='));
     const argvFinal = hasNameFlag ? argvWithDefaults : [...argvWithDefaults, `--name=${effectiveStackName}`];
 
-    child = spawn(process.execPath, [bin, '--sandbox-dir', sandboxDir, 'setup-pr', ...argvFinal], {
+    // Sandbox-only port overrides (useful for VM testing where host port-forwarding expects specific ranges).
+    const portEnv = resolveSandboxPortEnvOverrides(argvFinal);
+    const argvForSetupPr = stripArgv(argvFinal, [
+      '--vm-ports',
+      '--stack-port-start',
+      '--expo-dev-port-strategy',
+      '--expo-dev-port-base',
+      '--expo-dev-port-range',
+      '--expo-dev-port',
+    ]);
+
+    child = spawn(process.execPath, [bin, '--sandbox-dir', sandboxDir, 'setup-pr', ...argvForSetupPr], {
       cwd: rootDir,
-      env: process.env,
+      env: portEnv ? { ...process.env, ...portEnv } : process.env,
       stdio: 'inherit',
     });
  

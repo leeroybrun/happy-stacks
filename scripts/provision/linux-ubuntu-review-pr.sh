@@ -73,7 +73,11 @@ corepack prepare pnpm@latest --activate >/dev/null 2>&1 || true
 
 echo "[provision] configuring happy-stacks VM defaults (ports)..."
 # When port-forwarding a VM to the macOS host, it's convenient to avoid using the host's default ports (3005/8081).
-# Persist these as happy-stacks home defaults so `npx happy-stacks ...` picks them up automatically.
+# Persist these as happy-stacks *home* defaults so non-sandbox `happys ...` commands pick them up automatically.
+#
+# NOTE: `npx happy-stacks review-pr ...` runs in a fully isolated sandbox (separate HOME), so it will NOT read
+# this file by default. For review-pr in a VM, pass `--vm-ports` (or explicit `--stack-port-start=...`) to
+# force the port ranges inside the sandbox.
 HS_HOME="${HOME}/.happy-stacks"
 mkdir -p "$HS_HOME"
 ENV_LOCAL="${HS_HOME}/env.local"
