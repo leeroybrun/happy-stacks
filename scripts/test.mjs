@@ -4,11 +4,11 @@ import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { componentDirEnvKey, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled } from './utils/proc/pm.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
-import { run } from './utils/proc/proc.mjs';
+import { run, runCapture } from './utils/proc/proc.mjs';
 import { detectPackageManagerCmd, pickFirstScript, readPackageJsonScripts } from './utils/proc/package_scripts.mjs';
 import { getInvokedCwd, inferComponentFromCwd } from './utils/cli/cwd_scope.mjs';
-import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join, sep } from 'node:path';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 const EXTRA_COMPONENTS = ['stacks'];
@@ -42,6 +42,30 @@ function pickTestScript(scripts) {
     'check:test',
   ];
   return pickFirstScript(scripts, candidates);
+}
+
+async function resolveTestDirForComponent({ component, dir }) {
+  // Monorepo mode:
+  // In the Happy monorepo, the "happy" component dir is often set to `<repo>/expo-app`
+  // so dev/start can operate from the app package. For validation, we want the monorepo
+  // root scripts (which run expo-app + cli + server together).
+  if (component !== 'happy') return dir;
+  if (!dir.endsWith(`${sep}expo-app`) && !dir.endsWith('/expo-app')) return dir;
+
+  const parent = dirname(dir);
+  try {
+    const scripts = await readPackageJsonScripts(parent);
+    if (!scripts) return dir;
+    if ((scripts?.test ?? '').toString().trim().length === 0) return dir;
+
+    // Only redirect when the parent is clearly intended as the monorepo root.
+    const pkg = JSON.parse(await readFile(join(parent, 'package.json'), 'utf-8'));
+    const name = String(pkg?.name ?? '').trim();
+    if (name !== 'monorepo') return dir;
+    return parent;
+  } catch {
+    return dir;
+  }
 }
 
 async function main() {
@@ -123,7 +147,8 @@ async function main() {
       continue;
     }
 
-    const dir = getComponentDir(rootDir, component);
+    const rawDir = getComponentDir(rootDir, component);
+    const dir = await resolveTestDirForComponent({ component, dir: rawDir });
     if (!(await pathExists(dir))) {
       results.push({ component, ok: false, skipped: false, dir, error: `missing component dir: ${dir}` });
       continue;
@@ -141,13 +166,20 @@ async function main() {
       continue;
     }
 
-    await ensureDepsInstalled(dir, component);
+    await ensureDepsInstalled(dir, component, { quiet: json, env: process.env });
     const pm = await detectPackageManagerCmd(dir);
 
     try {
-      // eslint-disable-next-line no-console
-      console.log(`[test] ${component}: running ${pm.name} ${script}`);
-      await run(pm.cmd, pm.argsForScript(script), { cwd: dir, env: process.env });
+      const line = `[test] ${component}: running ${pm.name} ${script}\n`;
+      if (json) {
+        process.stderr.write(line);
+        const out = await runCapture(pm.cmd, pm.argsForScript(script), { cwd: dir, env: process.env });
+        if (out) process.stderr.write(out);
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(line.trimEnd());
+        await run(pm.cmd, pm.argsForScript(script), { cwd: dir, env: process.env });
+      }
       results.push({ component, ok: true, skipped: false, dir, pm: pm.name, script });
     } catch (e) {
       results.push({ component, ok: false, skipped: false, dir, pm: pm.name, script, error: String(e?.message ?? e) });
@@ -185,4 +217,3 @@ main().catch((err) => {
   console.error('[test] failed:', err);
   process.exit(1);
 });
-
