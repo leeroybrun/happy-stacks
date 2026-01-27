@@ -91,6 +91,32 @@ test('parseCodexReviewText extracts findings JSON trailer even when fenced', () 
   assert.equal(findings[0].severity, 'minor');
 });
 
+test('parseCodexReviewText extracts findings JSON trailer when lines are log-prefixed', () => {
+  const label = '[monorepo:augment:4/39] ';
+  const review = [
+    `${label}some preamble`,
+    `${label}===FINDINGS_JSON===`,
+    `${label}\`\`\`json`,
+    `${label}[`,
+    `${label}  {`,
+    `${label}    \"severity\": \"major\",`,
+    `${label}    \"file\": \"cli/src/x.ts\",`,
+    `${label}    \"title\": \"Fix thing\",`,
+    `${label}    \"recommendation\": \"Do it.\",`,
+    `${label}    \"needsDiscussion\": false`,
+    `${label}  }`,
+    `${label}]`,
+    `${label}\`\`\``,
+    `${label}`,
+    `${label}Request ID: abc`,
+  ].join('\n');
+
+  const findings = parseCodexReviewText(review);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, 'cli/src/x.ts');
+  assert.equal(findings[0].severity, 'major');
+});
+
 test('parseCodexReviewText falls back to parsing [P#] bullet lines', () => {
   const review = [
     '[monorepo:codex:2/21] Review comment:',
@@ -139,6 +165,7 @@ test('formatTriageMarkdown includes required workflow fields', () => {
       },
     ],
   });
+  assert.match(md, /Trust checklist/i);
   assert.match(md, /Final decision: \*\*TBD\*\*/);
   assert.match(md, /Verified in validation worktree:/);
   assert.match(md, /Commit:/);

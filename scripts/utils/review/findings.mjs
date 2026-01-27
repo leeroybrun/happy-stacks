@@ -101,6 +101,14 @@ export function parseCodexReviewText(reviewText) {
     let jsonText = s.slice(idx + marker.length).trim();
     if (!jsonText) return [];
 
+    // The raw log files written by the review runner prefix each line with "[label] ".
+    // Strip that prefix so we can parse both prefixed logs and unprefixed stdout.
+    jsonText = jsonText
+      .split('\n')
+      .map((line) => String(line ?? '').replace(/^\[[^\]]+\]\s*/g, ''))
+      .join('\n')
+      .trim();
+
     // Some reviewers wrap the JSON in a fenced code block:
     // ===FINDINGS_JSON===
     // ```json
@@ -108,7 +116,7 @@ export function parseCodexReviewText(reviewText) {
     // ```
     //
     // Strip the outer fence so JSON.parse can succeed.
-    const fence = jsonText.match(/^```[a-z0-9_-]*\s*\n([\s\S]*?)\n```[\s]*$/i);
+    const fence = jsonText.match(/^```[a-z0-9_-]*\s*\n([\s\S]*?)\n```/i);
     if (fence?.[1]) jsonText = fence[1].trim();
 
     let parsed;
@@ -116,6 +124,20 @@ export function parseCodexReviewText(reviewText) {
       parsed = JSON.parse(jsonText);
     } catch {
       parsed = null;
+    }
+
+    // Some tools append non-JSON metadata after the array (e.g. "Request ID: ...").
+    // As a last resort, try to parse the first top-level JSON array substring.
+    if (!Array.isArray(parsed)) {
+      const firstBracket = jsonText.indexOf('[');
+      const lastBracket = jsonText.lastIndexOf(']');
+      if (firstBracket >= 0 && lastBracket > firstBracket) {
+        try {
+          parsed = JSON.parse(jsonText.slice(firstBracket, lastBracket + 1));
+        } catch {
+          // ignore
+        }
+      }
     }
     if (Array.isArray(parsed)) {
       return parsed
@@ -207,6 +229,15 @@ export function formatTriageMarkdown({ runLabel, baseRef, findings }) {
     '',
     `- Base ref: ${baseRef ?? ''}`,
     `- Findings: ${items.length}`,
+    '',
+    '## Trust checklist (READ THIS FIRST)',
+    '',
+    'Before you act on reviewer output:',
+    '1) Load this file into your context (human/LLM) so you follow the workflow end-to-end.',
+    '2) Treat every suggestion as a suggestion: verify against best practices + project invariants.',
+    '3) If you are unsure, do not apply; mark **Needs discussion** and capture rationale.',
+    '4) Do not skip nits by default: apply them when they improve long-term maintainability without risk.',
+    '5) Use web search sparingly when needed to validate best practices, but prefer primary sources/docs.',
     '',
     '## Mandatory workflow',
     '',
