@@ -48,6 +48,12 @@ fi
 
 VM_NAME="${1:-happy-test}"
 TEMPLATE="${LIMA_TEMPLATE:-ubuntu-24.04}"
+TEMPLATE_LOCATOR="${TEMPLATE}"
+if [[ "${TEMPLATE_LOCATOR}" == template://* ]]; then
+  TEMPLATE_LOCATOR="template:${TEMPLATE_LOCATOR#template://}"
+elif [[ "${TEMPLATE_LOCATOR}" != template:* ]]; then
+  TEMPLATE_LOCATOR="template:${TEMPLATE_LOCATOR}"
+fi
 LIMA_DIR="${HOME}/.lima/${VM_NAME}"
 LIMA_YAML="${LIMA_DIR}/lima.yaml"
 
@@ -56,7 +62,7 @@ echo "[lima] template: ${TEMPLATE}"
 
 if [[ ! -f "${LIMA_YAML}" ]]; then
   echo "[lima] creating VM..."
-  limactl create --name "${VM_NAME}" --tty=false "template://${TEMPLATE}"
+  limactl create --name "${VM_NAME}" --tty=false "${TEMPLATE_LOCATOR}"
 fi
 
 if [[ ! -f "${LIMA_YAML}" ]]; then
@@ -70,7 +76,7 @@ limactl stop "${VM_NAME}" >/dev/null 2>&1 || true
 echo "[lima] configuring port forwarding (localhost)..."
 cp -a "${LIMA_YAML}" "${LIMA_YAML}.bak.$(date +%Y%m%d-%H%M%S)"
 
-python3 - <<'PY'
+VM_NAME="${VM_NAME}" LIMA_YAML="${LIMA_YAML}" python3 - <<'PY'
 import os, re
 from pathlib import Path
 

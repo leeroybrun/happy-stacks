@@ -170,7 +170,7 @@ On the macOS host:
 ```bash
 limactl stop happy-pr || true
 limactl delete happy-pr
-limactl create --name happy-pr --tty=false template://ubuntu-24.04
+limactl create --name happy-pr --tty=false template:ubuntu-24.04
 limactl start happy-pr
 ```
 
