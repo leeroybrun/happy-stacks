@@ -4,7 +4,7 @@ function formatMissingTool({ name, why, install }) {
   return [`- ${name}: ${why}`, ...(install?.length ? install.map((l) => `  ${l}`) : [])].join('\n');
 }
 
-export async function assertCliPrereqs({ git = false, pnpm = false, codex = false, coderabbit = false } = {}) {
+export async function assertCliPrereqs({ git = false, pnpm = false, codex = false, coderabbit = false, augment = false } = {}) {
   const missing = [];
 
   if (git) {
@@ -61,6 +61,17 @@ export async function assertCliPrereqs({ git = false, pnpm = false, codex = fals
           'Install CodeRabbit CLI: `curl -fsSL https://cli.coderabbit.ai/install.sh | sh`',
           'Then authenticate: `coderabbit auth login`',
         ],
+      });
+    }
+  }
+
+  if (augment) {
+    const hasAuggie = await commandExists('auggie');
+    if (!hasAuggie) {
+      missing.push({
+        name: 'auggie',
+        why: 'required to run Augment (Auggie) review',
+        install: ['Install Auggie CLI: `npm install -g @augmentcode/auggie`', 'Then authenticate: `auggie login`'],
       });
     }
   }

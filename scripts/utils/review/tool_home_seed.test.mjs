@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seedCodeRabbitHomeFromRealHome, seedCodexHomeFromRealHome } from './tool_home_seed.mjs';
+import { seedAugmentHomeFromRealHome, seedCodeRabbitHomeFromRealHome, seedCodexHomeFromRealHome } from './tool_home_seed.mjs';
 
 test('seedCodeRabbitHomeFromRealHome copies coderabbit state into isolated home when missing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happy-stacks-coderabbit-seed-'));
@@ -89,6 +89,24 @@ test('seedCodexHomeFromRealHome refreshes auth/config when the real home has new
 
     assert.equal(await readFile(join(isolatedHome, 'auth.json'), 'utf-8'), 'new-auth\n');
     assert.equal(await readFile(join(isolatedHome, 'config.toml'), 'utf-8'), 'new-cfg\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('seedAugmentHomeFromRealHome copies session.json into isolated cache dir', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happy-stacks-augment-seed-'));
+  const realHome = join(root, 'real');
+  const isolatedHome = join(root, 'isolated');
+
+  try {
+    await mkdir(join(realHome, '.augment'), { recursive: true });
+    await writeFile(join(realHome, '.augment', 'session.json'), '{"ok":true}\n', 'utf-8');
+    await mkdir(isolatedHome, { recursive: true });
+
+    await seedAugmentHomeFromRealHome({ realHomeDir: realHome, isolatedHomeDir: isolatedHome });
+
+    assert.equal(await readFile(join(isolatedHome, 'session.json'), 'utf-8'), '{"ok":true}\n');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

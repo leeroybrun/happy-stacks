@@ -98,8 +98,18 @@ export function parseCodexReviewText(reviewText) {
   const marker = '===FINDINGS_JSON===';
   const idx = s.indexOf(marker);
   if (idx >= 0) {
-    const jsonText = s.slice(idx + marker.length).trim();
+    let jsonText = s.slice(idx + marker.length).trim();
     if (!jsonText) return [];
+
+    // Some reviewers wrap the JSON in a fenced code block:
+    // ===FINDINGS_JSON===
+    // ```json
+    // [...]
+    // ```
+    //
+    // Strip the outer fence so JSON.parse can succeed.
+    const fence = jsonText.match(/^```[a-z0-9_-]*\s*\n([\s\S]*?)\n```[\s]*$/i);
+    if (fence?.[1]) jsonText = fence[1].trim();
 
     let parsed;
     try {

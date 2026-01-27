@@ -77,3 +77,23 @@ export async function seedCodexHomeFromRealHome({ realHomeDir, isolatedHomeDir }
   await copyFileIfNewer({ srcFile: join(real, '.codex', 'auth.json'), destFile: join(isolated, 'auth.json') });
   await copyFileIfNewer({ srcFile: join(real, '.codex', 'config.toml'), destFile: join(isolated, 'config.toml') });
 }
+
+/**
+ * Best-effort: seed Auggie (Augment CLI) auth/config into an isolated cache directory.
+ *
+ * Auggie uses `~/.augment` by default (see `--augment-cache-dir`), and supports
+ * providing session auth via `AUGMENT_SESSION_AUTH` (same format as `~/.augment/session.json`).
+ *
+ * We do not read or print any auth contents; we only copy the on-disk state when present.
+ */
+export async function seedAugmentHomeFromRealHome({ realHomeDir, isolatedHomeDir } = {}) {
+  const real = String(realHomeDir ?? '').trim();
+  const isolated = String(isolatedHomeDir ?? '').trim();
+  if (!real || !isolated || real === isolated) return;
+
+  // Copy ~/.augment/* into the isolated cache dir.
+  await mergeCopyDir({ srcDir: join(real, '.augment'), destDir: isolated });
+
+  // Refresh session.json when it is newer.
+  await copyFileIfNewer({ srcFile: join(real, '.augment', 'session.json'), destFile: join(isolated, 'session.json') });
+}

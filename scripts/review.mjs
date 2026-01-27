@@ -12,9 +12,10 @@ import { createHeadSliceCommits, getChangedOps } from './utils/review/head_slice
 import { runWithConcurrencyLimit } from './utils/proc/parallel.mjs';
 import { runCodeRabbitReview } from './utils/review/runners/coderabbit.mjs';
 import { extractCodexReviewFromJsonl, runCodexReview } from './utils/review/runners/codex.mjs';
+import { detectAugmentAuthError, runAugmentReview } from './utils/review/runners/augment.mjs';
 import { formatTriageMarkdown, parseCodeRabbitPlainOutput, parseCodexReviewText } from './utils/review/findings.mjs';
 import { runSlicedJobs } from './utils/review/sliced_runner.mjs';
-import { seedCodeRabbitHomeFromRealHome, seedCodexHomeFromRealHome } from './utils/review/tool_home_seed.mjs';
+import { seedAugmentHomeFromRealHome, seedCodeRabbitHomeFromRealHome, seedCodexHomeFromRealHome } from './utils/review/tool_home_seed.mjs';
 import { join } from 'node:path';
 import { ensureDir } from './utils/fs/ops.mjs';
 import { copyFile, writeFile } from 'node:fs/promises';
@@ -24,7 +25,7 @@ import { withDetachedWorktree } from './utils/review/detached_worktree.mjs';
 
 const DEFAULT_COMPONENTS = ['happy', 'happy-cli', 'happy-server-light', 'happy-server'];
 const VALID_COMPONENTS = DEFAULT_COMPONENTS;
-const VALID_REVIEWERS = ['coderabbit', 'codex'];
+const VALID_REVIEWERS = ['coderabbit', 'codex', 'augment'];
 const VALID_DEPTHS = ['deep', 'normal'];
 const DEFAULT_REVIEW_MAX_FILES = 50;
 
@@ -45,7 +46,7 @@ function normalizeReviewers(list) {
 function usage() {
   return [
     '[review] usage:',
-    '  happys review [component...] [--reviewers=coderabbit,codex] [--base-remote=<remote>] [--base-branch=<branch>] [--base-ref=<ref>] [--concurrency=N] [--depth=deep|normal] [--chunks|--no-chunks] [--chunking=auto|head-slice|commit-window] [--chunk-max-files=N] [--coderabbit-type=committed|uncommitted|all] [--coderabbit-max-files=N] [--coderabbit-chunks|--no-coderabbit-chunks] [--codex-chunks|--no-codex-chunks] [--run-label=<label>] [--no-stream] [--json]',
+    '  happys review [component...] [--reviewers=coderabbit,codex,augment] [--base-remote=<remote>] [--base-branch=<branch>] [--base-ref=<ref>] [--concurrency=N] [--depth=deep|normal] [--chunks|--no-chunks] [--chunking=auto|head-slice|commit-window] [--chunk-max-files=N] [--coderabbit-type=committed|uncommitted|all] [--coderabbit-max-files=N] [--coderabbit-chunks|--no-coderabbit-chunks] [--codex-chunks|--no-codex-chunks] [--augment-chunks|--no-augment-chunks] [--augment-model=<id>] [--augment-max-turns=N] [--run-label=<label>] [--no-stream] [--json]',
     '',
     'components:',
     `  ${VALID_COMPONENTS.join(' | ')}`,
@@ -148,6 +149,35 @@ function buildCodexDeepPrompt({ component, baseRef }) {
     '',
     'Instructions:',
     `- Use: ${diffCmd}`,
+    '- Focus on correctness, edge cases, reliability, performance, and security.',
+    '- Prefer unified/coherent fixes; avoid duplication.',
+    '- Avoid brittle tests that assert on wording/phrasing/config; test real behavior and observable outcomes.',
+    '- Ensure i18n coverage is complete: do not introduce hardcoded user-visible strings; add translation keys across locales as needed.',
+    '- Treat every recommendation as a suggestion: validate it against best practices and this codebase’s existing patterns. Do not propose changes that violate project invariants.',
+    '- Be exhaustive: list all findings you notice, not only the highest-signal ones.',
+    '- Clearly mark any item that is uncertain, has tradeoffs, or needs product/UX decisions as "needs discussion".',
+    '',
+    'Output format:',
+    '- Start with a short overall verdict.',
+    '- Then list findings as bullets with severity (blocker/major/minor/nit) and a concrete fix suggestion.',
+    '',
+    'Machine-readable output (required):',
+    '- After your review, output a JSON array of findings preceded by a line containing exactly: ===FINDINGS_JSON===',
+    '- Each finding should include: severity, file, (optional) lines, title, description, recommendation, needsDiscussion (boolean).',
+  ].join('\n');
+}
+
+function buildCodexMonorepoDeepPrompt({ baseRef }) {
+  const diffCmd = `cd \"$(git rev-parse --show-toplevel)\" && git diff ${baseRef}...HEAD`;
+  return [
+    'Run a deep, long-form code review on the monorepo.',
+    '',
+    `Base for review: ${baseRef}`,
+    'Scope: full repo',
+    '',
+    'Instructions:',
+    `- Use: ${diffCmd}`,
+    '- You may inspect any file in the repo for cross-references (server/cli/ui).',
     '- Focus on correctness, edge cases, reliability, performance, and security.',
     '- Prefer unified/coherent fixes; avoid duplication.',
     '- Avoid brittle tests that assert on wording/phrasing/config; test real behavior and observable outcomes.',
@@ -284,6 +314,7 @@ async function main() {
     git: true,
     coderabbit: reviewers.includes('coderabbit'),
     codex: reviewers.includes('codex'),
+    augment: reviewers.includes('augment'),
   });
 
   const inferred = positionals.length === 0 ? resolveComponentFromCwdOrNull({ rootDir, invokedCwd }) : null;
@@ -323,6 +354,8 @@ async function main() {
   const depth = (kv.get('--depth') ?? 'deep').toString().trim().toLowerCase();
   const coderabbitType = (kv.get('--coderabbit-type') ?? 'committed').toString().trim().toLowerCase();
   const chunkingMode = (kv.get('--chunking') ?? 'auto').toString().trim().toLowerCase();
+  const augmentModelFlag = (kv.get('--augment-model') ?? '').toString().trim();
+  const augmentMaxTurnsFlag = (kv.get('--augment-max-turns') ?? '').toString().trim();
   const chunkMaxFilesRaw = (kv.get('--chunk-max-files') ?? '').toString().trim();
   const coderabbitMaxFilesRaw = (kv.get('--coderabbit-max-files') ?? '').toString().trim();
   const coderabbitMaxFiles = coderabbitMaxFilesRaw ? Number(coderabbitMaxFilesRaw) : DEFAULT_REVIEW_MAX_FILES;
@@ -334,12 +367,16 @@ async function main() {
       ? false
       : null;
   const codexChunksOverride = flags.has('--codex-chunks') ? true : flags.has('--no-codex-chunks') ? false : null;
+  const augmentChunksOverride = flags.has('--augment-chunks') ? true : flags.has('--no-augment-chunks') ? false : null;
   if (!VALID_DEPTHS.includes(depth)) {
     throw new Error(`[review] invalid --depth=${depth} (expected: ${VALID_DEPTHS.join(' | ')})`);
   }
   if (!['auto', 'head-slice', 'commit-window'].includes(chunkingMode)) {
     throw new Error('[review] invalid --chunking (expected: auto|head-slice|commit-window)');
   }
+
+  if (augmentModelFlag) process.env.HAPPY_STACKS_AUGMENT_MODEL = augmentModelFlag;
+  if (augmentMaxTurnsFlag) process.env.HAPPY_STACKS_AUGMENT_MAX_TURNS = augmentMaxTurnsFlag;
 
   const deepInstructionsPath = join(rootDir, 'scripts', 'utils', 'review', 'instructions', 'deep.md');
   const coderabbitConfigFiles = depth === 'deep' ? [deepInstructionsPath] : [];
@@ -385,6 +422,26 @@ async function main() {
       }
     } catch {
       // ignore (codex will surface auth issues if seeding fails)
+    }
+  }
+
+  if (reviewers.includes('augment')) {
+    const augmentHomeKey = 'HAPPY_STACKS_AUGMENT_CACHE_DIR';
+    if (!(process.env[augmentHomeKey] ?? '').toString().trim()) {
+      process.env[augmentHomeKey] = join(rootDir, '.project', 'augment-home');
+    }
+    await ensureDir(process.env[augmentHomeKey]);
+
+    // Seed Auggie auth/config into the isolated cache dir so review runs can be non-interactive.
+    // We never print or inspect auth contents.
+    try {
+      const realHome = (process.env.HOME ?? '').toString().trim();
+      const overrideHome = process.env[augmentHomeKey];
+      if (realHome && overrideHome && realHome !== overrideHome) {
+        await seedAugmentHomeFromRealHome({ realHomeDir: realHome, isolatedHomeDir: overrideHome });
+      }
+    } catch {
+      // ignore (auggie will surface auth issues if seeding fails)
     }
   }
 
@@ -442,6 +499,7 @@ async function main() {
       const sliceConcurrency = Math.max(1, Math.floor(limit / Math.max(1, reviewers.length)));
       const wantChunksCoderabbit = coderabbitChunksOverride ?? globalChunks;
       const wantChunksCodex = codexChunksOverride ?? globalChunks;
+      const wantChunksAugment = augmentChunksOverride ?? globalChunks;
       const effectiveChunking = chunkingMode === 'auto' ? (monorepo ? 'head-slice' : 'commit-window') : chunkingMode;
 
       if (monorepo && stream) {
@@ -738,7 +796,11 @@ async function main() {
               };
             }
 
-            const prompt = usePromptMode ? buildCodexDeepPrompt({ component, baseRef: base.baseRef }) : '';
+            const prompt = usePromptMode
+              ? monorepo
+                ? buildCodexMonorepoDeepPrompt({ baseRef: base.baseRef })
+                : buildCodexDeepPrompt({ component, baseRef: base.baseRef })
+              : '';
             const logFile = join(runDir, 'raw', `codex-${sanitizeLabel(component)}.log`);
             const res = await runCodexReview({
               repoDir,
@@ -760,6 +822,122 @@ async function main() {
               stdout: res.stdout ?? '',
               stderr: res.stderr ?? '',
               review_output: extracted,
+              logFile,
+            };
+          }
+          if (reviewer === 'augment') {
+            const usePromptMode = depth === 'deep';
+            const fileCount = await countChangedFiles({ cwd: repoDir, env: process.env, base: base.baseRef });
+            const autoChunks = usePromptMode && fileCount > maxFiles;
+            const cacheDir = (process.env.HAPPY_STACKS_AUGMENT_CACHE_DIR ?? '').toString().trim();
+            const model = (process.env.HAPPY_STACKS_AUGMENT_MODEL ?? '').toString().trim();
+            const maxTurnsRaw = (process.env.HAPPY_STACKS_AUGMENT_MAX_TURNS ?? '').toString().trim();
+            const maxTurns = maxTurnsRaw ? Number(maxTurnsRaw) : null;
+
+            if (monorepo && effectiveChunking === 'head-slice' && usePromptMode && (wantChunksAugment ?? autoChunks)) {
+              const headCommit = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: repoDir, env: process.env })).trim();
+              const baseCommit = (await runCapture('git', ['rev-parse', base.baseRef], { cwd: repoDir, env: process.env })).trim();
+              const ops = await getChangedOps({ cwd: repoDir, baseRef: baseCommit, headRef: headCommit, env: process.env });
+              const slices = planPathSlices({ changedPaths: Array.from(ops.all), maxFiles });
+
+              const sliceItems = slices.map((slice, i) => ({ slice, index: i + 1, of: slices.length }));
+              const sliceResults = await runSlicedJobs({
+                items: sliceItems,
+                limit: sliceConcurrency,
+                run: async ({ slice, index, of }) => {
+                  const logFile = join(runDir, 'raw', `augment-slice-${index}-of-${of}-${sanitizeLabel(slice.label)}.log`);
+                  const rr = await withDetachedWorktree(
+                    { repoDir, headCommit: baseCommit, label: `augment-${index}-of-${of}`, env: process.env },
+                    async (worktreeDir) => {
+                      const { baseSliceCommit } = await createHeadSliceCommits({
+                        cwd: worktreeDir,
+                        env: process.env,
+                        baseRef: baseCommit,
+                        headCommit,
+                        ops,
+                        slicePaths: slice.paths,
+                        label: slice.label.replace(/\/+$/g, ''),
+                      });
+                      const prompt = buildCodexMonorepoSlicePrompt({
+                        sliceLabel: slice.label,
+                        baseCommit: baseSliceCommit,
+                        baseRef: base.baseRef,
+                      });
+                      return await runAugmentReview({
+                        repoDir: worktreeDir,
+                        prompt,
+                        env: process.env,
+                        cacheDir,
+                        model,
+                        maxTurns: Number.isFinite(maxTurns) ? String(maxTurns) : undefined,
+                        streamLabel: stream ? `monorepo:augment:${index}/${of}` : undefined,
+                        teeFile: logFile,
+                        teeLabel: `monorepo:augment:${index}/${of}`,
+                      });
+                    }
+                  );
+                  return {
+                    index,
+                    of,
+                    slice: slice.label,
+                    fileCount: slice.paths.length,
+                    logFile,
+                    ok: Boolean(rr.ok),
+                    exitCode: rr.exitCode,
+                    signal: rr.signal,
+                    durationMs: rr.durationMs,
+                    stdout: rr.stdout ?? '',
+                    stderr: rr.stderr ?? '',
+                  };
+                },
+                shouldAbortEarly: (r) => detectAugmentAuthError({ stdout: r?.stdout, stderr: r?.stderr }),
+              });
+
+              if (sliceResults.length === 1 && detectAugmentAuthError(sliceResults[0])) {
+                const msg = `[review] augment auth required: run 'auggie login' in an interactive session, then re-run this review.`;
+                // eslint-disable-next-line no-console
+                console.error(msg);
+              }
+
+              const okAll = sliceResults.every((r) => r.ok);
+              return {
+                reviewer,
+                ok: okAll,
+                exitCode: okAll ? 0 : 1,
+                signal: null,
+                durationMs: sliceResults.reduce((acc, r) => acc + (r.durationMs ?? 0), 0),
+                stdout: '',
+                stderr: '',
+                note: `monorepo head-slice: ${sliceResults.length} slices (maxFiles=${maxFiles})`,
+                slices: sliceResults,
+              };
+            }
+
+            const prompt = usePromptMode
+              ? monorepo
+                ? buildCodexMonorepoDeepPrompt({ baseRef: base.baseRef })
+                : buildCodexDeepPrompt({ component, baseRef: base.baseRef })
+              : '';
+            const logFile = join(runDir, 'raw', `augment-${sanitizeLabel(component)}.log`);
+            const res = await runAugmentReview({
+              repoDir,
+              prompt,
+              env: process.env,
+              cacheDir,
+              model,
+              maxTurns: Number.isFinite(maxTurns) ? String(maxTurns) : undefined,
+              streamLabel: stream ? `${component}:augment` : undefined,
+              teeFile: logFile,
+              teeLabel: `${component}:augment`,
+            });
+            return {
+              reviewer,
+              ok: Boolean(res.ok),
+              exitCode: res.exitCode,
+              signal: res.signal,
+              durationMs: res.durationMs,
+              stdout: res.stdout ?? '',
+              stderr: res.stderr ?? '',
               logFile,
             };
           }
@@ -790,6 +968,7 @@ async function main() {
     const allFindings = [];
     let cr = 0;
     let cx = 0;
+    let au = 0;
 
     for (const job of jobResults) {
       for (const rr of job.results) {
@@ -848,6 +1027,31 @@ async function main() {
           } else {
             const reviewText = rr.review_output ?? extractCodexReviewFromJsonl(rr.stdout ?? '') ?? (rr.stdout ?? '');
             consumeText(reviewText, null, rr.logFile ?? null);
+          }
+        }
+
+        if (rr.reviewer === 'augment') {
+          const sliceLike = rr.slices ?? rr.chunks ?? null;
+          const consumeText = (reviewText, slice, sourceLog) => {
+            const parsed = parseCodexReviewText(reviewText).map((f) => ({ ...f, reviewer: 'augment' }));
+            for (const f of parsed) {
+              au += 1;
+              allFindings.push({
+                ...f,
+                id: `AU-${String(au).padStart(3, '0')}`,
+                job: job.component,
+                slice,
+                sourceLog: sourceLog ?? null,
+              });
+            }
+          };
+
+          if (Array.isArray(sliceLike)) {
+            for (const s of sliceLike) {
+              consumeText(s.stdout ?? '', s.slice ?? `${s.index}/${s.of}`, s.logFile ?? null);
+            }
+          } else {
+            consumeText(rr.stdout ?? '', null, rr.logFile ?? null);
           }
         }
       }

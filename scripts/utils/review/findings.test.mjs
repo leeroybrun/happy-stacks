@@ -64,6 +64,33 @@ test('parseCodexReviewText extracts findings JSON trailer', () => {
   assert.equal(findings[0].severity, 'major');
 });
 
+test('parseCodexReviewText extracts findings JSON trailer even when fenced', () => {
+  const review = [
+    'All good.',
+    '',
+    '===FINDINGS_JSON===',
+    '```json',
+    JSON.stringify(
+      [
+        {
+          severity: 'minor',
+          file: 'cli/src/foo.ts',
+          title: 'Prefer explicit return type',
+          recommendation: 'Add an explicit return type for clarity.',
+        },
+      ],
+      null,
+      2
+    ),
+    '```',
+  ].join('\n');
+
+  const findings = parseCodexReviewText(review);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, 'cli/src/foo.ts');
+  assert.equal(findings[0].severity, 'minor');
+});
+
 test('parseCodexReviewText falls back to parsing [P#] bullet lines', () => {
   const review = [
     '[monorepo:codex:2/21] Review comment:',
