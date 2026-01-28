@@ -3,6 +3,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { componentDirEnvKey, getComponentDir, getRootDir } from './utils/paths/paths.mjs';
 import { ensureDepsInstalled } from './utils/proc/pm.mjs';
+import { ensureHappyMonorepoNestedDepsInstalled } from './utils/proc/happy_monorepo_deps.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
 import { detectPackageManagerCmd, pickFirstScript, readPackageJsonScripts } from './utils/proc/package_scripts.mjs';
@@ -154,20 +155,29 @@ async function main() {
       continue;
     }
 
-    const scripts = await readPackageJsonScripts(dir);
-    if (!scripts) {
-      results.push({ component, ok: true, skipped: true, dir, reason: 'no package.json' });
-      continue;
+	    const scripts = await readPackageJsonScripts(dir);
+	    if (!scripts) {
+	      results.push({ component, ok: true, skipped: true, dir, reason: 'no package.json' });
+	      continue;
     }
 
     const script = pickTestScript(scripts);
-    if (!script) {
-      results.push({ component, ok: true, skipped: true, dir, reason: 'no test script found in package.json' });
-      continue;
-    }
+	    if (!script) {
+	      results.push({ component, ok: true, skipped: true, dir, reason: 'no test script found in package.json' });
+	      continue;
+	    }
 
-    await ensureDepsInstalled(dir, component, { quiet: json, env: process.env });
-    const pm = await detectPackageManagerCmd(dir);
+	    if (component === 'happy') {
+	      await ensureHappyMonorepoNestedDepsInstalled({
+	        happyTestDir: dir,
+	        quiet: json,
+	        env: process.env,
+	        ensureDepsInstalled,
+	      });
+	    }
+
+	    await ensureDepsInstalled(dir, component, { quiet: json, env: process.env });
+	    const pm = await detectPackageManagerCmd(dir);
 
     try {
       const line = `[test] ${component}: running ${pm.name} ${script}\n`;
