@@ -33,3 +33,5 @@ env.local
 /.cache
 /.home
 /docs/commit-audits
+/.tmp-home
+/.tmp-sandbox

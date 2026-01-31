@@ -8,7 +8,7 @@ import { pathExists } from '../fs/fs.mjs';
 import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
 import { commandExists } from './commands.mjs';
-import { getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
+import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 
 function sha256Hex(s) {
@@ -52,7 +52,22 @@ export async function requirePnpm() {
 
 async function getComponentPm(dir, env = process.env) {
   const yarnLock = join(dir, 'yarn.lock');
-  if (await pathExists(yarnLock)) {
+  const happyMonorepoRoot = await (async () => {
+    try {
+      return coerceHappyMonorepoRootFromPath(dir);
+    } catch {
+      return null;
+    }
+  })();
+
+  // If this is a happy monorepo worktree and we're running from inside a package directory
+  // (e.g. packages/happy-server), prefer the monorepo root yarn.lock to avoid accidentally
+  // using pnpm (which will try to fetch workspace-only packages from npm).
+  const hasYarnLock =
+    (await pathExists(yarnLock)) ||
+    (happyMonorepoRoot ? await pathExists(join(happyMonorepoRoot, 'yarn.lock')) : false);
+
+  if (hasYarnLock) {
     // IMPORTANT: when happy-stacks itself is pinned to pnpm via Corepack, running `yarn`
     // from the happy-stacks cwd can be blocked. Always probe yarn with cwd=componentDir.
     if (!(await commandExists('yarn', { cwd: dir, env }))) {

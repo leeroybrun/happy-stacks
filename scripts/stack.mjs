@@ -276,7 +276,7 @@ function resolveDefaultComponentDirs({ rootDir }) {
   const monoRoot = existsSync(happyRoot) ? coerceHappyMonorepoRootFromPath(happyRoot) : null;
 
   if (monoRoot) {
-    const subdir = (component) => happyMonorepoSubdirForComponent(component);
+    const subdir = (component) => happyMonorepoSubdirForComponent(component, { monorepoRoot: monoRoot });
     out.HAPPY_STACKS_COMPONENT_DIR_HAPPY = join(monoRoot, subdir('happy'));
     out.HAPPY_STACKS_COMPONENT_DIR_HAPPY_CLI = join(monoRoot, subdir('happy-cli'));
     const serverDir = join(monoRoot, subdir('happy-server'));
@@ -3929,6 +3929,18 @@ async function main() {
   }
   if (cmd === 'daemon') {
     await cmdStackDaemon({ rootDir, stackName, argv: passthrough, json });
+    return;
+  }
+  if (cmd === 'eas') {
+    // Forward EAS commands under the stack env.
+    // Example:
+    //   happys stack eas <name> build --platform ios --profile production
+    await withStackEnv({
+      stackName,
+      fn: async ({ env }) => {
+        await run(process.execPath, [join(rootDir, 'scripts', 'eas.mjs'), ...passthrough], { cwd: rootDir, env });
+      },
+    });
     return;
   }
   if (cmd === 'happy') {

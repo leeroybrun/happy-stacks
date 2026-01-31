@@ -59,10 +59,30 @@ async function resolveMainServerPort() {
   return await readServerPortFromEnvFile(envPath, { defaultPort: 3005 });
 }
 
-async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, tailscaleWanted, menubarMode }) {
+function normalizeGithubRepoUrl(raw) {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+
+  // Accept full URLs and ssh URLs as-is.
+  if (v.includes('://') || v.startsWith('git@')) return v;
+
+  // Convenience: owner/repo -> https://github.com/owner/repo.git
+  const m = v.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (m) {
+    const owner = m[1];
+    const repo = m[2];
+    return `https://github.com/${owner}/${repo}.git`;
+  }
+
+  // Fallback: let git try to interpret it (could be a local path).
+  return v;
+}
+
+async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, tailscaleWanted, menubarMode, happyRepoUrl }) {
   // Repo source here describes where we clone the main Happy monorepo from (UI + CLI + full server).
   // Server-light (sqlite) remains fork-only for now and is handled separately in bootstrap defaults.
   const repoSourceForProfile = profile === 'selfhost' ? 'upstream' : null;
+  const monoRepo = String(happyRepoUrl ?? '').trim();
   const updates = [
     { key: 'HAPPY_STACKS_SERVER_COMPONENT', value: serverComponent },
     { key: 'HAPPY_LOCAL_SERVER_COMPONENT', value: serverComponent },
@@ -73,6 +93,18 @@ async function ensureSetupConfigPersisted({ rootDir, profile, serverComponent, t
       ? [
           { key: 'HAPPY_STACKS_REPO_SOURCE', value: repoSourceForProfile },
           { key: 'HAPPY_LOCAL_REPO_SOURCE', value: repoSourceForProfile },
+        ]
+      : []),
+    ...(monoRepo
+      ? [
+          // Override the Happy monorepo clone source (UI + CLI + full server).
+          // This is useful for forks that keep the same monorepo layout under a different repo name.
+          { key: 'HAPPY_STACKS_UI_REPO_URL', value: monoRepo },
+          { key: 'HAPPY_LOCAL_UI_REPO_URL', value: monoRepo },
+          { key: 'HAPPY_STACKS_CLI_REPO_URL', value: monoRepo },
+          { key: 'HAPPY_LOCAL_CLI_REPO_URL', value: monoRepo },
+          { key: 'HAPPY_STACKS_SERVER_FULL_REPO_URL', value: monoRepo },
+          { key: 'HAPPY_LOCAL_SERVER_FULL_REPO_URL', value: monoRepo },
         ]
       : []),
     { key: 'HAPPY_STACKS_MENUBAR_MODE', value: menubarMode },
@@ -408,6 +440,7 @@ async function cmdSetup({ rootDir, argv }) {
         flags: [
           '--profile=selfhost|dev',
           '--server=happy-server-light|happy-server',
+          '--happy-repo=<owner/repo|url>        # override slopus/happy monorepo clone source',
           '--workspace-dir=/absolute/path   # dev profile only',
           '--install-path',
           '--start-now',
@@ -427,6 +460,7 @@ async function cmdSetup({ rootDir, argv }) {
         '  happys setup --profile=selfhost',
         '  happys setup --profile=dev',
         '  happys setup --profile=dev --workspace-dir=~/Development/happy',
+        '  happys setup --happy-repo=leeroybrun/happier',
         '  happys setup pr --happy=<pr-url|number> [--happy-server-light=<pr-url|number>]',
         '  happys setup --auth',
         '  happys setup --no-auth',
@@ -460,6 +494,9 @@ async function cmdSetup({ rootDir, argv }) {
 
   const verbosity = getVerbosityLevel(process.env);
   const quietUi = interactive && verbosity === 0 && !json;
+
+  // Optional: override the monorepo clone source (UI + CLI + full server).
+  const happyRepoUrl = normalizeGithubRepoUrl(kv.get('--happy-repo'));
 
   function isInteractiveChildCommand({ rel, args }) {
     // If a child command needs to prompt the user, it must inherit stdin/stdout.
@@ -918,7 +955,19 @@ async function cmdSetup({ rootDir, argv }) {
     serverComponent,
     tailscaleWanted,
     menubarMode,
+    happyRepoUrl,
   });
+
+  // Apply repo override to this process too (so the immediately-following install step sees it),
+  // even if env.local was already loaded earlier in this process.
+  if (happyRepoUrl) {
+    process.env.HAPPY_STACKS_UI_REPO_URL = happyRepoUrl;
+    process.env.HAPPY_LOCAL_UI_REPO_URL = happyRepoUrl;
+    process.env.HAPPY_STACKS_CLI_REPO_URL = happyRepoUrl;
+    process.env.HAPPY_LOCAL_CLI_REPO_URL = happyRepoUrl;
+    process.env.HAPPY_STACKS_SERVER_FULL_REPO_URL = happyRepoUrl;
+    process.env.HAPPY_LOCAL_SERVER_FULL_REPO_URL = happyRepoUrl;
+  }
 
   // 3) Bootstrap components.
   if (profile === 'dev') {

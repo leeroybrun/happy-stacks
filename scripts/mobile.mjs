@@ -1,4 +1,6 @@
 import './utils/env/env.mjs';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { run, runCapture, spawnProc } from './utils/proc/proc.mjs';
 import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
@@ -70,15 +72,28 @@ async function main() {
   }
 
   const rootDir = getRootDir(import.meta.url);
-  const uiDir = getComponentDir(rootDir, 'happy');
-  await requireDir('happy', uiDir);
-  await ensureDepsInstalled(uiDir, 'happy');
+  const happyDir = getComponentDir(rootDir, 'happy');
+  await requireDir('happy', happyDir);
+  await ensureDepsInstalled(happyDir, 'happy');
+
+  // Happy monorepo layouts (historical):
+  // - legacy: <happyDir>/expo-app (split-repo era)
+  // - current: <happyDir>/packages/happy-app (monorepo packages/)
+  //
+  // `happys mobile` should operate on the Expo project root, not the monorepo root.
+  const packagesAppDir = join(happyDir, 'packages', 'happy-app');
+  const legacyExpoAppDir = join(happyDir, 'expo-app');
+  const uiDir = existsSync(join(packagesAppDir, 'app.config.js'))
+    ? packagesAppDir
+    : existsSync(join(legacyExpoAppDir, 'package.json'))
+      ? legacyExpoAppDir
+      : happyDir;
 
   async function readXcdeviceList() {
     if (process.platform !== 'darwin') {
       return [];
     }
-    const raw = await runCapture('xcrun', ['xcdevice', 'list'], { cwd: uiDir, env: process.env });
+    const raw = await runCapture('xcrun', ['xcdevice', 'list'], { cwd: happyDir, env: process.env });
     const start = raw.indexOf('[');
     const jsonText = start >= 0 ? raw.slice(start) : raw;
     const parsed = JSON.parse(jsonText);
@@ -185,7 +200,8 @@ async function main() {
     if (shouldClean) {
       prebuildArgs.push('--clean');
     }
-    await expoExec({ dir: uiDir, args: prebuildArgs, env, ensureDepsLabel: 'happy' });
+    // Run Expo from the monorepo deps (runnerDir=happyDir), but target the Expo project (projectDir=uiDir).
+    await expoExec({ dir: happyDir, projectDir: uiDir, args: prebuildArgs, env, ensureDepsLabel: 'happy' });
 
     // Always patch iOS props if iOS was generated.
     if (platform === 'ios' || platform === 'all') {
@@ -217,7 +233,19 @@ async function main() {
       // Ensure CocoaPods doesn't crash due to locale issues.
       env.LANG = env.LANG ?? 'en_US.UTF-8';
       env.LC_ALL = env.LC_ALL ?? 'en_US.UTF-8';
-      await run('sh', ['-lc', 'cd ios && pod install'], { cwd: uiDir, env });
+
+      // Help Node module resolution during `pod install` in Yarn workspace layouts:
+      // some deps are hoisted to repo root while `react-native` is not, so Node invocations
+      // from hoisted packages can fail to resolve `react-native/package.json`.
+      const appNodeModulesDir = join(uiDir, 'node_modules');
+      if (existsSync(appNodeModulesDir)) {
+        const delim = process.platform === 'win32' ? ';' : ':';
+        env.NODE_PATH = env.NODE_PATH ? `${appNodeModulesDir}${delim}${env.NODE_PATH}` : appNodeModulesDir;
+      }
+
+      // CocoaPods repo state can be stale on first runs; `--repo-update` fixes missing specs.
+      const podCmd = shouldClean ? 'cd ios && pod install --repo-update' : 'cd ios && pod install';
+      await run('sh', ['-lc', podCmd], { cwd: uiDir, env });
     }
   }
 
@@ -285,7 +313,7 @@ async function main() {
     // Ensure CocoaPods doesn't crash due to locale issues.
     env.LANG = env.LANG ?? 'en_US.UTF-8';
     env.LC_ALL = env.LC_ALL ?? 'en_US.UTF-8';
-    await expoExec({ dir: uiDir, args, env, ensureDepsLabel: 'happy' });
+    await expoExec({ dir: happyDir, projectDir: uiDir, args, env, ensureDepsLabel: 'happy' });
   }
 
   if (!shouldStartMetro) {
@@ -307,7 +335,8 @@ async function main() {
   await ensureDevExpoServer({
     startUi: false,
     startMobile: true,
-    uiDir,
+    uiDir: happyDir,
+    expoProjectDir: uiDir,
     autostart,
     baseEnv: env,
     apiServerUrl: env.EXPO_PUBLIC_HAPPY_SERVER_URL ?? '',

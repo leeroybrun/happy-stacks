@@ -28,6 +28,22 @@ async function writeYarnEnvDumpStub({ binDir, outputPath }) {
   await writeFile(outputPath, '', 'utf-8');
 }
 
+async function writeYarnArgDumpStub({ binDir, outputPath }) {
+  await mkdir(binDir, { recursive: true });
+  const yarnPath = join(binDir, 'yarn');
+  await writeFile(
+    yarnPath,
+    [
+      '#!/usr/bin/env sh',
+      'set -euo pipefail',
+      'echo "$*" >> "${OUTPUT_PATH:?}"',
+    ].join('\n') + '\n',
+    'utf-8'
+  );
+  await chmod(yarnPath, 0o755);
+  await writeFile(outputPath, '', 'utf-8');
+}
+
 function expectedCacheEnv({ envPath }) {
   const base = join(dirname(envPath), 'cache');
   return {
@@ -97,6 +113,44 @@ test('ensureDepsInstalled sets stack-scoped cache env vars for yarn installs', a
   );
 });
 
+test('ensureDepsInstalled prefers yarn when component is inside the Happy monorepo (packages/ layout)', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-pm-happy-monorepo-yarn-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // Create the minimum Happy monorepo markers (packages/ layout) + root yarn.lock.
+  await mkdir(join(root, 'packages', 'happy-app'), { recursive: true });
+  await mkdir(join(root, 'packages', 'happy-cli'), { recursive: true });
+  await mkdir(join(root, 'packages', 'happy-server'), { recursive: true });
+  await writeFile(join(root, 'packages', 'happy-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(root, 'packages', 'happy-cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(root, 'packages', 'happy-server', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(root, 'package.json'), '{ "name": "monorepo", "private": true }\n', 'utf-8');
+  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+
+  const componentDir = join(root, 'packages', 'happy-server');
+
+  const binDir = join(root, 'bin');
+  const outputPath = join(root, 'argv.txt');
+  await writeYarnArgDumpStub({ binDir, outputPath });
+
+  await withEnv(
+    {
+      // Avoid leaking `pnpm` into PATH so the test fails loudly when pnpm is selected.
+      PATH: `${binDir}:/usr/bin:/bin`,
+      OUTPUT_PATH: outputPath,
+      HAPPY_STACKS_ENV_FILE: null,
+      HAPPY_LOCAL_ENV_FILE: null,
+    },
+    async () => {
+      await ensureDepsInstalled(componentDir, 'happy-server', { quiet: true });
+      const out = await readFile(outputPath, 'utf-8');
+      assert.ok(out.includes('install') || out.includes('--version'));
+    }
+  );
+});
+
 test('pmExecBin sets stack-scoped cache env vars for yarn runs', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hs-pm-stack-cache-exec-'));
   t.after(async () => {
@@ -139,4 +193,3 @@ test('pmExecBin sets stack-scoped cache env vars for yarn runs', async (t) => {
     }
   );
 });
-

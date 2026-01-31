@@ -34,7 +34,7 @@ function worktreeRepoKeyForComponent({ rootDir, component, env = process.env }) 
   const repoDir = componentRepoDir(rootDir, c, env);
   const mono = coerceHappyMonorepoRootFromPath(repoDir);
   // In monorepo mode, all worktrees live under `.worktrees/happy/` regardless of which
-  // package (expo-app/cli/server) the user is operating on.
+  // package (packages/happy-*/ or legacy expo-app/cli/server) the user is operating on.
   return mono ? 'happy' : c;
 }
 
@@ -109,8 +109,8 @@ export async function createWorktreeFromBaseWorktree({
   const owner = await getRemoteOwner({ repoDir, remoteName });
   const key = worktreeRepoKeyForComponent({ rootDir, component, env });
   const wtRoot = join(getWorktreesRoot(rootDir, env), key, owner, ...slug.split('/'));
-  const sub = happyMonorepoSubdirForComponent(component);
-  const monoRoot = sub ? coerceHappyMonorepoRootFromPath(wtRoot) : null;
+  const monoRoot = coerceHappyMonorepoRootFromPath(wtRoot);
+  const sub = monoRoot ? happyMonorepoSubdirForComponent(component, { monorepoRoot: monoRoot }) : null;
   return sub && monoRoot ? join(monoRoot, sub) : wtRoot;
 }
 
@@ -121,7 +121,7 @@ export function resolveComponentSpecToDir({ rootDir, component, spec, env = proc
   }
   if (isAbsolute(raw)) {
     const monoRoot = coerceHappyMonorepoRootFromPath(raw);
-    const sub = happyMonorepoSubdirForComponent(component);
+    const sub = monoRoot ? happyMonorepoSubdirForComponent(component, { monorepoRoot: monoRoot }) : null;
     if (monoRoot && sub) {
       return join(monoRoot, sub);
     }
@@ -130,8 +130,8 @@ export function resolveComponentSpecToDir({ rootDir, component, spec, env = proc
   // Treat as <owner>/<branch...> under components/.worktrees/<repoKey>/...
   const key = worktreeRepoKeyForComponent({ rootDir, component, env });
   const wtRoot = join(getWorktreesRoot(rootDir, env), key, ...raw.split('/'));
-  const sub = happyMonorepoSubdirForComponent(component);
-  const monoRoot = sub ? coerceHappyMonorepoRootFromPath(wtRoot) : null;
+  const monoRoot = coerceHappyMonorepoRootFromPath(wtRoot);
+  const sub = monoRoot ? happyMonorepoSubdirForComponent(component, { monorepoRoot: monoRoot }) : null;
   return sub && monoRoot ? join(monoRoot, sub) : wtRoot;
 }
 

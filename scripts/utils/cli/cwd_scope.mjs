@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 
 import { getWorktreesRoot } from '../git/worktrees.mjs';
-import { getComponentsDir, isHappyMonorepoRoot } from '../paths/paths.mjs';
+import { getComponentsDir, happyMonorepoSubdirForComponent, isHappyMonorepoRoot } from '../paths/paths.mjs';
 
 export function getInvokedCwd(env = process.env) {
   return String(env.HAPPY_STACKS_INVOKED_CWD ?? env.HAPPY_LOCAL_INVOKED_CWD ?? env.PWD ?? '').trim();
@@ -48,16 +48,15 @@ function findGitRoot(startDir, stopAtDir) {
 function resolveHappyMonorepoComponentFromPath({ monorepoRoot, absPath }) {
   const root = resolve(monorepoRoot);
   const abs = resolve(absPath);
-  const map = [
-    { component: 'happy', dir: join(root, 'expo-app') },
-    { component: 'happy-cli', dir: join(root, 'cli') },
-    { component: 'happy-server', dir: join(root, 'server') },
-  ];
-  for (const m of map) {
-    if (isPathInside(abs, m.dir)) {
+  const components = ['happy', 'happy-cli', 'happy-server'];
+  for (const component of components) {
+    const subdir = happyMonorepoSubdirForComponent(component, { monorepoRoot: root });
+    if (!subdir) continue;
+    const dir = join(root, subdir);
+    if (isPathInside(abs, dir)) {
       // We return the shared git root so callers can safely use it as an env override
       // for any of the monorepo components.
-      return { component: m.component, repoDir: root };
+      return { component, repoDir: root };
     }
   }
   return null;
@@ -76,7 +75,7 @@ export function inferComponentFromCwd({ rootDir, invokedCwd, components }) {
 
   // Monorepo-aware inference:
   // If we're inside a happy monorepo checkout/worktree, infer which "logical component"
-  // (expo-app/cli/server) the user is working in and return that package dir.
+  // (packages/happy-*/ or legacy expo-app/cli/server) the user is working in and return that repo root.
   //
   // This enables workflows like:
   // - running `happys dev` from inside components/happy/cli (should infer happy-cli)

@@ -14,17 +14,67 @@ const PRIMARY_STORAGE_ROOT = join(homedir(), '.happy', 'stacks');
 const LEGACY_STORAGE_ROOT = join(homedir(), '.happy', 'local');
 const PRIMARY_HOME_DIR = join(homedir(), '.happy-stacks');
 
-// Upstream monorepo layout (slopus/happy):
+// Upstream monorepo layouts (slopus/happy):
+//
+// Newer (packages/):
+// - packages/happy-app     (Happy mobile app)
+// - packages/happy-cli     (CLI + daemon)
+// - packages/happy-server  (server)
+//
+// Legacy (split dirs):
 // - expo-app/ (Happy UI)
 // - cli/      (happy-cli)
 // - server/   (happy-server)
-const HAPPY_MONOREPO_COMPONENT_SUBDIR = {
-  happy: 'expo-app',
-  'happy-cli': 'cli',
-  'happy-server': 'server',
-  // Server flavors share a single server package in the monorepo.
-  'happy-server-light': 'server',
+//
+// We support both so stacks/worktrees can run against older checkouts or branches.
+const HAPPY_MONOREPO_COMPONENTS = new Set(['happy', 'happy-cli', 'happy-server', 'happy-server-light']);
+
+const HAPPY_MONOREPO_LAYOUTS = {
+  packages: {
+    id: 'packages',
+    // Minimum files that identify this layout.
+    markers: [
+      ['packages', 'happy-app', 'package.json'],
+      ['packages', 'happy-cli', 'package.json'],
+      ['packages', 'happy-server', 'package.json'],
+    ],
+    subdirByComponent: {
+      happy: 'packages/happy-app',
+      'happy-cli': 'packages/happy-cli',
+      'happy-server': 'packages/happy-server',
+      // Server flavors share a single server package in the monorepo.
+      'happy-server-light': 'packages/happy-server',
+    },
+  },
+  legacy: {
+    id: 'legacy',
+    markers: [
+      ['expo-app', 'package.json'],
+      ['cli', 'package.json'],
+      ['server', 'package.json'],
+    ],
+    subdirByComponent: {
+      happy: 'expo-app',
+      'happy-cli': 'cli',
+      'happy-server': 'server',
+      // Server flavors share a single server package in the monorepo.
+      'happy-server-light': 'server',
+    },
+  },
 };
+
+function detectHappyMonorepoLayout(monorepoRoot) {
+  const root = String(monorepoRoot ?? '').trim();
+  if (!root) return '';
+  try {
+    const hasAll = (markers) => markers.every((m) => existsSync(join(root, ...m)));
+    if (hasAll(HAPPY_MONOREPO_LAYOUTS.packages.markers)) return HAPPY_MONOREPO_LAYOUTS.packages.id;
+    if (hasAll(HAPPY_MONOREPO_LAYOUTS.legacy.markers)) return HAPPY_MONOREPO_LAYOUTS.legacy.id;
+    return '';
+  } catch {
+    return '';
+  }
+}
 
 export function getRootDir(importMetaUrl) {
   return dirname(dirname(fileURLToPath(importMetaUrl)));
@@ -74,25 +124,29 @@ function normalizePathForEnv(rootDir, raw, env = process.env) {
 }
 
 export function isHappyMonorepoComponentName(name) {
-  return Object.prototype.hasOwnProperty.call(HAPPY_MONOREPO_COMPONENT_SUBDIR, String(name ?? '').trim());
+  return HAPPY_MONOREPO_COMPONENTS.has(String(name ?? '').trim());
 }
 
-export function happyMonorepoSubdirForComponent(name) {
-  return HAPPY_MONOREPO_COMPONENT_SUBDIR[String(name ?? '').trim()] ?? null;
+export function happyMonorepoSubdirForComponent(name, { monorepoRoot = '' } = {}) {
+  const n = String(name ?? '').trim();
+  if (!n || !isHappyMonorepoComponentName(n)) return null;
+
+  const root = String(monorepoRoot ?? '').trim();
+  const layout = root ? detectHappyMonorepoLayout(root) : '';
+  if (layout === HAPPY_MONOREPO_LAYOUTS.packages.id) {
+    return HAPPY_MONOREPO_LAYOUTS.packages.subdirByComponent[n] ?? null;
+  }
+  if (layout === HAPPY_MONOREPO_LAYOUTS.legacy.id) {
+    return HAPPY_MONOREPO_LAYOUTS.legacy.subdirByComponent[n] ?? null;
+  }
+  // Best-effort fallback: preserve previous behavior when layout is unknown.
+  return HAPPY_MONOREPO_LAYOUTS.legacy.subdirByComponent[n] ?? null;
 }
 
 export function isHappyMonorepoRoot(dir) {
   const d = String(dir ?? '').trim();
   if (!d) return false;
-  try {
-    return (
-      existsSync(join(d, 'expo-app', 'package.json')) &&
-      existsSync(join(d, 'cli', 'package.json')) &&
-      existsSync(join(d, 'server', 'package.json'))
-    );
-  } catch {
-    return false;
-  }
+  return Boolean(detectHappyMonorepoLayout(d));
 }
 
 export function coerceHappyMonorepoRootFromPath(path) {
@@ -108,7 +162,7 @@ export function coerceHappyMonorepoRootFromPath(path) {
 }
 
 function resolveHappyMonorepoPackageDir({ monorepoRoot, component }) {
-  const sub = happyMonorepoSubdirForComponent(component);
+  const sub = happyMonorepoSubdirForComponent(component, { monorepoRoot });
   if (!sub) return null;
   return join(monorepoRoot, sub);
 }
@@ -131,7 +185,7 @@ export function getComponentDir(rootDir, name, env = process.env) {
 
   // If the component is part of the happy monorepo, allow pointing the env var at either:
   // - the monorepo root, OR
-  // - the package directory (expo-app/cli/server), OR
+  // - the package directory (packages/happy-* or legacy expo-app/cli/server), OR
   // - any path inside those (we normalize to the package dir).
   if (fromEnv && isHappyMonorepoComponentName(n)) {
     const root = coerceHappyMonorepoRootFromPath(fromEnv);

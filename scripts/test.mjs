@@ -51,9 +51,12 @@ async function resolveTestDirForComponent({ component, dir }) {
   // so dev/start can operate from the app package. For validation, we want the monorepo
   // root scripts (which run expo-app + cli + server together).
   if (component !== 'happy') return dir;
-  if (!dir.endsWith(`${sep}expo-app`) && !dir.endsWith('/expo-app')) return dir;
+  const isLegacyExpoApp = dir.endsWith(`${sep}expo-app`) || dir.endsWith('/expo-app');
+  const isPackagesHappyApp =
+    dir.endsWith(`${sep}packages${sep}happy-app`) || dir.endsWith('/packages/happy-app');
+  if (!isLegacyExpoApp && !isPackagesHappyApp) return dir;
 
-  const parent = dirname(dir);
+  const parent = isPackagesHappyApp ? dirname(dirname(dir)) : dirname(dir);
   try {
     const scripts = await readPackageJsonScripts(parent);
     if (!scripts) return dir;

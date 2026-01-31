@@ -209,6 +209,7 @@ export async function ensureDevExpoServer({
   startUi,
   startMobile,
   uiDir,
+  expoProjectDir = '',
   autostart,
   baseEnv,
   apiServerUrl,
@@ -278,10 +279,12 @@ export async function ensureDevExpoServer({
     scheme = cfg.scheme;
   }
 
+  const projectDir = String(expoProjectDir ?? '').trim() || uiDir;
+
   const paths = getExpoStatePaths({
     baseDir: autostart.baseDir,
     kind: 'expo-dev',
-    projectDir: uiDir,
+    projectDir,
     stateFileName: 'expo.state.json',
   });
   await ensureExpoIsolationEnv({ env, stateDir: paths.stateDir, expoHomeDir: paths.expoHomeDir, tmpDir: paths.tmpDir });
@@ -377,7 +380,8 @@ export async function ensureDevExpoServer({
     // eslint-disable-next-line no-console
     console.log(`[local] expo: starting Expo (${expoModeLabel({ wantWeb, wantDevClient })}, metro port=${metroPort}, host=${host})`);
   }
-  const proc = await expoSpawn({ label: 'expo', dir: uiDir, args, env, options: spawnOptions, quiet });
+  // Run the Expo CLI from the runner dir (where deps/bins live), but target the actual Expo project dir.
+  const proc = await expoSpawn({ label: 'expo', dir: uiDir, projectDir, args, env, options: spawnOptions, quiet });
   children.push(proc);
 
   // Start Tailscale forwarder if enabled
@@ -407,6 +411,7 @@ export async function ensureDevExpoServer({
       pid: proc.pid,
       port: metroPort,
       uiDir,
+      projectDir,
       startedAt: new Date().toISOString(),
       webEnabled: wantWeb,
       devClientEnabled: wantDevClient,

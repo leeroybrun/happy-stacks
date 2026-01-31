@@ -112,7 +112,7 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
         const monoResolved = resolveComponentSpecToDir({ rootDir, component: 'happy', spec: raw });
         if (monoResolved && existsSync(monoResolved)) {
           const monoRoot = coerceHappyMonorepoRootFromPath(monoResolved);
-          const sub = happyMonorepoSubdirForComponent(component);
+            const sub = happyMonorepoSubdirForComponent(component, { monorepoRoot: monoRoot });
           if (monoRoot && sub) return join(monoRoot, sub);
         }
       }
@@ -125,7 +125,7 @@ function resolveComponentWorktreeDir({ rootDir, component, spec }) {
   // Fallback: treat raw as a literal path.
   if (isAbsolute(raw)) {
     const monoRoot = coerceHappyMonorepoRootFromPath(raw);
-    const sub = happyMonorepoSubdirForComponent(component);
+    const sub = happyMonorepoSubdirForComponent(component, { monorepoRoot: monoRoot });
     if (monoRoot && sub) return join(monoRoot, sub);
     return raw;
   }
@@ -881,7 +881,7 @@ async function cmdUse({ rootDir, args, flags }) {
       updateComponents = HAPPY_MONOREPO_GROUP_COMPONENTS;
       throw new Error(
         `[wt] invalid target for happy monorepo component '${component}':\n` +
-          `- expected a path inside the happy monorepo (contains expo-app/cli/server)\n` +
+          `- expected a path inside the happy monorepo (contains packages/happy-app|packages/happy-cli|packages/happy-server or legacy expo-app/cli/server)\n` +
           `- but got: ${resolvedDir}\n` +
           `Fix: pick a worktree under ${join(worktreesRoot, 'happy')}/ or pass an absolute path to a monorepo checkout.`
       );

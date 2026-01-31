@@ -183,6 +183,7 @@ These commands run with the stack env file applied:
 - `happys stack build <name>`
 - `happys stack doctor <name>`
 - `happys stack mobile <name>`
+- `happys stack eas <name> [subcommand...]`
 - `happys stack happy <name> [-- ...]`
 - `happys stack srv <name> -- status|use ...`
 - `happys stack wt <name> -- <wt args...>`

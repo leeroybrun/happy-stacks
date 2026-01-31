@@ -7,7 +7,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { isHappyMonorepoRoot } from './utils/paths/paths.mjs';
+import { happyMonorepoSubdirForComponent, isHappyMonorepoRoot } from './utils/paths/paths.mjs';
 import { parseGithubPullRequest } from './utils/git/refs.mjs';
 import { isTty, prompt, promptSelect, withRl } from './utils/cli/wizard.mjs';
 import { bold, cyan, dim, green, red, yellow } from './utils/ui/ansi.mjs';
@@ -31,9 +31,9 @@ function usage() {
     '',
     'what it does:',
     '- Best-effort ports commits from split repos into the slopus/happy monorepo layout by applying patches into:',
-    '  - old happy (UI)        -> expo-app/',
-    '  - old happy-cli (CLI)   -> cli/',
-    '  - old happy-server      -> server/',
+    '  - old happy (UI)        -> packages/happy-app/ (or legacy: expo-app/)',
+    '  - old happy-cli (CLI)   -> packages/happy-cli/ (or legacy: cli/)',
+    '  - old happy-server      -> packages/happy-server/ (or legacy: server/)',
     '',
     'notes:',
     '- This preserves commit messages/authors (via `git format-patch` + `git am`).',
@@ -188,7 +188,10 @@ async function resolveTargetRepoRootFromArgs({ kv }) {
     throw new Error(`[monorepo] target is not a git repo: ${targetHint}`);
   }
   if (!isHappyMonorepoRoot(repoRoot)) {
-    throw new Error(`[monorepo] target does not look like a slopus/happy monorepo root (missing expo-app/cli/server): ${repoRoot}`);
+    throw new Error(
+      `[monorepo] target does not look like a slopus/happy monorepo root ` +
+        `(missing packages/happy-app|packages/happy-cli|packages/happy-server or legacy expo-app/cli/server): ${repoRoot}`
+    );
   }
   return repoRoot;
 }
@@ -266,7 +269,10 @@ async function resolveOrCloneTargetRepoRoot({ targetInput, targetArg, flags, kv,
   const repoRoot = await resolveGitRoot(hint);
   if (repoRoot) {
     if (!isHappyMonorepoRoot(repoRoot)) {
-      throw new Error(`[monorepo] target does not look like a slopus/happy monorepo root (missing expo-app/cli/server): ${repoRoot}`);
+      throw new Error(
+        `[monorepo] target does not look like a slopus/happy monorepo root ` +
+          `(missing packages/happy-app|packages/happy-cli|packages/happy-server or legacy expo-app/cli/server): ${repoRoot}`
+      );
     }
     return repoRoot;
   }
@@ -604,7 +610,14 @@ async function readGitAmStatus(targetRepoRoot) {
           files.push(f);
           continue;
         }
-        const candidates = [`expo-app/${f}`, `cli/${f}`, `server/${f}`];
+        const candidates = [
+          `packages/happy-app/${f}`,
+          `packages/happy-cli/${f}`,
+          `packages/happy-server/${f}`,
+          `expo-app/${f}`,
+          `cli/${f}`,
+          `server/${f}`,
+        ];
         let mapped = '';
         for (const c of candidates) {
           // eslint-disable-next-line no-await-in-loop
@@ -943,7 +956,7 @@ async function portOne({
     throw new Error(`[monorepo] ${label}: not a git repo: ${sourcePath}`);
   }
   const sourceIsMonorepo = isHappyMonorepoRoot(sourceRepoRoot);
-  // If the source is already a monorepo, its patches already contain `expo-app/`, `cli/`, etc.
+  // If the source is already a monorepo, its patches already contain `packages/happy-*/` (or legacy `expo-app/`, `cli/`, etc).
   // In that case, applying with `--directory <subdir>/` would double-prefix paths.
   const effectiveTargetSubdir = sourceIsMonorepo ? '' : targetSubdir;
   const head = (await git(sourceRepoRoot, ['rev-parse', '--verify', sourceRef || 'HEAD'])).trim();
@@ -1065,21 +1078,21 @@ async function cmdPortRun({ argv, flags, kv, json, silent = false }) {
       path: (kv.get('--from-happy') ?? '').trim(),
       ref: (kv.get('--from-happy-ref') ?? '').trim(),
       base: (kv.get('--from-happy-base') ?? '').trim(),
-      subdir: 'expo-app',
+      subdir: happyMonorepoSubdirForComponent('happy', { monorepoRoot: targetRepoRoot }) || 'expo-app',
     },
     {
       label: 'from-happy-cli',
       path: (kv.get('--from-happy-cli') ?? '').trim(),
       ref: (kv.get('--from-happy-cli-ref') ?? '').trim(),
       base: (kv.get('--from-happy-cli-base') ?? '').trim(),
-      subdir: 'cli',
+      subdir: happyMonorepoSubdirForComponent('happy-cli', { monorepoRoot: targetRepoRoot }) || 'cli',
     },
     {
       label: 'from-happy-server',
       path: (kv.get('--from-happy-server') ?? '').trim(),
       ref: (kv.get('--from-happy-server-ref') ?? '').trim(),
       base: (kv.get('--from-happy-server-base') ?? '').trim(),
-      subdir: 'server',
+      subdir: happyMonorepoSubdirForComponent('happy-server', { monorepoRoot: targetRepoRoot }) || 'server',
     },
   ].filter((s) => s.path);
 
@@ -1234,7 +1247,7 @@ function buildPortLlmPromptText({ targetRepoRoot }) {
     '- Prefer minimal conflict resolutions that preserve intent.',
     '- Conflicts are resolved one patch at a time (git am stops at the first conflict).',
     '- Do not “pre-resolve” hypothetical future conflicts; re-check status after each continue.',
-    '- Keep changes scoped to expo-app/, cli/, server/.',
+    '- Keep changes scoped to packages/happy-app/, packages/happy-cli/, packages/happy-server/ (or legacy expo-app/, cli/, server/).',
     '- After each continue, re-check status until port completes.',
   ].join('\n');
 }
@@ -1525,9 +1538,9 @@ async function cmdPortGuide({ kv, flags, json }) {
         bold(`✨ ${cyan('Happy Stacks')} monorepo port ✨`),
         '',
         'This wizard ports commits from split repos into the Happy monorepo layout:',
-        `- ${cyan('happy')} → expo-app/`,
-        `- ${cyan('happy-cli')} → cli/`,
-        `- ${cyan('happy-server')} → server/`,
+        `- ${cyan('happy')} → packages/happy-app/ (or legacy expo-app/)`,
+        `- ${cyan('happy-cli')} → packages/happy-cli/ (or legacy cli/)`,
+        `- ${cyan('happy-server')} → packages/happy-server/ (or legacy server/)`,
         '',
         bold('Notes:'),
         `- Uses ${cyan('git format-patch')} + ${cyan('git am')} (preserves author + messages)`,

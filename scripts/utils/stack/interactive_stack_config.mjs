@@ -95,7 +95,7 @@ export async function interactiveNew({ rootDir, rl, defaults, deps = {} }) {
   if (canDeriveMonorepoGroup) {
     deriveMonorepoGroup = await promptSelectFn(rl, {
       title: `${bold('Monorepo mode detected')}\n${dim(
-        `This ${cyan('happy')} checkout contains ${cyan('expo-app/')}, ${cyan('cli/')}, and ${cyan('server/')}.`
+        `This ${cyan('happy')} checkout looks like a monorepo (packages/happy-* or legacy expo-app/cli/server).`
       )}\n${dim('Recommended: derive CLI + server from the same monorepo checkout to avoid version skew.')}`,
       options: [
         { label: `yes (${green('recommended')}) — derive happy-cli + happy-server from this checkout`, value: true },

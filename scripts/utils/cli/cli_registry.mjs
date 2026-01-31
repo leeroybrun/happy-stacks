@@ -133,6 +133,20 @@ export function getHappysRegistry() {
       description: 'Run tests for components',
     },
     {
+      name: 'pack',
+      kind: 'node',
+      scriptRelPath: 'scripts/pack.mjs',
+      rootUsage: 'happys pack happy-cli|happy-server [--dir=/abs/path] [--json]',
+      description: 'Validate npm pack tarball contents (bundled deps)',
+    },
+    {
+      name: 'ci',
+      kind: 'node',
+      scriptRelPath: 'scripts/ci.mjs',
+      rootUsage: 'happys ci act [--json]',
+      description: 'CI helpers (e.g. act)',
+    },
+    {
       name: 'edison',
       kind: 'node',
       scriptRelPath: 'scripts/edison.mjs',
@@ -174,6 +188,13 @@ export function getHappysRegistry() {
       scriptRelPath: 'scripts/mobile_dev_client.mjs',
       rootUsage: 'happys mobile-dev-client --install [--device=...] [--clean] [--configuration=Debug|Release] [--json]',
       description: 'Install the shared Happy Stacks dev-client app (iOS)',
+    },
+    {
+      name: 'eas',
+      kind: 'node',
+      scriptRelPath: 'scripts/eas.mjs',
+      rootUsage: 'happys eas build [--platform=ios|android|all] [--profile=production] [--local] [--no-wait] [--json] [-- <extra eas args...>]',
+      description: 'EAS Build wrapper (uses stack env when scoped)',
     },
     {
       name: 'doctor',

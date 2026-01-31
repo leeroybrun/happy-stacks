@@ -513,7 +513,7 @@ function buildLlmPromptForImport() {
     hs,
     'Goals:',
     '- Import legacy split repos (happy / happy-cli / happy-server) into a stack in Happy Stacks.',
-    '- Optionally migrate commits into the slopus/happy monorepo layout (expo-app/cli/server).',
+    '- Optionally migrate commits into the slopus/happy monorepo layout (packages/happy-* or legacy expo-app/cli/server).',
     '',
     'How to proceed:',
     '1) Run the guided import wizard:',
@@ -587,7 +587,7 @@ function buildMonorepoMigrationPrompt({ targetMonorepoRoot, branch, sources }) {
     '',
     'If it stops with conflicts:',
     `- Inspect: hs monorepo port status --target=${targetMonorepoRoot} --json`,
-    `- Resolve conflicted files (keep changes scoped to expo-app/, cli/, server/)`,
+    `- Resolve conflicted files (keep changes scoped to packages/happy-*/ or legacy expo-app/, cli/, server/)`,
     `- Stage:  git -C ${targetMonorepoRoot} add <files>`,
     `- Continue: hs monorepo port continue --target=${targetMonorepoRoot}`,
     '',
@@ -820,7 +820,10 @@ async function cmdMigrateStack({ rootDir, argv }) {
       const raw = await prompt(rl, `Monorepo repo path or URL (slopus/happy): `, { defaultValue: '' });
       const r = raw.trim() ? await resolveRepoRootFromPathOrUrl({ rootDir, label: 'happy-monorepo', raw, rl }) : '';
       if (!r || !isHappyMonorepoRoot(r)) {
-        throw new Error('[import] target is not a slopus/happy monorepo root (missing expo-app/cli/server).');
+        throw new Error(
+          '[import] target is not a slopus/happy monorepo root ' +
+            '(missing packages/happy-app|packages/happy-cli|packages/happy-server or legacy expo-app/cli/server).'
+        );
       }
       monorepoRepoRoot = r;
     }
@@ -1159,7 +1162,9 @@ async function main() {
       // eslint-disable-next-line no-console
       console.log('');
       const migrateWanted = await promptSelect(rl, {
-        title: `${bold('Migrate to monorepo?')}\n${dim('Optional: port split-repo commits into the monorepo layout (expo-app/cli/server).')}`,
+        title: `${bold('Migrate to monorepo?')}\n${dim(
+          'Optional: port split-repo commits into the monorepo layout (packages/happy-* or legacy expo-app/cli/server).'
+        )}`,
         options: [
           { label: `no (default) — keep running from split repos`, value: 'no' },
           { label: `yes (${green('recommended')}) — port commits into a monorepo branch`, value: 'yes' },
@@ -1180,7 +1185,10 @@ async function main() {
           const raw = await prompt(rl, `Monorepo target path (slopus/happy root): `, { defaultValue: '' });
           monorepoRepoRoot = raw.trim() ? await gitRoot(raw.trim()) : '';
           if (!monorepoRepoRoot || !isHappyMonorepoRoot(monorepoRepoRoot)) {
-            throw new Error('[import] target is not a slopus/happy monorepo root (missing expo-app/cli/server).');
+            throw new Error(
+              '[import] target is not a slopus/happy monorepo root ' +
+                '(missing packages/happy-app|packages/happy-cli|packages/happy-server or legacy expo-app/cli/server).'
+            );
           }
         }
 

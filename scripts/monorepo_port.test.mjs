@@ -30,16 +30,27 @@ function gitEnv() {
   };
 }
 
-async function initMonorepoStub({ dir, env, seed = {} }) {
+async function initMonorepoStub({ dir, env, seed = {}, layout = 'legacy' }) {
   await mkdir(dir, { recursive: true });
   await run('git', ['init', '-q'], { cwd: dir, env });
   await run('git', ['checkout', '-q', '-b', 'main'], { cwd: dir, env });
-  await mkdir(join(dir, 'expo-app'), { recursive: true });
-  await mkdir(join(dir, 'cli'), { recursive: true });
-  await mkdir(join(dir, 'server'), { recursive: true });
-  await writeFile(join(dir, 'expo-app', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(dir, 'cli', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(dir, 'server', 'package.json'), '{}\n', 'utf-8');
+
+  const kind = String(layout ?? '').trim() === 'packages' ? 'packages' : 'legacy';
+  if (kind === 'packages') {
+    await mkdir(join(dir, 'packages', 'happy-app'), { recursive: true });
+    await mkdir(join(dir, 'packages', 'happy-cli'), { recursive: true });
+    await mkdir(join(dir, 'packages', 'happy-server'), { recursive: true });
+    await writeFile(join(dir, 'packages', 'happy-app', 'package.json'), '{}\n', 'utf-8');
+    await writeFile(join(dir, 'packages', 'happy-cli', 'package.json'), '{}\n', 'utf-8');
+    await writeFile(join(dir, 'packages', 'happy-server', 'package.json'), '{}\n', 'utf-8');
+  } else {
+    await mkdir(join(dir, 'expo-app'), { recursive: true });
+    await mkdir(join(dir, 'cli'), { recursive: true });
+    await mkdir(join(dir, 'server'), { recursive: true });
+    await writeFile(join(dir, 'expo-app', 'package.json'), '{}\n', 'utf-8');
+    await writeFile(join(dir, 'cli', 'package.json'), '{}\n', 'utf-8');
+    await writeFile(join(dir, 'server', 'package.json'), '{}\n', 'utf-8');
+  }
   for (const [rel, content] of Object.entries(seed)) {
     // eslint-disable-next-line no-await-in-loop
     await mkdir(join(dir, rel.split('/').slice(0, -1).join('/')), { recursive: true });
@@ -75,14 +86,14 @@ test('monorepo port applies split-repo commits into subdirectories', async (t) =
   await mkdir(target, { recursive: true });
   await run('git', ['init', '-q'], { cwd: target, env: gitEnv() });
   await run('git', ['checkout', '-q', '-b', 'main'], { cwd: target, env: gitEnv() });
-  await mkdir(join(target, 'expo-app'), { recursive: true });
-  await mkdir(join(target, 'cli'), { recursive: true });
-  await mkdir(join(target, 'server'), { recursive: true });
-  await writeFile(join(target, 'expo-app', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(target, 'cli', 'package.json'), '{}\n', 'utf-8');
+  await mkdir(join(target, 'packages', 'happy-app'), { recursive: true });
+  await mkdir(join(target, 'packages', 'happy-cli'), { recursive: true });
+  await mkdir(join(target, 'packages', 'happy-server'), { recursive: true });
+  await writeFile(join(target, 'packages', 'happy-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-cli', 'package.json'), '{}\n', 'utf-8');
   // Seed the target with the "base" file so the ported patch has something to apply to.
-  await writeFile(join(target, 'cli', 'hello.txt'), 'v1\n', 'utf-8');
-  await writeFile(join(target, 'server', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-cli', 'hello.txt'), 'v1\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-server', 'package.json'), '{}\n', 'utf-8');
   await run('git', ['add', '.'], { cwd: target, env: gitEnv() });
   await run('git', ['commit', '-q', '-m', 'chore: init monorepo'], { cwd: target, env: gitEnv() });
 
@@ -116,7 +127,7 @@ test('monorepo port applies split-repo commits into subdirectories', async (t) =
   const parsed = JSON.parse(out.trim());
   assert.equal(parsed.ok, true);
 
-  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  const content = (await readFile(join(target, 'packages', 'happy-cli', 'hello.txt'), 'utf-8')).toString();
   assert.equal(content, 'v2\n');
 });
 
@@ -129,13 +140,13 @@ test('monorepo port --skip-applied skips patches that are already present in the
   await mkdir(target, { recursive: true });
   await run('git', ['init', '-q'], { cwd: target, env: gitEnv() });
   await run('git', ['checkout', '-q', '-b', 'main'], { cwd: target, env: gitEnv() });
-  await mkdir(join(target, 'expo-app'), { recursive: true });
-  await mkdir(join(target, 'cli'), { recursive: true });
-  await mkdir(join(target, 'server'), { recursive: true });
-  await writeFile(join(target, 'expo-app', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(target, 'cli', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(target, 'cli', 'hello.txt'), 'v2\n', 'utf-8');
-  await writeFile(join(target, 'server', 'package.json'), '{}\n', 'utf-8');
+  await mkdir(join(target, 'packages', 'happy-app'), { recursive: true });
+  await mkdir(join(target, 'packages', 'happy-cli'), { recursive: true });
+  await mkdir(join(target, 'packages', 'happy-server'), { recursive: true });
+  await writeFile(join(target, 'packages', 'happy-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-cli', 'hello.txt'), 'v2\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-server', 'package.json'), '{}\n', 'utf-8');
   await run('git', ['add', '.'], { cwd: target, env: gitEnv() });
   await run('git', ['commit', '-q', '-m', 'chore: init monorepo'], { cwd: target, env: gitEnv() });
 
@@ -170,7 +181,7 @@ test('monorepo port --skip-applied skips patches that are already present in the
   const parsed = JSON.parse(out.trim());
   assert.equal(parsed.ok, true);
 
-  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  const content = (await readFile(join(target, 'packages', 'happy-cli', 'hello.txt'), 'utf-8')).toString();
   assert.equal(content, 'v2\n');
 });
 
@@ -183,33 +194,33 @@ test('monorepo port accepts monorepo sources without double-prefixing paths', as
   await mkdir(target, { recursive: true });
   await run('git', ['init', '-q'], { cwd: target, env: gitEnv() });
   await run('git', ['checkout', '-q', '-b', 'main'], { cwd: target, env: gitEnv() });
-  await mkdir(join(target, 'expo-app'), { recursive: true });
-  await mkdir(join(target, 'cli'), { recursive: true });
-  await mkdir(join(target, 'server'), { recursive: true });
-  await writeFile(join(target, 'expo-app', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(target, 'cli', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(target, 'server', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(target, 'expo-app', 'hello.txt'), 'v1\n', 'utf-8');
+  await mkdir(join(target, 'packages', 'happy-app'), { recursive: true });
+  await mkdir(join(target, 'packages', 'happy-cli'), { recursive: true });
+  await mkdir(join(target, 'packages', 'happy-server'), { recursive: true });
+  await writeFile(join(target, 'packages', 'happy-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-server', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(target, 'packages', 'happy-app', 'hello.txt'), 'v1\n', 'utf-8');
   await run('git', ['add', '.'], { cwd: target, env: gitEnv() });
   await run('git', ['commit', '-q', '-m', 'chore: init monorepo'], { cwd: target, env: gitEnv() });
 
-  // Source monorepo repo with one change commit in expo-app/
+  // Source monorepo repo with one change commit in packages/happy-app/
   await mkdir(source, { recursive: true });
   await run('git', ['init', '-q'], { cwd: source, env: gitEnv() });
   await run('git', ['checkout', '-q', '-b', 'main'], { cwd: source, env: gitEnv() });
-  await mkdir(join(source, 'expo-app'), { recursive: true });
-  await mkdir(join(source, 'cli'), { recursive: true });
-  await mkdir(join(source, 'server'), { recursive: true });
-  await writeFile(join(source, 'expo-app', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(source, 'cli', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(source, 'server', 'package.json'), '{}\n', 'utf-8');
-  await writeFile(join(source, 'expo-app', 'hello.txt'), 'v1\n', 'utf-8');
+  await mkdir(join(source, 'packages', 'happy-app'), { recursive: true });
+  await mkdir(join(source, 'packages', 'happy-cli'), { recursive: true });
+  await mkdir(join(source, 'packages', 'happy-server'), { recursive: true });
+  await writeFile(join(source, 'packages', 'happy-app', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(source, 'packages', 'happy-cli', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(source, 'packages', 'happy-server', 'package.json'), '{}\n', 'utf-8');
+  await writeFile(join(source, 'packages', 'happy-app', 'hello.txt'), 'v1\n', 'utf-8');
   await run('git', ['add', '.'], { cwd: source, env: gitEnv() });
   await run('git', ['commit', '-q', '-m', 'chore: init source monorepo'], { cwd: source, env: gitEnv() });
   const base = (await runCapture('git', ['rev-parse', 'HEAD'], { cwd: source, env: gitEnv() })).trim();
-  await writeFile(join(source, 'expo-app', 'hello.txt'), 'v2\n', 'utf-8');
+  await writeFile(join(source, 'packages', 'happy-app', 'hello.txt'), 'v2\n', 'utf-8');
   await run('git', ['add', '.'], { cwd: source, env: gitEnv() });
-  await run('git', ['commit', '-q', '-m', 'feat: update expo-app hello'], { cwd: source, env: gitEnv() });
+  await run('git', ['commit', '-q', '-m', 'feat: update happy-app hello'], { cwd: source, env: gitEnv() });
 
   const out = await runCapture(
     process.execPath,
@@ -226,7 +237,7 @@ test('monorepo port accepts monorepo sources without double-prefixing paths', as
   );
   const parsed = JSON.parse(out.trim());
   assert.equal(parsed.ok, true);
-  const content = (await readFile(join(target, 'expo-app', 'hello.txt'), 'utf-8')).toString();
+  const content = (await readFile(join(target, 'packages', 'happy-app', 'hello.txt'), 'utf-8')).toString();
   assert.equal(content, 'v2\n');
 });
 
@@ -238,7 +249,12 @@ test('monorepo port can clone the target monorepo into a new directory', async (
   const env = gitEnv();
 
   // Seed monorepo repo that will be cloned into `target`
-  await initMonorepoStub({ dir: seedMono, env, seed: { 'cli/hello.txt': 'v1\n' } });
+  await initMonorepoStub({
+    dir: seedMono,
+    env,
+    layout: 'packages',
+    seed: { 'packages/happy-cli/hello.txt': 'v1\n' },
+  });
 
   // Source CLI repo with one change commit (v1 -> v2)
   await mkdir(sourceCli, { recursive: true });
@@ -271,7 +287,7 @@ test('monorepo port can clone the target monorepo into a new directory', async (
   const parsed = JSON.parse(out.trim());
   assert.equal(parsed.ok, true);
 
-  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  const content = (await readFile(join(target, 'packages', 'happy-cli', 'hello.txt'), 'utf-8')).toString();
   assert.equal(content, 'v2\n');
 });
 
@@ -283,7 +299,12 @@ test('monorepo port guide auto-clones target when --target does not exist', asyn
   const env = gitEnv();
 
   // Seed monorepo repo that will be cloned into `target`
-  await initMonorepoStub({ dir: seedMono, env, seed: { 'cli/hello.txt': 'v1\n' } });
+  await initMonorepoStub({
+    dir: seedMono,
+    env,
+    layout: 'packages',
+    seed: { 'packages/happy-cli/hello.txt': 'v1\n' },
+  });
 
   // Source CLI repo with one change commit (v1 -> v2)
   const base = await initSplitRepoStub({ dir: sourceCli, env, name: 'cli', seed: { 'hello.txt': 'v1\n' } });
@@ -341,7 +362,7 @@ test('monorepo port guide auto-clones target when --target does not exist', asyn
   await waitForExit(20_000);
   assert.equal(exitCode, 0, `expected guide to exit 0\nstdout:\n${out}\nstderr:\n${err}`);
 
-  const content = (await readFile(join(target, 'cli', 'hello.txt'), 'utf-8')).toString();
+  const content = (await readFile(join(target, 'packages', 'happy-cli', 'hello.txt'), 'utf-8')).toString();
   assert.equal(content, 'v2\n');
 });
 

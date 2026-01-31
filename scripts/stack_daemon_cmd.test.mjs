@@ -174,9 +174,7 @@ test('happys stack daemon <name> restart restarts only the daemon', async () => 
 test('happys stack <name> daemon start works (stack name first)', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
-  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-daemon-name-first-'));
-
-  const storageDir = join(tmp, 'storage');
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-stack-daemon-name-first-'));  const storageDir = join(tmp, 'storage');
   const homeDir = join(tmp, 'home');
   const stackName = 'exp-test';
 
@@ -232,9 +230,7 @@ test('happys stack daemon <name> start/stop with --identity uses an isolated cli
   const storageDir = join(tmp, 'storage');
   const homeDir = join(tmp, 'home');
   const stackName = 'exp-test';
-  const identity = 'account-b';
-
-  const cliDir = await writeStubHappyCli({ cliDir: join(tmp, 'stub-happy-cli') });
+  const identity = 'account-b';  const cliDir = await writeStubHappyCli({ cliDir: join(tmp, 'stub-happy-cli') });
   const stackCliHome = join(storageDir, stackName, 'cli');
   await mkdir(stackCliHome, { recursive: true });
   const identityHome = join(storageDir, stackName, 'cli-identities', identity);

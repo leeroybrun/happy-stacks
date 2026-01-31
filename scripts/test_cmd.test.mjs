@@ -42,22 +42,22 @@ async function writeYarnOkPackage({ dir, name, scriptOutput }) {
   await writeFile(join(dir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
 }
 
-test('happys test --json keeps stdout JSON-only and runs monorepo root when happy points at expo-app/', async () => {
+test('happys test --json keeps stdout JSON-only and runs monorepo root when happy points at packages/happy-app', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const rootDir = dirname(scriptsDir);
 
   const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-test-cmd-'));
   const monoRoot = join(tmp, 'mono');
-  const expoDir = join(monoRoot, 'expo-app');
+  const appDir = join(monoRoot, 'packages', 'happy-app');
 
-  await mkdir(expoDir, { recursive: true });
+  await mkdir(appDir, { recursive: true });
 
   await writeYarnOkPackage({ dir: monoRoot, name: 'monorepo', scriptOutput: 'ROOT_TEST_RUN' });
-  await writeYarnOkPackage({ dir: expoDir, name: 'expo-app', scriptOutput: 'EXPO_TEST_RUN' });
+  await writeYarnOkPackage({ dir: appDir, name: 'happy-app', scriptOutput: 'APP_TEST_RUN' });
 
   const env = {
     ...process.env,
-    HAPPY_STACKS_COMPONENT_DIR_HAPPY: expoDir,
+    HAPPY_STACKS_COMPONENT_DIR_HAPPY: appDir,
     // Prevent env.mjs from auto-discovering and loading a real machine stack env file,
     // which would overwrite our component dir override.
     HAPPY_STACKS_STACK: 'test-stack',
@@ -93,5 +93,5 @@ test('happys test --json keeps stdout JSON-only and runs monorepo root when happ
 
   // Any command output should be written to stderr (to keep stdout JSON-only).
   assert.ok(res.stderr.includes('ROOT_TEST_RUN'));
-  assert.ok(!res.stderr.includes('EXPO_TEST_RUN'));
+  assert.ok(!res.stderr.includes('APP_TEST_RUN'));
 });

@@ -193,9 +193,7 @@ test('happys stack happy <name> does not print wrapper stack traces on happy-cli
 
   const storageDir = join(tmp, 'storage');
   const homeDir = join(tmp, 'home');
-  const stackName = 'exp-test';
-
-  const stubRoot = join(tmp, 'stub-components');
+  const stackName = 'exp-test';  const stubRoot = join(tmp, 'stub-components');
   const cliDir = await writeFailingStubHappyCli({ root: stubRoot, errorMessage: 'stub failure' });
 
   const stackCliHome = join(storageDir, stackName, 'cli');
@@ -210,9 +208,7 @@ test('happys stack happy <name> does not print wrapper stack traces on happy-cli
       '',
     ].join('\n'),
     'utf-8'
-  );
-
-  const baseEnv = {
+  );  const baseEnv = {
     ...process.env,
     HAPPY_STACKS_HOME_DIR: homeDir,
     HAPPY_STACKS_STORAGE_DIR: storageDir,

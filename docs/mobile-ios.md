@@ -192,3 +192,131 @@ HAPPY_STACKS_SERVER_URL="https://<your-machine>.<tailnet>.ts.net"
 # Optional: home screen name:
 HAPPY_STACKS_IOS_APP_NAME="Happy Local"
 ```
+
+## EAS builds per stack (production / App Store-like)
+
+This section documents the end-to-end workflow for producing a **fully working** EAS Build (cloud) for a stack,
+with a **custom bundle id + app name** (example: `com.leeroybrun.happier` / `Happier`), while keeping upstream defaults unchanged when env vars are unset.
+
+### Overview
+
+To get a reliable EAS build for a stack-specific app identity, you generally need:
+
+- a **Happy monorepo worktree** that contains the app config hooks (dynamic `app.config.js`)
+- a stack pinned to that worktree (`happys stack wt <stack> -- use happy ...`)
+- stack env vars describing the **app identity** (bundle id, name, scheme, etc.)
+- EAS **environment variables** configured on Expo (so the cloud builder sees the same values)
+- an initial **interactive** credentials setup (iOS signing) before non-interactive builds work
+- for identity changes: run **prebuild** so `ios/` + `android/` native projects reflect the new id
+
+### 1) Create (or select) a stack + pin a worktree
+
+Example stack name: `happier`.
+
+Create a `happy` monorepo worktree from your fork branch (example):
+
+```bash
+happys wt new happy happier --from=origin --base=origin/happier
+```
+
+Pin the `happier` stack to that worktree:
+
+```bash
+happys stack wt happier -- use happy leeroybrun/happier
+```
+
+### 2) Set the app identity in the stack env (local + build-time config)
+
+These are evaluated by `packages/happy-app/app.config.js` when building:
+
+```bash
+happys stack env happier set \
+  APP_ENV=production \
+  EXPO_APP_NAME="Happier" \
+  EXPO_APP_BUNDLE_ID="com.leeroybrun.happier" \
+  EXPO_APP_SCHEME="happier" \
+  EXPO_APP_SLUG="happier" \
+  EXPO_APP_OWNER="leeroybrun"
+```
+
+Notes:
+
+- `APP_ENV` drives the built-in variant logic (development/preview/production).
+- `EXPO_APP_*` overrides keep upstream defaults intact when unset.
+
+### 3) Regenerate native projects (“prebuild”) when changing identity
+
+When changing bundle IDs / schemes / config plugins, you should run a clean prebuild so native projects match the config:
+
+```bash
+happys stack mobile happier --prebuild --platform=ios --clean --no-metro
+# or:
+happys stack mobile happier --prebuild --platform=all --clean --no-metro
+```
+
+### 4) Make sure the cloud builder sees your env vars (EAS Environment Variables)
+
+Cloud builds do **not** automatically inherit your local shell env.
+You must configure EAS Environment Variables on Expo (project settings) and ensure your build profile selects an environment.
+
+The EAS project env var workflow:
+
+1) Ensure your `eas.json` build profiles set `"environment": "production"` / `"preview"` / `"development"`.
+2) Create env vars in EAS for that environment (plain text or sensitive so config resolution can read them).
+
+With Happy Stacks helpers (stack-scoped):
+
+```bash
+# Inspect:
+happys stack eas happier env:list --environment production
+
+# Create (use env:update if it already exists):
+happys stack eas happier env:create --name EXPO_APP_NAME --value "Happier" --environment production --visibility plainText
+happys stack eas happier env:create --name EXPO_APP_BUNDLE_ID --value "com.leeroybrun.happier" --environment production --visibility plainText
+happys stack eas happier env:create --name EXPO_APP_SCHEME --value "happier" --environment production --visibility plainText
+happys stack eas happier env:create --name EXPO_APP_OWNER --value "leeroybrun" --environment production --visibility plainText
+happys stack eas happier env:create --name EXPO_APP_SLUG --value "happier" --environment production --visibility plainText
+```
+
+Tip:
+
+- If you see “No environment variables with visibility Plain text and Sensitive found…”, it means your EAS environment variables are missing (or set to `secret`).
+
+### 5) EAS project + account sanity checks
+
+If you see permission errors, verify the Expo account:
+
+```bash
+happys stack eas happier whoami
+happys stack eas happier login
+```
+
+If the project is not initialized/linked under your account yet:
+
+```bash
+happys stack eas happier project:init
+```
+
+### 6) Build (iOS / Android)
+
+First-time iOS credential setup usually requires interactive mode:
+
+```bash
+happys stack eas happier ios --profile production --interactive
+```
+
+After credentials are set up, you can run non-interactive builds:
+
+```bash
+happys stack eas happier ios --profile production --no-wait --non-interactive
+happys stack eas happier android --profile production --no-wait --non-interactive
+```
+
+### Common pitfalls
+
+- **`eas.json is not valid` / `"build.base" must be of type object`**:
+  - your `eas.json` is using an old schema; update `build.base` to an object and use `"extends": "base"`.
+- **`Credentials are not set up. Run this command again in interactive mode.`**:
+  - run the same build with `--interactive` once to configure iOS signing.
+- **Cloud build doesn’t see stack env vars**:
+  - set EAS environment variables (project settings) and make sure your profile has `"environment": "production"`.
