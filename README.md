@@ -1,4 +1,6 @@
-# Happy Stacks
+# Happy Stacks has moved and is now integrated directly in [Happier](https://github.com/happier-dev/happier).
+
+# Happy Stacks Legacy
 
 Run [**Happy**](https://happy.engineering/) locally and access it remotely and securely (using Tailscale).
 
